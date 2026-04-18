@@ -2,7 +2,7 @@
 Read MCA data from PIXIE formatted as npy files.
 """
 
-from nasagamma import helper_api
+from wara import helper_api
 import json
 import matplotlib.pyplot as plt
 

@@ -2,9 +2,9 @@
 Example tlist
 """
 
-from nasagamma import tlist
-from nasagamma import file_reader
-from nasagamma import decay_exponential as decay
+from wara import tlist
+from wara import file_reader
+from wara import decay_exponential as decay
 import numpy as np
 import matplotlib.pyplot as plt
 import lmfit

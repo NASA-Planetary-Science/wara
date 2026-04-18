@@ -1,11 +1,11 @@
 """
 Add peaks to a peaksearch object with energies and not channels
 """
-from nasagamma import spectrum as sp
+from wara import spectrum as sp
 import pandas as pd
 import numpy as np
-from nasagamma import peaksearch as ps
-from nasagamma import peakfit as pf
+from wara import peaksearch as ps
+from wara import peakfit as pf
 
 # dataset 1
 file = "data/gui_test_data_labr.csv"

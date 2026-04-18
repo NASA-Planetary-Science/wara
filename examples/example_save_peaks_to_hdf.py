@@ -5,12 +5,12 @@ Created on Thu Oct 29 13:37:44 2020
 @author: mauricio
 Example: save peak info to hdf
 """
-from nasagamma import spectrum as sp
+from wara import spectrum as sp
 import numpy as np
 import matplotlib.pyplot as plt
 import pandas as pd
-from nasagamma import peaksearch as ps
-from nasagamma import peakfit as pf
+from wara import peaksearch as ps
+from wara import peakfit as pf
 import lmfit
 
 # dataset 1

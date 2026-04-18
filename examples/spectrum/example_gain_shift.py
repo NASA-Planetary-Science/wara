@@ -2,7 +2,7 @@
 Example of gain shifting the spectrum
 """
 
-from nasagamma import spectrum as sp
+from wara import spectrum as sp
 import numpy as np
 import matplotlib.pyplot as plt
 import pandas as pd

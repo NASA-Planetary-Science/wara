@@ -4,7 +4,7 @@ The following example comes from an experiment with a pulsed DT neutron generato
 and a CeBr detector. The pulse period is 1000 us
 """
 
-from nasagamma import tlist
+from wara import tlist
 
 file = "Data/gui_test_data_tlist.txt"
 

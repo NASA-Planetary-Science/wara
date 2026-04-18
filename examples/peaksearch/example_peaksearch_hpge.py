@@ -1,8 +1,8 @@
 """
 Example of peaksearch functionality for a HPGe detector
 """
-from nasagamma import peaksearch as ps
-from nasagamma import file_reader
+from wara import peaksearch as ps
+from wara import file_reader
 import time
 
 

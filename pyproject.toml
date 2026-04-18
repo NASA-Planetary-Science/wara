@@ -3,7 +3,7 @@ requires = ["setuptools>=64", "setuptools_scm[toml]>=8"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "nasagamma"
+name = "wara"
 dynamic = ["version"]
 description = "Gamma spectroscopy tools"
 readme = "README.md"
@@ -32,17 +32,17 @@ dependencies = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/mauricioAyllon/NASA-gamma"
+Homepage = "https://github.com/mauricioAyllon/wara"
 
 [project.scripts]
-gammaGUI-qt = "nasagamma.gui:main"
+wara = "wara.gui:main"
 
 [tool.setuptools.packages.find]
 where = ["."]
-include = ["nasagamma*"]
+include = ["wara*"]
 
 [tool.setuptools.package-data]
-nasagamma = ["data/*.txt", "data/*.csv", "*.ui"]
+wara = ["data/*.txt", "data/*.csv", "*.ui"]
 
 [tool.setuptools_scm]
-write_to = "nasagamma/version.py"
+write_to = "wara/version.py"

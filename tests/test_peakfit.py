@@ -6,9 +6,9 @@ import pytest
 import numpy as np
 import pandas as pd
 
-from nasagamma.spectrum import Spectrum
-from nasagamma.peaksearch import PeakSearch
-from nasagamma.peakfit import PeakFit
+from wara.spectrum import Spectrum
+from wara.peaksearch import PeakSearch
+from wara.peakfit import PeakFit
 
 
 # ---------------------------------------------------------------------------

@@ -1,14 +1,14 @@
 """
 Pytest tests for file_reader module.
-Uses example files from NASA-gamma/examples/data.
+Uses example files from wara/examples/data.
 """
 
 import pytest
 import numpy as np
 from pathlib import Path
 
-from nasagamma.spectrum import Spectrum
-from nasagamma.file_reader import (
+from wara.spectrum import Spectrum
+from wara.file_reader import (
     process_df,
     read_csv,
     read_txt,

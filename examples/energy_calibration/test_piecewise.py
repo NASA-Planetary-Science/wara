@@ -12,7 +12,7 @@ import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 import matplotlib.gridspec as gridspec
-from nasagamma import energy_calibration as ecal
+from wara import energy_calibration as ecal
 
 # ---------------------------------------------------------------------------
 # Load spectrum

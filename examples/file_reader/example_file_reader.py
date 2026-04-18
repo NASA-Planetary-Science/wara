@@ -1,7 +1,7 @@
 """
 Example usage of file_reader
 """
-from nasagamma import file_reader
+from wara import file_reader
 
 file_txt = "../data/gui_test_data_hpge_NH3.txt"
 file_csv = "../data/gui_test_data_cebr_cal.csv"

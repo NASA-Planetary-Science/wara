@@ -1,8 +1,8 @@
 """
 Example file for 'Diagnostics' tab
 """
-from nasagamma import diagnostics
-from nasagamma import file_reader
+from wara import diagnostics
+from wara import file_reader
 import matplotlib.pyplot as plt
 
 folder = "data/test_folder_diag"

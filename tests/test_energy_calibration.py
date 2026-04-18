@@ -5,7 +5,7 @@ Pytest tests for EnergyCalibration class and smart_calibration function.
 import pytest
 import numpy as np
 
-from nasagamma.energy_calibration import EnergyCalibration, smart_calibration
+from wara.energy_calibration import EnergyCalibration, smart_calibration
 
 
 # ---------------------------------------------------------------------------

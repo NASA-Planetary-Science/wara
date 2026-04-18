@@ -1,12 +1,12 @@
 """
 Example using auto_scan
 """
-from nasagamma import spectrum as sp
+from wara import spectrum as sp
 import numpy as np
 import pandas as pd
-from nasagamma import peaksearch as ps
-from nasagamma import peakfit as pf
-from nasagamma import file_reader
+from wara import peaksearch as ps
+from wara import peakfit as pf
+from wara import file_reader
 
 # Required input parameters (in channels)
 ref_fwhm = 3

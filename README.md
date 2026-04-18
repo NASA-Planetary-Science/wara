@@ -1,4 +1,4 @@
-# NASA-gamma
+# wara
 Gamma spectrocopy tools and visualizations. Some of its capabilitis include:
 
 1. Spectrum smoothing, rebinning, plotting
@@ -15,10 +15,10 @@ Gamma spectrocopy tools and visualizations. Some of its capabilitis include:
 12. Gamma energy identification with built-in databases. Emphasis is placed on neutron induced gamma ray emission.
 
 ## Installation
-nasagamma runs on Python 3.6 or higher version. You can install it by
+wara runs on Python 3.6 or higher version. You can install it by
 downloading the package directly using
 ```
-git clone https://github.com/mauricioAyllon/NASA-gamma
+git clone https://github.com/mauricioAyllon/wara
 ```
 and then run
 ```
@@ -26,11 +26,11 @@ pip install -e .
 ```
 from the directory where the setup.py file is located.
 
-## Using nasagamma
+## Using wara
 Try running the following (if the path is set correctly, the GUI can run from any directory.
-Otherwise, run from inside the "NASA-gamma" folder):
+Otherwise, run from inside the "wara" folder):
 ```
-python gammaGUI-qt -o
+wara -o
 ```
 If running through the Spyder IDE, replace the keyword "Python" for "run".
 The GUI window should appear.

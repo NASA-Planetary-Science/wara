@@ -1,7 +1,7 @@
 """
 Gaussian energy broadening example 
 """
-from nasagamma import file_reader
+from wara import file_reader
 import matplotlib.pyplot as plt
 import numpy as np
 

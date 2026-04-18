@@ -9,7 +9,7 @@ Read dataframe
 import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
-from nasagamma import peakfit as pf
+from wara import peakfit as pf
 
 file = "data/SSR-mcnp.hdf"
 df = pd.read_hdf(file, key="data")

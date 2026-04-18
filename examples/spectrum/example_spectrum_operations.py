@@ -4,7 +4,7 @@ Minimal working examples for new Spectrum methods:
     - __add__, __sub__, __mul__, __rmul__, __truediv__, __radd__
 """
 import numpy as np
-from nasagamma import spectrum as sp
+from wara import spectrum as sp
 import matplotlib.pyplot as plt
 
 # --- Synthetic data ---

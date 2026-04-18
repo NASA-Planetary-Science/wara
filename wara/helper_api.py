@@ -6,10 +6,10 @@ import numpy as np
 import dateparser
 from pathlib import Path
 import pkg_resources
-from nasagamma.read_parquet_api import get_data_path
-from nasagamma import read_parquet_api
-from nasagamma import apicalc as api
-from nasagamma import list_mode_data_reader
+from wara.read_parquet_api import get_data_path
+from wara import read_parquet_api
+from wara import apicalc as api
+from wara import list_mode_data_reader
 import os
 import json
 

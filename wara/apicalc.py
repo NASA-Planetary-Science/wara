@@ -13,8 +13,8 @@ import os
 # import mpl_scatter_density  # adds projection='scatter_density'
 from matplotlib.colors import LinearSegmentedColormap
 import dateparser
-from nasagamma.read_parquet_api import get_data_path
-from nasagamma import read_parquet_api
+from wara.read_parquet_api import get_data_path
+from wara import read_parquet_api
 
 
 def test_limits(df, elog=True, Vmax=None, ekey="energy", tkey="dt", xkey="X", ykey="Y"):

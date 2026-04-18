@@ -1,10 +1,10 @@
 """
 Example of how Poisson errors are treated
 """
-from nasagamma import spectrum as sp
-from nasagamma import peaksearch as ps
-from nasagamma import peakfit as pf
-from nasagamma import file_reader
+from wara import spectrum as sp
+from wara import peaksearch as ps
+from wara import peakfit as pf
+from wara import file_reader
 import numpy as np
 import matplotlib.pyplot as plt
 import pandas as pd

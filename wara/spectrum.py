@@ -400,7 +400,7 @@ class Spectrum:
 
         Examples
         --------
-        >>> from nasagamma.energy_calibration import EnergyCalibration
+        >>> from wara.energy_calibration import EnergyCalibration
         >>> cal = EnergyCalibration(mean_vals, erg, spectrum.channels, n=1)
         >>> spectrum.apply_calibration(cal)
         """

@@ -1,4 +1,4 @@
-NASA-gamma todo:
+wara todo:
 1) API: 
 	a) Add 3D plotting. Need to input detector and target positions.
 	   Implement this on a separate window.

@@ -5,8 +5,8 @@ Classes and functions to read different file types
 import numpy as np
 import pandas as pd
 import re
-from nasagamma import spectrum as sp
-from nasagamma import cnf_reader
+from wara import spectrum as sp
+from wara import cnf_reader
 import datetime
 
 
@@ -71,7 +71,7 @@ def read_csv(file_name):
     e_units : string
         X-axis units e.g. channels, keV, MeV.
     spect : Spectrum instance.
-        Spectrum object from nasagamma.
+        Spectrum object from wara.
 
     """
     df = pd.read_csv(file_name)
@@ -195,7 +195,7 @@ def read_cnf(filename):
     e_units : string
         X-axis units e.g. channels, keV, MeV.
     spect : Spectrum instance.
-        Spectrum object from nasagamma.
+        Spectrum object from wara.
 
     """
     dict_cnf = cnf_reader.read_cnf_file(filename, write_output=False)

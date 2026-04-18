@@ -32,8 +32,8 @@ import sys
 import numpy as np
 import time
 import struct
-from nasagamma import spectrum as sp
-from nasagamma import peaksearch as ps
+from wara import spectrum as sp
+from wara import peaksearch as ps
 
 
 def read_cnf_file(filename, write_output=False):

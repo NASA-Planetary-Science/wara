@@ -9,8 +9,8 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
-from nasagamma.spectrum import Spectrum
-from nasagamma.peaksearch import PeakSearch
+from wara.spectrum import Spectrum
+from wara.peaksearch import PeakSearch
 
 
 # ---------------------------------------------------------------------------

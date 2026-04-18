@@ -1,12 +1,12 @@
 """
 Example of advanced fitting: peak area minus linear background
 """
-from nasagamma import spectrum as sp
+from wara import spectrum as sp
 import numpy as np
 import matplotlib.pyplot as plt
 import pandas as pd
-from nasagamma import file_reader
-from nasagamma import advanced_fit as af
+from wara import file_reader
+from wara import advanced_fit as af
 
 # dataset 1
 file = "data/gui_test_data_cebr_cal.csv"

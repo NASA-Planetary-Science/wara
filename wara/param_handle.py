@@ -3,12 +3,12 @@ Initial parameter settings for GUI. It is used only when parameters are
 passed directly in the command line.
 """
 
-from nasagamma import peaksearch as ps
-from nasagamma import file_reader
+from wara import peaksearch as ps
+from wara import file_reader
 
 
 def get_spect_search(commands):
-    if commands["-o"]:
+    if commands["-o"] or commands["<file_name>"] is None:
         return None
     file_name = commands["<file_name>"]
     # The detector types below are accurate only for the example files.

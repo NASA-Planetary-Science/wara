@@ -1,7 +1,7 @@
 """
 Usage:
-  gammaGUI-qt <file_name> [options]
-  gammaGUI-qt [options]
+  wara <file_name> [options]
+  wara [options]
 
   options:
       -o                        open a blank window
@@ -43,22 +43,22 @@ from PyQt5.QtCore import Qt, QUrl
 import matplotlib.pyplot as plt
 from matplotlib.backends.backend_qt5agg import NavigationToolbar2QT as NavigationToolbar
 from matplotlib.widgets import SpanSelector, RectangleSelector
-from nasagamma import param_handle
-from nasagamma import peakfit as pf
-from nasagamma import peaksearch as ps
-from nasagamma import spectrum as sp
-from nasagamma import advanced_fit as adv
-from nasagamma import tlist
-from nasagamma import energy_calibration as ecal
-from nasagamma import efficiency
-from nasagamma import resolution
-from nasagamma import file_reader
-from nasagamma import read_parquet_api
-from nasagamma import helper_api
-from nasagamma import parse_NIST
-from nasagamma import diagnostics
-from nasagamma import apicalc
-from nasagamma import decay_exponential as decay
+from wara import param_handle
+from wara import peakfit as pf
+from wara import peaksearch as ps
+from wara import spectrum as sp
+from wara import advanced_fit as adv
+from wara import tlist
+from wara import energy_calibration as ecal
+from wara import efficiency
+from wara import resolution
+from wara import file_reader
+from wara import read_parquet_api
+from wara import helper_api
+from wara import parse_NIST
+from wara import diagnostics
+from wara import apicalc
+from wara import decay_exponential as decay
 import pkg_resources
 import plotly.graph_objs as go
 import plotly.io as pio
@@ -71,7 +71,7 @@ class Dialog_from_UI(QDialog):
     def __init__(self):
         super().__init__()
         self.define_ui_vars()
-        ui_file = pkg_resources.resource_filename("nasagamma", self.ui_name)
+        ui_file = pkg_resources.resource_filename("wara", self.ui_name)
         loadUi(ui_file, self)
         self.setWindowTitle(self.window_title)
 
@@ -275,15 +275,15 @@ class NasaGammaApp(QMainWindow):
     def __init__(self, commands):
         print(super())
         super().__init__()
-        ui_file = pkg_resources.resource_filename("nasagamma", "qt_gui.ui")
+        ui_file = pkg_resources.resource_filename("wara", "qt_gui.ui")
         loadUi(ui_file, self)
         self.setWindowFlag(Qt.WindowMaximizeButtonHint, True)
         # self.setMinimumSize(1800, 900)
         # pixmap = QPixmap("figs/nasa-logo.jpg")
         # self.label_nasa.setPixmap(pixmap)
         # self.resize(600, 600)
-        self.setWindowTitle("NASA-gamma")
-        self.setWindowIcon(QtGui.QIcon("figs/NASA-gamma-logo.png"))
+        self.setWindowTitle("wara")
+        self.setWindowIcon(QtGui.QIcon("figs/wara-logo.png"))
         self.scale = "linear"
         self.snr_state = "off"
         self.pushButton_scale.clicked.connect(self.update_scale)
@@ -2000,7 +2000,7 @@ class NasaGammaApp(QMainWindow):
         self.spect_orig = deepcopy(self.spect)
         self.create_graph(fit=False, reset=True)
         self.search = 0
-        self.setWindowTitle("NASA-gamma: combined spectrum from Diagnostics tab")
+        self.setWindowTitle("wara: combined spectrum from Diagnostics tab")
 
     def plot_diagnostic_total(self):
         self.diag_data.plot_spectra(ax=self.ax00)
@@ -3330,23 +3330,23 @@ class NasaGammaApp(QMainWindow):
 
     def isotID_retrieve_data(self):
         lab_src_file = pkg_resources.resource_filename(
-            "nasagamma", "data/Common_lab_sources.csv"
+            "wara", "data/Common_lab_sources.csv"
         )
         delay_act_file = pkg_resources.resource_filename(
-            "nasagamma", "data/Delayed_activation_IAEA.csv"
+            "wara", "data/Delayed_activation_IAEA.csv"
         )
         nat_rad_file = pkg_resources.resource_filename(
-            "nasagamma", "data/Natural_radiation.csv"
+            "wara", "data/Natural_radiation.csv"
         )
         capt_file = pkg_resources.resource_filename(
-            "nasagamma", "data/Capture_CapGam.csv"
+            "wara", "data/Capture_CapGam.csv"
         )
         capt_IAEA_file = pkg_resources.resource_filename(
-            "nasagamma", "data/Capture_IAEA.csv"
+            "wara", "data/Capture_IAEA.csv"
         )
-        talys_file = pkg_resources.resource_filename("nasagamma", "data/Talys-14MeV.csv")
+        talys_file = pkg_resources.resource_filename("wara", "data/Talys-14MeV.csv")
         inl_baghdad_file = pkg_resources.resource_filename(
-            "nasagamma", "data/Inelastic_Baghdad.csv"
+            "wara", "data/Inelastic_Baghdad.csv"
         )
         file = 0
         if self.w_isot_id.lab_src.isChecked():
@@ -3683,7 +3683,7 @@ class NasaGammaApp(QMainWindow):
             self.e_units_orig = deepcopy(self.e_units)
             self.spect_orig = deepcopy(self.spect)
             self.create_graph(fit=False, reset=False)
-            self.setWindowTitle(f"NASA-gamma: {self.fileName}")
+            self.setWindowTitle(f"wara: {self.fileName}")
         except:
             print("File could not be opened")
 

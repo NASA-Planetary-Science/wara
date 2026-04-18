@@ -1,7 +1,7 @@
 """
 Example read binary data from PIXIE
 """
-from nasagamma import helper_api
+from wara import helper_api
 import matplotlib.pyplot as plt
 
 date = "2025-04-18"

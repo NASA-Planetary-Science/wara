@@ -8,7 +8,7 @@ import pandas as pd
 import matplotlib
 matplotlib.use("Agg")  # non-interactive backend, must be set before importing pyplot
 import matplotlib.pyplot as plt
-from nasagamma.spectrum import Spectrum, plot_overlay
+from wara.spectrum import Spectrum, plot_overlay
 
 
 # ---------------------------------------------------------------------------

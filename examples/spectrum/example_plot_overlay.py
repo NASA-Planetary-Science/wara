@@ -3,7 +3,7 @@ Example showing a simple test case to overlay several spectra
 """
 
 import numpy as np
-from nasagamma import spectrum as sp
+from wara import spectrum as sp
 
 
 # Create two synthetic spectra with a few Gaussian peaks

@@ -3,11 +3,11 @@ energy calibration example with non-linear spectrum
 """
 
 import pandas as pd
-from nasagamma import spectrum as sp
-from nasagamma import peaksearch as ps
-from nasagamma import peakfit as pf
-from nasagamma import energy_calibration as ecal
-from nasagamma import file_reader
+from wara import spectrum as sp
+from wara import peaksearch as ps
+from wara import peakfit as pf
+from wara import energy_calibration as ecal
+from wara import file_reader
 import matplotlib.pyplot as plt
 import numpy as np
 

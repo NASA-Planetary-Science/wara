@@ -3,8 +3,8 @@ Example to read a .pha.txt file, and then create and read .txt files with metada
 """
 import numpy as np
 import matplotlib.pyplot as plt
-from nasagamma import spectrum as sp
-from nasagamma import file_reader
+from wara import spectrum as sp
+from wara import file_reader
 
 file = "data/gui_test_data_hpge_NH3.pha.txt"
 

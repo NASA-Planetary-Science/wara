@@ -19,7 +19,7 @@ from pathlib import Path
 def get_data_path(data_path=None):
     # directory to monitor
     if data_path is None:
-        data_path_file = pkg_resources.resource_filename("nasagamma", "data-path.txt")
+        data_path_file = pkg_resources.resource_filename("wara", "data-path.txt")
         path_file = Path(data_path_file)
         with path_file.open() as f:
             data_path_txt = f.readline().strip()
@@ -41,7 +41,7 @@ def get_files_in_path(date, runnr, folder="binary-data", data_path_txt=None):
             (
                 f"ERROR: cannot find directory {DATA_DIR}."
                 "ERROR: Make sure you create a text file with your data path"
-                " named 'data-path.txt' in the directory NASA-gamma/nasagamma"
+                " named 'data-path.txt' in the directory wara/wara"
                 " For example, my data path is: "
                 "C:/Users/mayllonu/Documents/NASA-GSFC/Technical/Data-LBL"
             )
@@ -71,7 +71,7 @@ def load_parquet_data_files(date, runnr, data_path_txt=None):
             (
                 f"ERROR: cannot find directory {DATA_DIR}."
                 "ERROR: Make sure you create a text file with your data path"
-                " named 'data-path.txt' in the directory NASA-gamma/nasagamma"
+                " named 'data-path.txt' in the directory wara/wara"
                 " For example, my data path is: "
                 "C:/Users/mayllonu/Documents/NASA-GSFC/Technical/Data-LBL"
                 "Or else "

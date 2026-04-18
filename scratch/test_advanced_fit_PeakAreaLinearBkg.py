@@ -2,9 +2,9 @@
 Test advanced fitting PeakAreaLinearBkg class
 """
 import matplotlib.pyplot as plt
-from nasagamma import spectrum as sp
-from nasagamma import advanced_fit as adv
-from nasagamma import file_reader
+from wara import spectrum as sp
+from wara import advanced_fit as adv
+from wara import file_reader
 
 f1 = "../examples/data/gui_test_data_cebr.csv"
 f2 = "../examples/data/gui_test_data_cebr_cal.csv"
