@@ -1,25 +1,19 @@
 """
-Read ROOTS parquet files
+Read API parquet files
 """
 
 import dateparser
-import sys
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
-from matplotlib.widgets import SpanSelector, RectangleSelector
-from matplotlib.patches import Rectangle
-from matplotlib.pyplot import cm
-import matplotlib
 import pkg_resources
 from pathlib import Path
 
 
-# matplotlib.use('qtagg')
 def get_data_path(data_path=None):
     if data_path is not None:
         return [Path(data_path)]
-    data_path_file = pkg_resources.resource_filename("wara", "data-path.txt")
+    data_path_file = Path(pkg_resources.resource_filename("wara", "")).parent / "data-path.txt"
     with Path(data_path_file).open() as f:
         paths = [Path(line.strip()) for line in f if line.strip()]
     return paths
@@ -27,12 +21,12 @@ def get_data_path(data_path=None):
 
 def get_files_in_path(date, runnr, folder="binary-data", data_path_txt=None):
     # TODO: merge with read_parquet_file
-    RUNNR = runnr
     DATE = dateparser.parse(date)
     if DATE is None:
-        print("ERROR: cannot parse date")
+        print(f"ERROR: cannot parse date '{date}'")
+        return []
     date_dir = f"{DATE.year}-{DATE.month:02d}-{DATE.day:02d}"
-    fname = f"RUN-{DATE.year}-{DATE.month:02d}-{DATE.day:02d}-{RUNNR:05d}"
+    fname = f"RUN-{DATE.year}-{DATE.month:02d}-{DATE.day:02d}-{runnr:05d}"
     for DATA_PATH in get_data_path(data_path_txt):
         DATA_DIR = DATA_PATH / date_dir
         FILE = DATA_DIR / fname
@@ -44,12 +38,12 @@ def get_files_in_path(date, runnr, folder="binary-data", data_path_txt=None):
 
 def load_parquet_data_files(date, runnr, data_path_txt=None):
     # only channels 4 (LaBr==True) and 5 (LaBr==False)
-    RUNNR = runnr
     DATE = dateparser.parse(date)
     if DATE is None:
-        print("ERROR: cannot parse date")
+        print(f"ERROR: cannot parse date '{date}'")
+        return []
     date_dir = f"{DATE.year}-{DATE.month:02d}-{DATE.day:02d}"
-    fname = f"RUN-{DATE.year}-{DATE.month:02d}-{DATE.day:02d}-{RUNNR:05d}"
+    fname = f"RUN-{DATE.year}-{DATE.month:02d}-{DATE.day:02d}-{runnr:05d}"
     for DATA_PATH in get_data_path(data_path_txt):
         DATA_DIR = DATA_PATH / date_dir
         FILE = DATA_DIR / fname
@@ -59,8 +53,8 @@ def load_parquet_data_files(date, runnr, data_path_txt=None):
     return []
 
 
-def read_parquet_file(date, runnr, ch=None, flood_field=False, data_path=None):
-    files = load_parquet_data_files(date, runnr, data_path)
+def read_parquet_file(date, runnr, ch=None, flood_field=False, data_path_txt=None):
+    files = load_parquet_data_files(date, runnr, data_path_txt)
     if not files:
         print(f"ERROR: No parquet file available for run {date}-{runnr}")
         return None
@@ -82,7 +76,7 @@ def read_parquet_file(date, runnr, ch=None, flood_field=False, data_path=None):
             # df["channel"] = df["channel"].str.extract(r"(\d+)$").astype(int)
             df = df[df["channel"] == ch]
         else:
-            if ch == 4 or ch == 3:
+            if ch == 4:
                 df = df[df["LaBr[y/n]"] == True]
             elif ch == 5:
                 df = df[df["LaBr[y/n]"] == False]
@@ -91,28 +85,22 @@ def read_parquet_file(date, runnr, ch=None, flood_field=False, data_path=None):
 
 
 def read_parquet_file_from_path(filepath, ch):
-    # load data
     path = Path(filepath)
     files = list(path.glob("parquet-data/*-pandas.parquet"))
+    if not files:
+        print(f"ERROR: No parquet files found in {path}")
+        return None
     df = pd.read_parquet(files[0])
 
     if len(files) > 1:
         for f in files[1:]:
             df0 = pd.read_parquet(f)
             df = pd.concat([df, df0])
-    # if "A" in df.columns: # experimetal data
-    #     df = api.calc_own_pos(df)
-    # else: # simulations
-    #     df["X2"] = df["X"]
-    #     df["Y2"] = df["Y"]
-    #     df["energy_orig"] = df["energy"]
-
     # df["dt"] *= 1e9  # to ns
     if ch == 4:
         df = df[df["LaBr[y/n]"] == True]
     elif ch == 5:
         df = df[df["LaBr[y/n]"] == False]
-    # df = api.calc_own_pos(df)
     df.reset_index(drop=True, inplace=True)
     return df
 
@@ -126,7 +114,7 @@ def initialize_plots(df, ax_g, ax_t, ax_xy, ax_xz):
     # xyplane = (-0.1,0.1,-0.1,0.1) # for X_alpha, y_alpha
     # magma, plt.cm.BuGn_r, plt.cm.Greens, plasma, jet, viridis, cvidis
     colormap = "plasma"
-    gam, e = plot_energy_hist(df=df, ebins=ebins, ax=ax_g)
+    plot_energy_hist(df=df, ebins=ebins, ax=ax_g)
     plot_time_hist(df=df, tbins=tbins, trange=tr, ax=ax_t)
     plot_xy(df, hexbins, colormap, xyplane, ax=ax_xy, cbar=True)
 

@@ -2,4 +2,4 @@ wara.egg-info
 __pycache__
 *~
 wara/version.py
-wara/data-path.txt
+data-path.txt
