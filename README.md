@@ -44,6 +44,14 @@ Info buttons are placed strategically to guide the user.
 ![ecalGUI](figs/gammaGUI_qt_cal.png)
 
 
+## Data path configuration
+If you use the API data loading features, create a file called `data-path.txt`
+inside the `wara/` package directory and put your data folder path on the first line:
+```
+C:/Users/yourname/Documents/my-data
+```
+This file is excluded from version control, so each user keeps their own local copy.
+
 ## Development
 
 Code contributions are welcome!
