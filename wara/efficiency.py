@@ -47,8 +47,8 @@ class Efficiency:
         return N_emitted
 
     def calculate_N_detected(self, fit_obj):
-        mean_val = fit_obj.peak_info[self.which_peak][f"mean{self.which_peak+1}"]
-        area_val = fit_obj.peak_info[self.which_peak][f"area{self.which_peak+1}"]
+        mean_val = fit_obj.peak_info[self.which_peak]["mean"]
+        area_val = fit_obj.peak_info[self.which_peak]["area"]
         N_detected = float(area_val)
         self.mean_val = float(mean_val)
         return N_detected
@@ -66,10 +66,8 @@ class Efficiency:
         self.Br_sig = Br_sig
         self.livetime_sig = livetime_sig
         self.t_elapsed_sig = t_elapsed_sig
-        N_detected = fit_obj.peak_info[self.which_peak][f"area{self.which_peak+1}"]
-        N_detected_sig = fit_obj.peak_err[self.which_peak][
-            f"area_err{self.which_peak+1}"
-        ]
+        N_detected = fit_obj.peak_info[self.which_peak]["area"]
+        N_detected_sig = fit_obj.peak_err[self.which_peak]["area_err"]
         # denominator function denoted as f
         # sig_f = sqrt(df_dA0**2 * sig_A0**2 + ...)
         lmd = np.log(2) / self.t_half

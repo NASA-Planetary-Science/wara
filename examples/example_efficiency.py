@@ -9,10 +9,9 @@ from wara import peaksearch as ps
 from wara import peakfit as pf
 from wara import efficiency
 import pandas as pd
-%matplotlib qt
 
 file = "data/gui_test_data_lab_sources.cnf"
-spe = file_reader.read_cnf_to_spect(file)
+spe = file_reader.read_cnf(file)
 # The energy calibration is off. Let's use a better one
 erg_new = -0.8801 + 0.9328*spe.channels
 spe.energies = erg_new
