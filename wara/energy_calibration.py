@@ -63,6 +63,9 @@ class EnergyCalibration:
         pars = poly_mod.guess(self.erg, x=self.mean_vals)
         self.fit = poly_mod.fit(self.erg, params=pars, x=self.mean_vals)
         self.predicted = self.fit.eval(x=self.channels)
+        ss_res = np.sum(self.fit.residual ** 2)
+        ss_tot = np.sum((self.erg - self.erg.mean()) ** 2)
+        self.rsquared = 1.0 - ss_res / ss_tot if ss_tot > 0 else 1.0
 
     def _build_equation(self):
         """
@@ -94,7 +97,7 @@ class EnergyCalibration:
             "e_units": self.e_units,
             "mean_vals": self.mean_vals,
             "erg": self.erg,
-            "redchi": self.fit.redchi if self.fit is not None else None,
+            "rsquared": self.rsquared if self.fit is not None else None,
             "coefficients": list(self.fit.best_values.values()) if self.fit is not None else None,
         }
 
@@ -134,7 +137,7 @@ class EnergyCalibration:
                 fig = plt.figure(constrained_layout=False, figsize=(12, 8))
                 ax_fit = fig.add_subplot()
     
-        ax_fit.set_title(rf"Reduced $\chi^2$ = {self.fit.redchi:.4f}")
+        ax_fit.set_title(rf"$R^2$ = {self.rsquared:.6f}")
         ax_fit.errorbar(
             self.mean_vals,
             self.erg,
