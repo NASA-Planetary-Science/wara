@@ -17,15 +17,12 @@ from pathlib import Path
 
 # matplotlib.use('qtagg')
 def get_data_path(data_path=None):
-    # directory to monitor
-    if data_path is None:
-        data_path_file = pkg_resources.resource_filename("wara", "data-path.txt")
-        path_file = Path(data_path_file)
-        with path_file.open() as f:
-            data_path_txt = f.readline().strip()
-    else:
-        data_path_txt = data_path
-    return Path(data_path_txt)
+    if data_path is not None:
+        return [Path(data_path)]
+    data_path_file = pkg_resources.resource_filename("wara", "data-path.txt")
+    with Path(data_path_file).open() as f:
+        paths = [Path(line.strip()) for line in f if line.strip()]
+    return paths
 
 
 def get_files_in_path(date, runnr, folder="binary-data", data_path_txt=None):
@@ -34,26 +31,15 @@ def get_files_in_path(date, runnr, folder="binary-data", data_path_txt=None):
     DATE = dateparser.parse(date)
     if DATE is None:
         print("ERROR: cannot parse date")
-    DATA_PATH = get_data_path(data_path_txt)
-    DATA_DIR = DATA_PATH / f"{DATE.year}-{DATE.month:02d}-{DATE.day:02d}"
-    if not DATA_DIR.is_dir():
-        print(
-            (
-                f"ERROR: cannot find directory {DATA_DIR}."
-                "ERROR: Make sure you create a text file with your data path"
-                " named 'data-path.txt' in the directory wara/wara"
-                " For example, my data path is: "
-                "C:/Users/mayllonu/Documents/NASA-GSFC/Technical/Data-LBL"
-            )
-        )
+    date_dir = f"{DATE.year}-{DATE.month:02d}-{DATE.day:02d}"
     fname = f"RUN-{DATE.year}-{DATE.month:02d}-{DATE.day:02d}-{RUNNR:05d}"
-    FILE = DATA_DIR / fname
-    if not FILE.is_dir():
-        print(f"ERROR: cannot find file {FILE}")
-
-    # load data
-    files = list(FILE.glob(f"{folder}/*"))
-    return files
+    for DATA_PATH in get_data_path(data_path_txt):
+        DATA_DIR = DATA_PATH / date_dir
+        FILE = DATA_DIR / fname
+        if FILE.is_dir():
+            return list(FILE.glob(f"{folder}/*"))
+    print(f"ERROR: cannot find run {fname} in any path listed in data-path.txt")
+    return []
 
 
 def load_parquet_data_files(date, runnr, data_path_txt=None):
@@ -62,30 +48,15 @@ def load_parquet_data_files(date, runnr, data_path_txt=None):
     DATE = dateparser.parse(date)
     if DATE is None:
         print("ERROR: cannot parse date")
-
-    DATA_PATH = get_data_path(data_path_txt)
-    DATA_DIR = DATA_PATH / f"{DATE.year}-{DATE.month:02d}-{DATE.day:02d}"
-
-    if not DATA_DIR.is_dir():
-        print(
-            (
-                f"ERROR: cannot find directory {DATA_DIR}."
-                "ERROR: Make sure you create a text file with your data path"
-                " named 'data-path.txt' in the directory wara/wara"
-                " For example, my data path is: "
-                "C:/Users/mayllonu/Documents/NASA-GSFC/Technical/Data-LBL"
-                "Or else "
-            )
-        )
-
+    date_dir = f"{DATE.year}-{DATE.month:02d}-{DATE.day:02d}"
     fname = f"RUN-{DATE.year}-{DATE.month:02d}-{DATE.day:02d}-{RUNNR:05d}"
-    FILE = DATA_DIR / fname
-    if not FILE.is_dir():
-        print(f"ERROR: cannot find file {FILE}")
-
-    # load data
-    files = list(FILE.glob(f"parquet-data/{fname}-*-pandas.parquet"))
-    return files
+    for DATA_PATH in get_data_path(data_path_txt):
+        DATA_DIR = DATA_PATH / date_dir
+        FILE = DATA_DIR / fname
+        if FILE.is_dir():
+            return list(FILE.glob(f"parquet-data/{fname}-*-pandas.parquet"))
+    print(f"ERROR: cannot find run {fname} in any path listed in data-path.txt")
+    return []
 
 
 def read_parquet_file(date, runnr, ch=None, flood_field=False, data_path=None):

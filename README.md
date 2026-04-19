@@ -46,10 +46,12 @@ Info buttons are placed strategically to guide the user.
 
 ## Data path configuration
 If you use the API data loading features, create a file called `data-path.txt`
-inside the `wara/` package directory and put your data folder path on the first line:
+inside the `wara/` package directory with one data folder path per line:
 ```
 C:/Users/yourname/Documents/my-data
+D:/external-drive/more-data
 ```
+wara will search each path in order and use the first one that contains the requested run.
 This file is excluded from version control, so each user keeps their own local copy.
 
 ## Development
