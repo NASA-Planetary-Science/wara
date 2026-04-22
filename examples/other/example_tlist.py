@@ -5,9 +5,12 @@ and a CeBr detector. The pulse period is 1000 us
 """
 
 from wara import tlist
+from wara import file_reader
 
-file = "Data/gui_test_data_tlist.txt"
-
-png = tlist.Tlist(fname=file, period=1000)
+file = "../data/gui_test_data_tlist.txt"
+ms = file_reader.ReadMultiScanTlist(file)
+ms.read_file()
+df = ms.df
+png = tlist.Tlist(df_raw=df, period=1000)
 
 png.plot_time_hist()

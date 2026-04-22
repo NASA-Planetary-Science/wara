@@ -4,10 +4,11 @@ Example file for 'Diagnostics' tab
 from wara import diagnostics
 from wara import file_reader
 import matplotlib.pyplot as plt
+from pathlib import Path
 
-folder = "data/test_folder_diag"
+folder = Path("../data/test_folder_diag")
 
-spe = file_reader.ReadSPE(folder + "/RUN000.Spe")
+spe = file_reader.ReadSPE(folder / "RUN000.Spe")
 diag = diagnostics.Diagnostics(folder)
 diag.calculate_integral(xmid=2478, width=70)
 

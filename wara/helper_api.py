@@ -18,11 +18,13 @@ def find_data_path(date, runnr):
     RUNNR = runnr
     DATE = dateparser.parse(date)
 
-    path_data = get_data_path()
-    DATA_DIR = path_data / f"{DATE.year}-{DATE.month:02d}-{DATE.day:02d}"
+    date_dir = f"{DATE.year}-{DATE.month:02d}-{DATE.day:02d}"
     fname = f"RUN-{DATE.year}-{DATE.month:02d}-{DATE.day:02d}-{RUNNR:05d}"
-    file_path = DATA_DIR / fname
-    return file_path
+    for data_path in get_data_path():
+        file_path = data_path / date_dir / fname
+        if file_path.is_dir():
+            return file_path
+    raise FileNotFoundError(f"Cannot find run {fname} in any path listed in data-path.txt")
 
 
 def read_json(file):

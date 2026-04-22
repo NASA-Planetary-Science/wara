@@ -9,7 +9,7 @@ from wara import file_reader
 from wara import advanced_fit as af
 
 # dataset 1
-file = "data/gui_test_data_cebr_cal.csv"
+file = "../data/gui_test_data_cebr_cal.csv"
 spect = file_reader.read_csv(file)
 
 # Print spectrum metadata

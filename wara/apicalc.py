@@ -189,18 +189,19 @@ def find_data_path(date, runnr, data_path=None):
     RUNNR = runnr
     DATE = dateparser.parse(date)
 
-    path_data = get_data_path(data_path)
-    DATA_DIR = path_data / f"{DATE.year}-{DATE.month:02d}-{DATE.day:02d}"
+    date_dir = f"{DATE.year}-{DATE.month:02d}-{DATE.day:02d}"
     fname = f"RUN-{DATE.year}-{DATE.month:02d}-{DATE.day:02d}-{RUNNR:05d}"
-    file_path = DATA_DIR / fname
-    return file_path
+    for dp in get_data_path(data_path):
+        file_path = dp / date_dir / fname
+        if file_path.is_dir():
+            return file_path
+    raise FileNotFoundError(f"Cannot find run {fname} in any path listed in data-path.txt")
 
 
 # Read .npy MCA data, join if more than 1 file
 def read_mca(date, runnr):
     # only channels 4 (LaBr==True) and 5 (LaBr==False)
     file_path = find_data_path(date, runnr)
-    path_data = get_data_path()
     # load data
     files = list(file_path.glob("MCA-data/*.npy"))
     if len(files) > 1:

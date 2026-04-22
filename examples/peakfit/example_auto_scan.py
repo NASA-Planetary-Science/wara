@@ -1,5 +1,5 @@
 """
-Example using auto_scan
+Example using auto_scan.
 """
 from wara import spectrum as sp
 import numpy as np
@@ -7,6 +7,7 @@ import pandas as pd
 from wara import peaksearch as ps
 from wara import peakfit as pf
 from wara import file_reader
+from pathlib import Path
 
 # Required input parameters (in channels)
 ref_fwhm = 3
@@ -14,14 +15,14 @@ ref_x = 420
 min_snr = 15
 
 # instantiate a Spectrum object
-file = "Data/gui_test_data_hpge_NH3.txt"
+file = Path(__file__).parent.parent / "data/gui_test_data_hpge_NH3.txt"
 spect = file_reader.read_txt(file)
 
 # peaksearch class
 search = ps.PeakSearch(spect, ref_x, ref_fwhm, min_snr=min_snr, method="fast")
 
 ## plot peak positions
-search.plot_peaks()
+search.plot()
 
 ## auto_scan
 ranges_m = [

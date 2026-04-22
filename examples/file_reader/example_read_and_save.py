@@ -6,7 +6,7 @@ import matplotlib.pyplot as plt
 from wara import spectrum as sp
 from wara import file_reader
 
-file = "data/gui_test_data_hpge_NH3.pha.txt"
+file = "../data/gui_test_data_hpge_NH3.pha.txt"
 
 # Read multiscan file
 spect = file_reader.read_multiscan(file)

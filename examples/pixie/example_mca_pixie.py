@@ -1,5 +1,9 @@
 """
 Read MCA data from PIXIE formatted as npy files.
+Make sure you have downloaded the data file 2024-05-15 RUN 0.
+Also, make sure you have the right path set in data-path.txt.
+Mine is F:/Data-LBL
+The structure is Data-LBL/2024-05-15/RUN-2024-05-15-00000/MCA-data
 """
 
 from wara import helper_api

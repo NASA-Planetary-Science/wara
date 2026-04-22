@@ -10,14 +10,14 @@ from wara import peakfit as pf
 from wara import efficiency
 import pandas as pd
 
-file = "data/gui_test_data_lab_sources.cnf"
+file = "../data/gui_test_data_lab_sources.cnf"
 spe = file_reader.read_cnf(file)
 # The energy calibration is off. Let's use a better one
 erg_new = -0.8801 + 0.9328*spe.channels
 spe.energies = erg_new
 spe.x = erg_new
 # find peaks for fitting
-search = ps.PeakSearch(spe, ref_x=420, ref_fwhm=20, min_snr=4)
+search = ps.PeakSearch(spe, ref_x=420, ref_fwhm=18, min_snr=4)
 # fit several peaks
 fit1 = pf.PeakFit(search, xrange=[600,720], bkg="linear") # 662 keV
 fit2 = pf.PeakFit(search, xrange=[1077,1414], bkg="poly2") # 1173 keV, 1333 keV

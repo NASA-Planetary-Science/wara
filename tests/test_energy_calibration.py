@@ -194,7 +194,7 @@ class TestMetadata:
 
     def test_contains_keys(self, ecal):
         meta = ecal.metadata()
-        for key in ["n", "e_units", "mean_vals", "erg", "redchi", "coefficients"]:
+        for key in ["n", "e_units", "mean_vals", "erg", "rsquared", "coefficients"]:
             assert key in meta
 
     def test_n_correct(self, ecal):
@@ -207,8 +207,8 @@ class TestMetadata:
         # degree n polynomial has n+1 coefficients
         assert len(ecal.metadata()["coefficients"]) == ecal.n + 1
 
-    def test_redchi_positive(self, ecal):
-        assert ecal.metadata()["redchi"] > 0
+    def test_rsquared_close_to_1(self, ecal):
+        assert ecal.metadata()["rsquared"] > 0.9
 
 
 # ---------------------------------------------------------------------------

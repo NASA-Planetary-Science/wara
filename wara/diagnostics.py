@@ -46,8 +46,7 @@ class Diagnostics:
                 livetimes.append(spect.livetime)
                 realtimes.append(spect.realtime)
             elif file.lower()[-4:] == ".spe":
-                spe = file_reader.ReadSPE(file)
-                spect = spe.spect
+                spect = file_reader.read_spe(file)
                 self.spects.append(spect)
                 cr = spect.counts.sum() / spect.livetime
                 count_rates.append(cr)

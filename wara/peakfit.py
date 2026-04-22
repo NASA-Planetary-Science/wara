@@ -115,8 +115,10 @@ class PeakFit:
             m = np.polyfit(chan_range, x_range, 1)[0]  # energy/channel
         else:
             m = 1.0
-        left = cts[np.where(self.x > self.xrange[0])[0][0]]
-        right = cts[np.where(self.x > self.xrange[1])[0][0]]
+        left_idx = np.where(self.x > self.xrange[0])[0]
+        right_idx = np.where(self.x > self.xrange[1])[0]
+        left = cts[left_idx[0]] if len(left_idx) > 0 else cts[0]
+        right = cts[right_idx[0]] if len(right_idx) > 0 else cts[-1]
 
         mask, pks_idx = self.find_peaks_range()
         erg0 = self.x[pks_idx]
@@ -720,7 +722,10 @@ def auto_scan(search, xlst=None, bkglst=None, plot=False):
             redchi = 1e10
             fitx = None
             for bk in bkgs:
-                fit0 = PeakFit(search, rg, bkg=bk)
+                try:
+                    fit0 = PeakFit(search, rg, bkg=bk)
+                except ValueError:
+                    continue
                 if "Fit succeeded." != fit0.fit_result.message:
                     continue
                 elif fit0.fit_result.redchi < redchi:

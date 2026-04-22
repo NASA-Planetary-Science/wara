@@ -5,6 +5,7 @@ Classes and functions to read different file types
 import numpy as np
 import pandas as pd
 import re
+from pathlib import Path
 from wara import spectrum as sp
 from wara import cnf_reader
 import datetime
@@ -344,7 +345,7 @@ class ReadSPE:
         None.
 
         """
-        self.file = file
+        self.file = Path(file)
         self.description = None
         self.detector = None
         self.detector_description = None
@@ -360,7 +361,7 @@ class ReadSPE:
         self.counts = None
         self.erg_cal = None
 
-        if file[-3:].lower() != "spe":
+        if self.file.suffix.lower() != ".spe":
             raise ValueError(f"Expected a .Spe file, got: {file}")
         self.parse_file()
 

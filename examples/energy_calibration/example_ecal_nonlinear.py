@@ -1,5 +1,6 @@
 """
-energy calibration example with non-linear spectrum
+energy calibration example with non-linear spectrum.
+Currently not working as expected
 """
 
 import pandas as pd

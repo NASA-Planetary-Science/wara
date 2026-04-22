@@ -1,5 +1,6 @@
 """
-Example usage of the chi-saquared optimizer
+Example usage of the chi-squared optimizer.
+It finds the x-range that produces the fit with the best chi-squared
 """
 from wara import spectrum as sp
 import numpy as np
@@ -23,7 +24,7 @@ spect = file_reader.read_cnf(file)
 
 # peaksearch class
 search = ps.PeakSearch(spect, ref_x, ref_fwhm, fwhm_at_0, min_snr=min_snr)
-search.plot_peaks()
+search.plot()
 
 # peakfit class
 bkg0 = "poly1"
