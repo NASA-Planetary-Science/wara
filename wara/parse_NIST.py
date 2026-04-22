@@ -20,9 +20,9 @@ def isotopic_abundance(element):
         stable isotopes and their respective natural abundance.
 
     """
-    file = pkg_resources.resource_filename("wara", "data/Isotopes-NIST.txt")
+    file = pkg_resources.resource_filename("wara", "nuclear-data/Isotopes-NIST.txt")
     file_symb = pkg_resources.resource_filename(
-        "wara", "data/elements_symbols.csv"
+        "wara", "nuclear-data/elements_symbols.csv"
     )
     # file = "../isotID_docs/Isotopes-NIST.txt"
     # file_symb = "../isotID_docs/elements_symbols.csv"

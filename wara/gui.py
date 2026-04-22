@@ -71,7 +71,7 @@ class Dialog_from_UI(QDialog):
     def __init__(self):
         super().__init__()
         self.define_ui_vars()
-        ui_file = pkg_resources.resource_filename("wara", self.ui_name)
+        ui_file = pkg_resources.resource_filename("wara", f"ui/{self.ui_name}")
         loadUi(ui_file, self)
         self.setWindowTitle(self.window_title)
 
@@ -275,7 +275,7 @@ class NasaGammaApp(QMainWindow):
     def __init__(self, commands):
         print(super())
         super().__init__()
-        ui_file = pkg_resources.resource_filename("wara", "qt_gui.ui")
+        ui_file = pkg_resources.resource_filename("wara", "ui/qt_gui.ui")
         loadUi(ui_file, self)
         self.setWindowFlag(Qt.WindowMaximizeButtonHint, True)
         # self.setMinimumSize(1800, 900)
@@ -3330,23 +3330,23 @@ class NasaGammaApp(QMainWindow):
 
     def isotID_retrieve_data(self):
         lab_src_file = pkg_resources.resource_filename(
-            "wara", "data/Common_lab_sources.csv"
+            "wara", "nuclear-data/Common_lab_sources.csv"
         )
         delay_act_file = pkg_resources.resource_filename(
-            "wara", "data/Delayed_activation_IAEA.csv"
+            "wara", "nuclear-data/Delayed_activation_IAEA.csv"
         )
         nat_rad_file = pkg_resources.resource_filename(
-            "wara", "data/Natural_radiation.csv"
+            "wara", "nuclear-data/Natural_radiation.csv"
         )
         capt_file = pkg_resources.resource_filename(
-            "wara", "data/Capture_CapGam.csv"
+            "wara", "nuclear-data/Capture_CapGam.csv"
         )
         capt_IAEA_file = pkg_resources.resource_filename(
-            "wara", "data/Capture_IAEA.csv"
+            "wara", "nuclear-data/Capture_IAEA.csv"
         )
-        talys_file = pkg_resources.resource_filename("wara", "data/Talys-14MeV.csv")
+        talys_file = pkg_resources.resource_filename("wara", "nuclear-data/Talys-14MeV.csv")
         inl_baghdad_file = pkg_resources.resource_filename(
-            "wara", "data/Inelastic_Baghdad.csv"
+            "wara", "nuclear-data/Inelastic_Baghdad.csv"
         )
         file = 0
         if self.w_isot_id.lab_src.isChecked():
@@ -3369,6 +3369,8 @@ class NasaGammaApp(QMainWindow):
             return []
         else:
             data = pd.read_csv(file)
+            if "Info" not in data.columns:
+                data["Info"] = data["Energy (keV)"].apply(lambda e: f"{e:.1f} keV")
             return data
 
     def isotID_filter_by_element(self, df):
