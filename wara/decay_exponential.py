@@ -18,8 +18,10 @@ def double_decay_plus_constant(t, A1, A2, k1, k2, C):
 def guess_halflife(x, y):
     ymid = (y.min() + y.max()) / 2
     idx_m = y > ymid
+    if not idx_m.any():
+        return x[-1] if x[-1] > 0 else 1.0
     thalf = x[idx_m][-1]
-    return thalf
+    return thalf if thalf > 0 else x[-1] / 2.0
 
 
 class Decay_exp:
@@ -36,6 +38,7 @@ class Decay_exp:
         k_guess = np.log(2) / guess_halflife(x=self.x_data, y=self.y_data)
         C_guess = self.y_data.min()
         params = exp_model.make_params(A=A_guess, k=k_guess, C=C_guess)
+        params["k"].min = 0
         # Perform the fit
         if self.yerr is None:
             self.fit_result = exp_model.fit(
@@ -48,14 +51,16 @@ class Decay_exp:
     def fit_double_decay(self):
         self.degree = 2
         exp_model = lmfit.Model(double_decay_plus_constant, nan_policy="omit")
-        A_guess1 = self.y_data.max()
+        A_guess1 = self.y_data.max() * 0.7
         k_guess1 = np.log(2) / guess_halflife(x=self.x_data, y=self.y_data)
-        A_guess2 = self.y_data.max()
-        k_guess2 = np.log(2) / guess_halflife(x=self.x_data, y=self.y_data)
+        A_guess2 = self.y_data.max() * 0.3
+        k_guess2 = k_guess1 * 5
         C_guess = self.y_data.min()
         params = exp_model.make_params(
             A1=A_guess1, A2=A_guess2, k1=k_guess1, k2=k_guess2, C=C_guess
         )
+        params["k1"].min = 0
+        params["k2"].min = 0
         # Perform the fit
         if self.yerr is None:
             self.fit_result = exp_model.fit(
@@ -67,6 +72,8 @@ class Decay_exp:
             )
 
     def plot(self, ax_fit=None, ax_res=None, show_components=False):
+        if not hasattr(self, "fit_result"):
+            raise RuntimeError("Call fit_single_decay() or fit_double_decay() before plot().")
         only_fit = False
         if ax_fit is None and ax_res is None:
             # plt.rc("font", size=12)
@@ -158,3 +165,4 @@ class Decay_exp:
         ax_fit.legend()
         ax_fit.set_xlabel("Time (us)")
         ax_fit.set_ylabel("Counts")
+        return ax_fit, ax_res

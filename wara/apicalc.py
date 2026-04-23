@@ -121,7 +121,7 @@ def dftxye(
 
 
 def dftxy(df, xrange, yrange, trange, xkey="X", ykey="Y", tkey="dt"):
-    """Return a pamdas data frame filtered in x-y, and time"""
+    """Return a pandas data frame filtered in x-y, and time"""
     if not isinstance(df, pd.DataFrame):
         raise TypeError("df must be a pandas dataframe")
     df_xy = dfxy(df, xrange, yrange, xkey, ykey)
@@ -132,12 +132,16 @@ def dftxy(df, xrange, yrange, trange, xkey="X", ykey="Y", tkey="dt"):
 
 def dft(df, trange, tkey="dt"):
     """Return a pandas data frame filtered in time"""
+    if not isinstance(df, pd.DataFrame):
+        raise TypeError("df must be a pandas dataframe")
     df_t = df[(df[tkey] > trange[0]) & (df[tkey] < trange[1])]
     return df_t
 
 
 def dfet(df, erange, trange, ekey="energy", tkey="dt"):
     """Return a pandas data frame filtered in energy and time"""
+    if not isinstance(df, pd.DataFrame):
+        raise TypeError("df must be a pandas dataframe")
     dfen = dfe(df, erange, ekey)
     df_e_t = dfen[(dfen[tkey] > trange[0]) & (dfen[tkey] < trange[1])]
     return df_e_t
@@ -151,7 +155,7 @@ def time_cut(df, t_start, t_stop, step, xkey="X", ykey="Y", tkey="dt"):
     X = df[xkey]
     Y = df[ykey]
     for k in np.arange(t_start, t_stop, step):
-        mask = (tdiff > k) * (tdiff < k + step)
+        mask = (tdiff > k) & (tdiff < k + step)
         tdiff2 = tdiff[mask]
         X2 = X[mask]
         Y2 = Y[mask]
@@ -188,6 +192,8 @@ def compute_fft(signal, sampling_rate):
 def find_data_path(date, runnr, data_path=None):
     RUNNR = runnr
     DATE = dateparser.parse(date)
+    if DATE is None:
+        raise ValueError(f"Could not parse date string: '{date}'")
 
     date_dir = f"{DATE.year}-{DATE.month:02d}-{DATE.day:02d}"
     fname = f"RUN-{DATE.year}-{DATE.month:02d}-{DATE.day:02d}-{RUNNR:05d}"
@@ -204,7 +210,9 @@ def read_mca(date, runnr):
     file_path = find_data_path(date, runnr)
     # load data
     files = list(file_path.glob("MCA-data/*.npy"))
-    if len(files) > 1:
+    if len(files) == 0:
+        raise FileNotFoundError(f"No .npy files found in {file_path / 'MCA-data'}")
+    elif len(files) > 1:
         data = 0
         for f in files:
             data0 = np.load(f)
@@ -219,10 +227,13 @@ def read_time_from_settings(settings_file, ch):
     with open(settings_file, mode="r") as myfile:
         lines = myfile.readlines()
 
+    idx = None
     for i, l in enumerate(lines):
         tmp = l.replace('"', "").split()
         if "live_time:" in tmp:
             idx = i
+    if idx is None:
+        raise ValueError(f"'live_time:' key not found in {settings_file}")
     time = float(lines[idx + ch + 1].split(",")[0])
     return time
 
@@ -231,10 +242,13 @@ def read_input_CR_from_settings(settings_file, ch=9):
     with open(settings_file, mode="r") as myfile:
         lines = myfile.readlines()
 
+    idx = None
     for i, l in enumerate(lines):
         tmp = l.replace('"', "").split()
         if "input_count_rate:" in tmp:
             idx = i
+    if idx is None:
+        raise ValueError(f"'input_count_rate:' key not found in {settings_file}")
     CR = float(lines[idx + ch + 1].split(",")[0])
     return CR
 
@@ -243,10 +257,13 @@ def read_input_counts_from_settings(settings_file, ch=9):
     with open(settings_file, mode="r") as myfile:
         lines = myfile.readlines()
 
+    idx = None
     for i, l in enumerate(lines):
         tmp = l.replace('"', "").split()
         if "input_counts:" in tmp:
             idx = i
+    if idx is None:
+        raise ValueError(f"'input_counts:' key not found in {settings_file}")
     CR = float(lines[idx + ch + 1].split(",")[0])
     return CR
 
@@ -332,7 +349,7 @@ def approximate_fa(L=30, S=10):
     L_alpha = (d / L) * (S / 2) * 2
     sample_area = L_alpha * L_alpha
     fa = sample_area / alpha_area
-    return fa
+    return min(fa, 1.0)
 
 
 def create_directory(directory):
@@ -394,6 +411,8 @@ def data_cleanup(runs_dict):
             ykey="Y2",
             tkey="dt",
         )
+    else:
+        raise ValueError(f"Channel {ch} not supported; expected 4 or 5.")
 
     df_final = dfxy[["dt", "energy", "energy_orig", "LaBr[y/n]", "X2", "Y2"]]
     df_final["dt"] *= 1e-9
@@ -497,7 +516,7 @@ def plot_2Dposition_hexbins(df, xkey, ykey, ax, colormap="Grays"):
     if ax is None:
         fig = plt.figure(figsize=(10, 6))
         ax = fig.add_subplot()
-    df.plot.hexbin(x=xkey, y=ykey, gridsize=80, cmap=colormap, colorbar=None, ax=ax)
+    df.plot.hexbin(x=xkey, y=ykey, gridsize=80, cmap=colormap, colorbar=False, ax=ax)
 
 
 def plot_energy(en, ebins, erange=None, ax=None, log=True, **kwargs):
@@ -548,7 +567,7 @@ def plot_scatter_density(df):
     )
 
     fig = plt.figure()
-    ax = ax = fig.add_subplot(1, 1, 1, projection="scatter_density")
+    ax = fig.add_subplot(1, 1, 1, projection="scatter_density")
     density = ax.scatter_density(df.X2, df.Y2, cmap=white_viridis)
     fig.colorbar(density, label="Number of points per pixel")
     plt.show()
@@ -561,6 +580,7 @@ def api_xyz(df, det_pos=[0, 22.2, -25.515], toffset=None, use_det=True):
         raise TypeError("df must be a pandas dataframe")
 
     if toffset is not None:
+        df = df.copy()
         df["dt"] = df["dt"] - toffset
     # convert alpha detector hits to cm
     res, xed, yed = np.histogram2d(df.Y2, df.X2, bins=1000)
