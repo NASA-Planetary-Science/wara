@@ -4,8 +4,6 @@ Helper functions
 
 import numpy as np
 import dateparser
-from pathlib import Path
-import pkg_resources
 from wara.read_parquet_api import get_data_path
 from wara import read_parquet_api
 from wara import apicalc as api

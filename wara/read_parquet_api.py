@@ -5,14 +5,16 @@ Read API parquet files
 import dateparser
 import numpy as np
 import pandas as pd
-import pkg_resources
+#import pkg_resources
+from importlib.resources import files
 from pathlib import Path
 
 
 def get_data_path(data_path=None):
     if data_path is not None:
         return [Path(data_path)]
-    data_path_file = Path(pkg_resources.resource_filename("wara", "")).parent / "data-path.txt"
+    #data_path_file = Path(pkg_resources.resource_filename("wara", "")).parent / "data-path.txt"
+    data_path_file = Path(files("wara")).parent / "data-path.txt"
     with Path(data_path_file).open() as f:
         paths = [Path(line.strip()) for line in f if line.strip()]
     return paths

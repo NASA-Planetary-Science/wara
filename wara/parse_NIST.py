@@ -4,7 +4,7 @@ Parse NIST data file
 from collections import defaultdict
 import re
 import pandas as pd
-import pkg_resources
+from importlib.resources import files
 
 
 def isotopic_abundance(element):
@@ -20,10 +20,11 @@ def isotopic_abundance(element):
         stable isotopes and their respective natural abundance.
 
     """
-    file = pkg_resources.resource_filename("wara", "nuclear-data/Isotopes-NIST.txt")
-    file_symb = pkg_resources.resource_filename(
-        "wara", "nuclear-data/elements_symbols.csv"
-    )
+    # Directory reference
+    data_dir = files("wara").joinpath("nuclear-data")
+    # Assign the isotope and symbol files
+    file      = str(data_dir.joinpath("Isotopes-NIST.txt"))
+    file_symb = str(data_dir.joinpath("elements_symbols.csv"))
     # file = "../isotID_docs/Isotopes-NIST.txt"
     # file_symb = "../isotID_docs/elements_symbols.csv"
     symbols = list(pd.read_csv(file_symb)["Sym"])
