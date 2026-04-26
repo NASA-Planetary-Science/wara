@@ -5,7 +5,6 @@ Read API parquet files
 import dateparser
 import numpy as np
 import pandas as pd
-import matplotlib.pyplot as plt
 import pkg_resources
 from pathlib import Path
 
@@ -58,30 +57,67 @@ def read_parquet_file(date, runnr, ch=None, flood_field=False, data_path_txt=Non
     if not files:
         print(f"ERROR: No parquet file available for run {date}-{runnr}")
         return None
-    df = pd.read_parquet(files[0])
+    df = pd.concat([pd.read_parquet(f) for f in files])
 
-    if len(files) > 1:
-        for f in files[1:]:
-            df0 = pd.read_parquet(f)
-            df = pd.concat([df, df0])
-    if flood_field:
+    if flood_field or ch is None:
         df.reset_index(drop=True, inplace=True)
         return df
-    if ch is None:
-        df.reset_index(drop=True, inplace=True)
-        return df
+
+    # df["dt"] *= dt_multiplier  # to ns
+    if "channel" in df.columns:
+        # df["channel"] = df["channel"].str.extract(r"(\d+)$").astype(int)
+        df = df[df["channel"] == ch]
     else:
-        # df["dt"] *= dt_multiplier  # to ns
-        if "channel" in list(df.columns):
-            # df["channel"] = df["channel"].str.extract(r"(\d+)$").astype(int)
-            df = df[df["channel"] == ch]
+        if ch == 4:
+            df = df[df["LaBr[y/n]"]]
+        elif ch == 5:
+            df = df[~df["LaBr[y/n]"]]
+    df.reset_index(drop=True, inplace=True)
+    return df
+
+
+def read_parquet_file_time_aligned(date, runnr, ch=None, flood_field=False, data_path_txt=None,
+                                   dt_bins=512, min_snr=5, ref_fwhm=3):
+    from .peaksearch import PeakSearch
+    from .spectrum import Spectrum
+
+    files = load_parquet_data_files(date, runnr, data_path_txt)
+    if not files:
+        print(f"ERROR: No parquet file available for run {date}-{runnr}")
+        return None
+
+    dfs = []
+    for f in files:
+        df = pd.read_parquet(f)
+
+        if not flood_field and ch is not None:
+            if "channel" in df.columns:
+                df = df[df["channel"] == ch]
+            else:
+                if ch == 4:
+                    df = df[df["LaBr[y/n]"]]
+                elif ch == 5:
+                    df = df[~df["LaBr[y/n]"]]
+
+        counts, bin_edges = np.histogram(df["dt"], bins=dt_bins)
+        bin_centers = (bin_edges[:-1] + bin_edges[1:]) / 2
+
+        spect = Spectrum(counts=counts, energies=bin_centers)
+        ps = PeakSearch(spect, ref_x=dt_bins // 2, ref_fwhm=ref_fwhm, fwhm_at_0=1.0,
+                        min_snr=min_snr, method="scipy")
+
+        if len(ps.peaks_idx) > 0:
+            first_peak_dt = spect.energies[ps.peaks_idx[0]]
+            df = df.copy()
+            df["dt"] = df["dt"] - first_peak_dt
         else:
-            if ch == 4:
-                df = df[df["LaBr[y/n]"] == True]
-            elif ch == 5:
-                df = df[df["LaBr[y/n]"] == False]
-        df.reset_index(drop=True, inplace=True)
-        return df
+            print(f"WARNING: No prominent peak found in {f.name}, skipping time alignment")
+
+        dfs.append(df)
+
+    result = pd.concat(dfs)
+    result.reset_index(drop=True, inplace=True)
+    return result
 
 
 def read_parquet_file_from_path(filepath, ch):
@@ -90,22 +126,21 @@ def read_parquet_file_from_path(filepath, ch):
     if not files:
         print(f"ERROR: No parquet files found in {path}")
         return None
-    df = pd.read_parquet(files[0])
+    df = pd.concat([pd.read_parquet(f) for f in files])
 
-    if len(files) > 1:
-        for f in files[1:]:
-            df0 = pd.read_parquet(f)
-            df = pd.concat([df, df0])
     # df["dt"] *= 1e9  # to ns
-    if ch == 4:
-        df = df[df["LaBr[y/n]"] == True]
-    elif ch == 5:
-        df = df[df["LaBr[y/n]"] == False]
+    if "channel" in df.columns:
+        df = df[df["channel"] == ch]
+    else:
+        if ch == 4:
+            df = df[df["LaBr[y/n]"]]
+        elif ch == 5:
+            df = df[~df["LaBr[y/n]"]]
     df.reset_index(drop=True, inplace=True)
     return df
 
 
-def initialize_plots(df, ax_g, ax_t, ax_xy, ax_xz):
+def initialize_plots(df, ax_g, ax_t, ax_xy):
     tr = [-40, 80]  # dt range
     ebins = 2048  # energy bins
     hexbins = 80  # x-y bins
@@ -121,8 +156,8 @@ def initialize_plots(df, ax_g, ax_t, ax_xy, ax_xz):
 
 def plot_energy_hist(df, ebins, ax):
     gam, e = np.histogram(df["energy"], bins=ebins)
-    ch = np.arange(0, ebins, 1)
-    ax.plot(ch, gam, color="green")
+    bin_centers = (e[:-1] + e[1:]) / 2
+    ax.plot(bin_centers, gam, color="green")
     return gam, e
 
 
