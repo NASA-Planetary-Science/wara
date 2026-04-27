@@ -13,25 +13,6 @@ def get_spect_search(commands):
     if commands["-o"] or commands["<file_name>"] is None:
         return None
     file_name = commands["<file_name>"]
-    # The detector types below are accurate only for the example files.
-    # Add a similar command for your own detector or modify the values below.
-    if commands["--cebr"] or commands["--labr"]:
-        fwhm_at_0 = 1.0
-        ref_x = 420
-        ref_fwhm = 20  # 41
-    elif commands["--hpge"]:
-        fwhm_at_0 = 0.1
-        ref_x = 948
-        ref_fwhm = 4.4
-    else:
-        fwhm_at_0 = float(commands["--fwhm_at_0"])
-        ref_x = float(commands["--ref_x"])
-        ref_fwhm = float(commands["--ref_fwhm"])
-
-    if commands["--min_snr"] is None:
-        min_snr = 5.0
-    else:
-        min_snr = float(commands["--min_snr"])
 
     path = Path(file_name)
     name_lower = path.name.lower()
@@ -55,6 +36,30 @@ def get_spect_search(commands):
     else:
         raise ValueError(f"Unsupported file type: '{path.suffix}'. Supported: .csv, -lynx.csv, .cnf, .txt, .pha.txt, .mca, .spe")
 
-    # peaksearch class
+    # The detector types below are accurate only for the example files.
+    # Add a similar command for your own detector or modify the values below.
+    if commands["--cebr"] or commands["--labr"]:
+        fwhm_at_0 = 1.0
+        ref_x = 420
+        ref_fwhm = 20
+    elif commands["--hpge"]:
+        fwhm_at_0 = 0.1
+        ref_x = 948
+        ref_fwhm = 4.4
+    elif (commands["--fwhm_at_0"] is not None
+          and commands["--ref_x"] is not None
+          and commands["--ref_fwhm"] is not None):
+        fwhm_at_0 = float(commands["--fwhm_at_0"])
+        ref_x = float(commands["--ref_x"])
+        ref_fwhm = float(commands["--ref_fwhm"])
+    else:
+        # No peak-search parameters supplied — open file without finding peaks
+        return spect, None, None, None, None
+
+    if commands["--min_snr"] is None:
+        min_snr = 5.0
+    else:
+        min_snr = float(commands["--min_snr"])
+
     search = ps.PeakSearch(spect, ref_x, ref_fwhm, fwhm_at_0, min_snr=min_snr)
     return spect, search, ref_x, fwhm_at_0, ref_fwhm

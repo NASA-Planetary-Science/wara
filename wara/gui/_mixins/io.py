@@ -39,6 +39,8 @@ class IOMixin:
         fileName, _ = QFileDialog.getSaveFileName(
             self, "Save", "", "All Files (*);", options=options
         )
+        if not fileName:
+            return
         try:
             if fileName[-4:] == ".txt":
                 self.spect.to_txt(fileName)
@@ -54,13 +56,15 @@ class IOMixin:
         fileName, _ = QFileDialog.getSaveFileName(
             self, "Save", "", "All Files (*);;Text Files (*.txt)", options=options
         )
+        if not fileName:
+            return
         try:
-            print("Saved file: ", fileName)
             df = self.df_isotID_selected
             if ".csv" in fileName:
                 df.to_csv(f"{fileName}", index=False)
             else:
                 df.to_csv(f"{fileName}.csv", index=False)
+            print("Saved file: ", fileName)
         except Exception:
             print("Cannot save file with peak info")
             traceback.print_exc()
@@ -70,13 +74,15 @@ class IOMixin:
         fileName, _ = QFileDialog.getSaveFileName(
             self, "Save", "", "All Files (*);", options=options
         )
+        if not fileName:
+            return
         try:
-            print("Saved file: ", fileName)
             df = self.diag_data.create_data_frame()
             if ".csv" in fileName:
                 df.to_csv(f"{fileName}", index=False)
             else:
                 df.to_csv(f"{fileName}.csv", index=False)
+            print("Saved file: ", fileName)
         except Exception:
             print("ERROR: Cannot save file")
             traceback.print_exc()
@@ -140,8 +146,13 @@ class IOMixin:
             traceback.print_exc()
 
     def load_spe_file(self):
+        fileName, e_units, spect = self.open_file()
+        if spect is None:
+            return
         try:
-            self.fileName, self.e_units, self.spect = self.open_file()
+            self.fileName = fileName
+            self.e_units = e_units
+            self.spect = spect
             self.e_units_orig = deepcopy(self.e_units)
             self.spect_orig = deepcopy(self.spect)
             self.create_graph(fit=False, reset=False)
@@ -172,41 +183,39 @@ class IOMixin:
             options=options,
         )
 
-        if fileName == "":
-            pass
-        else:
-            try:
-                print("Opening file: ", fileName)
-                fileName_lc = fileName.lower()
-                if fileName_lc[-4:] == ".csv":
-                    try:
-                        spect = file_reader.read_csv(fileName)
-                        e_units = spect.e_units
-                    except Exception:
-                        self.lynxcsv = file_reader.ReadLynxCsv(fileName)
-                        spect = self.lynxcsv.spect
-                        e_units = spect.e_units
-
-                elif fileName_lc[-4:] == ".cnf":
-                    spect = file_reader.read_cnf(fileName)
+        if not fileName:
+            return None, None, None
+        try:
+            print("Opening file: ", fileName)
+            fileName_lc = fileName.lower()
+            if fileName_lc.endswith(".csv"):
+                try:
+                    spect = file_reader.read_csv(fileName)
                     e_units = spect.e_units
-                elif fileName_lc[-4:] == ".mca":
-                    spect = file_reader.read_mca(fileName)
-                    e_units = "channels"
-                elif fileName_lc[-4:] == ".spe":
-                    spect = file_reader.read_spe(fileName)
-                    e_units = "channels"
-                elif fileName_lc[-8:] == ".pha.txt":
-                    spect = file_reader.read_multiscan(fileName)
+                except Exception:
+                    self.lynxcsv = file_reader.ReadLynxCsv(fileName)
+                    spect = self.lynxcsv.spect
                     e_units = spect.e_units
-
-                elif fileName_lc[-4:] == ".txt" and fileName_lc[-8:] != ".pha.txt":
-                    spect = file_reader.read_txt(fileName)
-                    e_units = spect.e_units
-                else:
-                    print("Could not open file")
-                    fileName = fileName + " ***INVALID FILE TYPE***"
-            except Exception:
-                print("Could not open file")
-                traceback.print_exc()
+            elif fileName_lc.endswith(".cnf"):
+                spect = file_reader.read_cnf(fileName)
+                e_units = spect.e_units
+            elif fileName_lc.endswith(".mca"):
+                spect = file_reader.read_mca(fileName)
+                e_units = "channels"
+            elif fileName_lc.endswith(".spe"):
+                spect = file_reader.read_spe(fileName)
+                e_units = "channels"
+            elif fileName_lc.endswith(".pha.txt"):
+                spect = file_reader.read_multiscan(fileName)
+                e_units = spect.e_units
+            elif fileName_lc.endswith(".txt"):
+                spect = file_reader.read_txt(fileName)
+                e_units = spect.e_units
+            else:
+                print("Could not open file: unsupported file type")
+                return None, None, None
+        except Exception:
+            print("Could not open file")
+            traceback.print_exc()
+            return None, None, None
         return fileName, e_units, spect

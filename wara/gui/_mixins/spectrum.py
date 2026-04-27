@@ -2,7 +2,6 @@ import traceback
 import numpy as np
 import pandas as pd
 from matplotlib.widgets import SpanSelector
-from PyQt5.QtWidgets import *
 from PyQt5 import QtWidgets
 from wara import peakfit as pf
 from wara import peaksearch as ps
@@ -103,6 +102,8 @@ class SpectrumMixin:
             self.fig.canvas.mpl_disconnect(self.cid)
 
     def onclick(self, event):
+        if event.xdata is None:
+            return
         xnew = event.xdata
         if self.spect.energies is not None:
             xnew = np.where(self.spect.energies >= xnew)[0][0]
@@ -270,10 +271,7 @@ class SpectrumMixin:
 
     def cust_shift(self):
         gain_shift = self.w_cust.shiftBy_txt.text()
-        if self.w_cust.checkBox_erg.isChecked():
-            bool_erg = True
-        else:
-            bool_erg = False
+        bool_erg = self.w_cust.checkBox_erg.isChecked()
         if gain_shift != "":
             gs = eval(gain_shift)
             self.spect.gain_shift(by=gs, energy=bool_erg)
@@ -378,14 +376,14 @@ class SpectrumMixin:
                 self.ax_res.clear()
                 self.ax_fit.clear()
                 self.fit.plot(
-                    fig=self.fig,
+                    fig=self.fig_fit,
                     ax_res=self.ax_res,
                     ax_fit=self.ax_fit,
                 )
                 data = self.get_values_table_fit()
                 self.activate_fit_table(data)
             except Exception:
-                print("update_gauss:could not perform fit")
+                print("update_gauss: could not perform fit")
                 traceback.print_exc()
             self.fig_fit.canvas.draw_idle()
 
@@ -438,10 +436,8 @@ class SpectrumMixin:
         area = []
         fwhm = []
         fwhm_p = []
-        std_mu = []
         std_A = []
         std_A_p = []
-        std_fwhm = []
         for i, e in zip(self.fit.peak_info, self.fit.peak_err):
             ls = list(i.values())
             lse = list(e.values())

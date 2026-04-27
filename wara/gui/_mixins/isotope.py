@@ -4,6 +4,7 @@ import pandas as pd
 from importlib.resources import files
 from PyQt5 import QtWidgets
 from wara import parse_NIST
+from wara import peaksearch as ps
 from ..table import TableModel
 
 
@@ -36,7 +37,6 @@ class IsotopeMixin:
             if x0 and x1:
                 self.x0 = float(x0)
                 self.x1 = float(x1)
-                from wara import peaksearch as ps
                 self.search = ps.PeakSearch(
                     self.spect,
                     self.ref_x,
@@ -47,7 +47,6 @@ class IsotopeMixin:
                     method=method,
                 )
             else:
-                from wara import peaksearch as ps
                 if method == "km" and len(self.spect.channels) < 9000:
                     self.search = ps.PeakSearch(
                         self.spect,
@@ -75,10 +74,8 @@ class IsotopeMixin:
             self.create_graph(fit=True, reset=True)
         except Exception:
             print(
-                (
-                    "ERROR: non-numeric entry or if more than 9000 channels,"
-                    "constrain the range using x0 and x1."
-                )
+                "ERROR: non-numeric entry or if more than 9000 channels, "
+                "constrain the range using x0 and x1."
             )
             traceback.print_exc()
 
@@ -128,8 +125,10 @@ class IsotopeMixin:
         self.w_isot_id.edit_energy.clear()
         self.w_isot_id.edit_erange.clear()
         self.w_isot_id.lab_src.setChecked(False)
+        self.w_isot_id.delayed_activation.setChecked(False)
         self.w_isot_id.natural_rad.setChecked(False)
         self.w_isot_id.neutron_capt.setChecked(False)
+        self.w_isot_id.neutron_capt_IAEA.setChecked(False)
         self.w_isot_id.neutron_talys.setChecked(False)
         self.w_isot_id.neutron_inl_baghdad.setChecked(False)
 
@@ -183,7 +182,7 @@ class IsotopeMixin:
         else:
             data = pd.read_csv(file)
             if "Info" not in data.columns:
-                data["Info"] = data["Energy (keV)"].apply(lambda e: f"{e:.1f} keV")
+                data["Info"] = ""
             return data
 
     def isotID_filter_by_element(self, df):
@@ -201,11 +200,15 @@ class IsotopeMixin:
                 )
                 ixs.append(ix)
             else:
+                # Normalize element-first formats (co60, co-60) to mass-first (60co)
+                match = re.match(r"^([a-zA-Z]+)-?(\d+)$", elm)
+                if match:
+                    elm = match.group(2) + match.group(1)
                 ix = list(df.index[df["Isotope"].str.lower() == elm])
                 ixs.append(ix)
         ixs_flat = [item for sublist in ixs for item in sublist]
         ixs_uniq = sorted(list(set(ixs_flat)))
-        df = df.iloc[ixs_uniq]
+        df = df.loc[ixs_uniq]
         df.reset_index(inplace=True, drop=True)
         return df
 
@@ -216,7 +219,6 @@ class IsotopeMixin:
             eval(s)
             return True
         except Exception:
-            traceback.print_exc()
             return False
 
     def isotID_filter_by_energy(self, df):
@@ -265,12 +267,13 @@ class IsotopeMixin:
     def isotID_getColor(self):
         if self.w_isot_id.button_blue.isChecked():
             return "blue"
-        if self.w_isot_id.button_orange.isChecked():
+        elif self.w_isot_id.button_orange.isChecked():
             return "C1"
-        if self.w_isot_id.button_green.isChecked():
+        elif self.w_isot_id.button_green.isChecked():
             return "green"
-        if self.w_isot_id.button_red.isChecked():
+        elif self.w_isot_id.button_red.isChecked():
             return "red"
+        return "blue"
 
     def isotID_plot_vlines(self):
         "Plot vertical lines of energies of selected rows"
@@ -278,22 +281,37 @@ class IsotopeMixin:
             pass
         else:
             if len(self.selected_rows) == 0:  # do all if none selected
-                self.df_isotID_plot = self.df_isotID.copy()
-                self.df_isotID_selected = self.df_isotID.copy()
+                df_candidates = self.df_isotID.copy()
             else:
-                self.df_isotID_plot = self.df_isotID.loc[self.selected_indexes]
-                self.df_isotID_selected = pd.concat(
-                    [self.df_isotID_selected, self.df_isotID_plot], ignore_index=True
+                df_candidates = self.df_isotID.loc[self.selected_indexes].copy()
+
+            # Filter out entries already plotted
+            if len(self.df_isotID_selected) > 0:
+                already = set(
+                    zip(
+                        self.df_isotID_selected["Isotope"],
+                        self.df_isotID_selected["Energy (keV)"],
+                    )
                 )
-                self.df_isotID_plot.drop_duplicates(inplace=True)
-                self.df_isotID_selected.drop_duplicates(inplace=True)
+                mask = [
+                    (iso, e) not in already
+                    for iso, e in zip(df_candidates["Isotope"], df_candidates["Energy (keV)"])
+                ]
+                self.df_isotID_plot = df_candidates[mask].reset_index(drop=True)
+            else:
+                self.df_isotID_plot = df_candidates
+
+            self.df_isotID_selected = pd.concat(
+                [self.df_isotID_selected, self.df_isotID_plot], ignore_index=True
+            )
+
+            sep_checked = self.w_isot_id.checkBox_sep.isChecked()
+            dep_checked = self.w_isot_id.checkBox_dep.isChecked()
+            compton_edge = self.w_isot_id.checkBox_CE.isChecked()
             for row in self.df_isotID_plot.index:
                 isot0 = self.df_isotID_plot.loc[row, "Isotope"]
                 e0 = self.df_isotID_plot.loc[row, "Energy (keV)"]
                 info0 = self.df_isotID_plot.loc[row, "Info"]
-                sep_checked = self.w_isot_id.checkBox_sep.isChecked()
-                dep_checked = self.w_isot_id.checkBox_dep.isChecked()
-                compton_edge = self.w_isot_id.checkBox_CE.isChecked()
 
                 photopeak = self.ax_main.axvline(
                     x=e0,
@@ -345,8 +363,8 @@ class IsotopeMixin:
     def isotID_remove_vlines(self):
         if len(self.isotID_vlines) != 0:
             self.df_isotID_selected = pd.DataFrame()
-            for l in self.isotID_vlines:
-                l.remove()
+            for line in self.isotID_vlines:
+                line.remove()
             self.isotID_vlines = []
             self.ax_main.legend()
             self.fig.canvas.draw_idle()

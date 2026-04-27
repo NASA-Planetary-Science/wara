@@ -94,7 +94,7 @@ class EfficiencyMixin:
             self.fig_eff.canvas.draw_idle()
 
     def concat_df_eff(self, df):
-        if df is None:
+        if self.df_eff is None:
             self.df_eff = df
         else:
             self.df_eff = pd.concat([self.df_eff, df], ignore_index=True)
@@ -143,7 +143,6 @@ class EfficiencyMixin:
         self.selected_indexes_eff = list(
             self.model_eff._data.index[self.selected_rows_eff]
         )
-        print(self.selected_indexes_eff)
 
     def eff_remove_selected(self):
         if len(self.selected_indexes_eff) > 0 and self.df_eff is not None:
@@ -216,8 +215,8 @@ class EfficiencyMixin:
         elif self.w_eff.button_years.isChecked():
             t_fact = 365 * 24 * 3600
         else:
-            msg = "ERROR: time units not determined"
-            print(msg)
+            print("ERROR: time units not determined")
+            return
         self.t_half = float(self.w_eff.txt_t_half.text()) * t_fact
         # t_half sigma
         self.t_half_sig = float(self.w_eff.txt_t_half_sig.text())
@@ -228,8 +227,8 @@ class EfficiencyMixin:
         elif self.w_eff.button_Bq.isChecked():
             A_fact = 1
         else:
-            msg = "ERROR: activity units not determined"
-            print(msg)
+            print("ERROR: activity units not determined")
+            return
         self.A0 = float(self.w_eff.txt_activity.text()) * A_fact
         # A0 sigma
         self.A0_sig = float(self.w_eff.txt_activity_sig.text())
@@ -237,18 +236,18 @@ class EfficiencyMixin:
         # dates or time since production
         date_str0 = self.w_eff.txt_init_date.text()
         t_duration = self.w_eff.txt_t_duration.text()
-        if date_str0 != " ":
+        if date_str0.strip():
             fmt_str = "%Y-%m-%d"
-            date0 = datetime.datetime.strptime(date_str0, fmt_str)
+            date0 = datetime.datetime.strptime(date_str0.strip(), fmt_str)
             date_str1 = self.w_eff.txt_end_date.text()
-            date1 = datetime.datetime.strptime(date_str1, fmt_str)
+            date1 = datetime.datetime.strptime(date_str1.strip(), fmt_str)
             delta_t = date1 - date0
             self.delta_t_sec = delta_t.days * 24 * 3600
-        elif t_duration != " ":
+        elif t_duration.strip():
             self.delta_t_sec = float(t_duration)
         else:
-            msg = "ERROR: either dates or time since production must be specified"
-            print(msg)
+            print("ERROR: either dates or time since production must be specified")
+            return
         self.delta_t_sig = float(self.w_eff.txt_t_duration_sig.text())
 
         # branching ratio
@@ -364,7 +363,7 @@ class EfficiencyMixin:
             self.perform_fwhm()
 
     def reset_fwhm(self):
-        print("Reseting calibration")
+        print("Resetting calibration")
         self.fit_lst = []
         self.fwhm_x = [0]
         self.fwhm = [0]

@@ -54,7 +54,7 @@ class CalibrationMixin:
         for ch, e in zip(list_m_in, list_e_in):
             e2 = e.strip()  # remove white spaces
             if e2 == "_" or e2 == "-":
-                next
+                continue
             else:
                 num_e = float(e2)
                 if num_e not in list_e_out and ch not in list_m_out:
@@ -169,9 +169,9 @@ class CalibrationMixin:
         if self.flag_check_e_units == 1:
             if self.e_units == "eV":
                 self.w_cal.radio_button_ev.setChecked(True)
-            if self.e_units == "keV":
+            elif self.e_units == "keV":
                 self.w_cal.radio_button_kev.setChecked(True)
-            if self.e_units == "MeV":
+            elif self.e_units == "MeV":
                 self.w_cal.radio_button_mev.setChecked(True)
             self.disable_checkRadioButtons()
             txt = "Note: calibration has already been initialized"
@@ -252,8 +252,8 @@ class CalibrationMixin:
     def set_origin(self):
         self.ax_cal.clear()
         if 0 in self.mean_vals:
-            self.mean_vals.pop(0)
-            self.e_vals.pop(0)
+            self.mean_vals.remove(0)
+            self.e_vals.remove(0)
         else:
             self.mean_vals.insert(0, 0)
             self.e_vals.insert(0, 0)
@@ -301,17 +301,21 @@ class CalibrationMixin:
             erg = 0
             self.ecal_eqn = ""
             if self.isevaluable(a_txt):
-                erg = erg + eval(a_txt)
-                self.ecal_eqn = self.ecal_eqn + f"{eval(a_txt)}"
+                a = eval(a_txt)
+                erg = erg + a
+                self.ecal_eqn = self.ecal_eqn + f"{a}"
             if self.isevaluable(b_txt):
-                erg = erg + eval(b_txt) * ch
-                self.ecal_eqn = self.ecal_eqn + f" + {eval(b_txt)}x"
+                b = eval(b_txt)
+                erg = erg + b * ch
+                self.ecal_eqn = self.ecal_eqn + f" + {b}x"
             if self.isevaluable(c_txt):
-                erg = erg + eval(c_txt) * ch**2
-                self.ecal_eqn = self.ecal_eqn + f" + {eval(c_txt)}x^2"
+                c = eval(c_txt)
+                erg = erg + c * ch**2
+                self.ecal_eqn = self.ecal_eqn + f" + {c}x^2"
             if self.isevaluable(d_txt):
-                erg = erg + eval(d_txt) * ch**3
-                self.ecal_eqn = self.ecal_eqn + f" + {eval(d_txt)}x^3"
+                d = eval(d_txt)
+                erg = erg + d * ch**3
+                self.ecal_eqn = self.ecal_eqn + f" + {d}x^3"
             self.cal.predicted = erg
             self.which_button_cal_eqn()
             self.plot_cal_eqns(self.ecal_eqn)
@@ -337,7 +341,7 @@ class CalibrationMixin:
             self.cal_e_units = "MeV"
 
     def reset_cal(self):
-        print("Reseting calibration")
+        print("Resetting calibration")
         self.ax_cal.clear()
         self.ax_cal_res.clear()
         self.mean_vals = [0]

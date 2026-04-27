@@ -205,16 +205,18 @@ class WaraApp(
 
         get_input = param_handle.get_spect_search(self.commands)
         if get_input is not None:
-            (
-                self.spect,
-                self.search,
-                self.ref_x,
-                self.fwhm_at_0,
-                self.ref_fwhm,
-            ) = get_input
+            spect, search, ref_x, fwhm_at_0, ref_fwhm = get_input
+            self.spect = spect
             self.e_units = self.spect.e_units
             self.fileName = self.commands["<file_name>"]
-            self.create_graph(fit=True, reset=True)
+            if search is not None:
+                self.search = search
+                self.ref_x = ref_x
+                self.fwhm_at_0 = fwhm_at_0
+                self.ref_fwhm = ref_fwhm
+                self.create_graph(fit=True, reset=True)
+            else:
+                self.create_graph(fit=False, reset=True)
         if self.commands["--min_snr"] is not None:
             self.min_snr = float(self.commands["--min_snr"])
         else:
@@ -473,7 +475,7 @@ def main():
     font = QtGui.QFont("Arial", 26, QtGui.QFont.Bold)
     splash.setFont(font)
     splash.showMessage("Initializing...", Qt.AlignBottom | Qt.AlignHCenter,
-                       QtGui.QColor("green"))
+                       QtGui.QColor("#39FF14"))
     app.processEvents()
     time.sleep(3)
 

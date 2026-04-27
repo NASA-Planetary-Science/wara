@@ -5,7 +5,7 @@ from PyQt5.QtCore import Qt
 
 class TableModel(QtCore.QAbstractTableModel):
     def __init__(self, data):
-        super(TableModel, self).__init__()
+        super().__init__()
         self._data = data
         self.highlighted_rows = []
 
@@ -21,7 +21,8 @@ class TableModel(QtCore.QAbstractTableModel):
     def set_highlighted_rows(self, rows):
         self.highlighted_rows = rows
         self.dataChanged.emit(
-            self.index(0, 0), self.index(self.rowCount(0), self.columnCount(0))
+            self.index(0, 0),
+            self.index(self.rowCount(0) - 1, self.columnCount(0) - 1),
         )
 
     def rowCount(self, index):
@@ -43,7 +44,7 @@ class TableModel(QtCore.QAbstractTableModel):
         try:
             self.layoutAboutToBeChanged.emit()
             self._data = self._data.sort_values(
-                self._data.columns[Ncol], ascending=not order
+                self._data.columns[Ncol], ascending=order == Qt.AscendingOrder
             )
             self.layoutChanged.emit()
         except Exception:

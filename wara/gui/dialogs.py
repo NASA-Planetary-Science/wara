@@ -1,19 +1,26 @@
+from abc import abstractmethod
 from importlib.resources import files
 from PyQt5.QtWidgets import QDialog
 from PyQt5.uic import loadUi
+from PyQt5 import QtGui
 from PyQt5.QtCore import Qt
 
 
 class Dialog_from_UI(QDialog):
     """Create a dialog from a UI file with a given window title."""
 
+    @abstractmethod
+    def define_ui_vars(self):
+        raise NotImplementedError
+
     def __init__(self):
         super().__init__()
         self.define_ui_vars()
-        #ui_file = pkg_resources.resource_filename("wara", f"ui/{self.ui_name}")
         ui_file = str(files("wara").joinpath(f"ui/{self.ui_name}"))
         loadUi(ui_file, self)
         self.setWindowTitle(self.window_title)
+        icon_file = str(files("wara").joinpath("ui/wara-logo.png"))
+        self.setWindowIcon(QtGui.QIcon(icon_file))
 
 
 class WindowMainInfo(Dialog_from_UI):

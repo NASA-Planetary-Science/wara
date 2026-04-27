@@ -56,7 +56,6 @@ class ApiMixin:
             self.ebins = 2**12
         if ch_txt == "9":
             ch = 9
-            runnr = int(self.api_run_txt.text())
             self.df_api = read_parquet_api.read_parquet_file(
                 date, runnr, ch, flood_field=True, data_path_txt=data_path
             )
@@ -74,6 +73,7 @@ class ApiMixin:
                 "Error while opening parquet data",
                 f"No parquet file available for run {date}-{runnr}.",
             )
+            return
         self.df_current = self.df_api.copy()
         self.df_previous = self.df_api.copy()
         self.initialize_plots_api(FF)
@@ -190,7 +190,7 @@ class ApiMixin:
         self.ax_api_spe.plot(self.api_gam_x, self.api_gam, color="green")
         self.ax_api_spe.set_yscale(self.api_spect_scale)
         if self.sims_flag or self.calibrated_flag:
-            self.ax_api_spe.set_xlabel("Energy (Mev)")
+            self.ax_api_spe.set_xlabel("Energy (MeV)")
         else:
             self.ax_api_spe.set_xlabel("Channels")
 
@@ -287,8 +287,8 @@ class ApiMixin:
             tmax = float(tmax_txt)
             self.apply_t_filter(tmin, tmax)
         if (emin_txt != "") and (emax_txt != ""):
-            emin = int(emin_txt)
-            emax = int(emax_txt)
+            emin = float(emin_txt)
+            emax = float(emax_txt)
             self.apply_energy_filter(emin, emax)
 
     def espan_api(self):
@@ -370,7 +370,7 @@ class ApiMixin:
                 self.df_previous[self.api_ykey] < y2
             )
             self.df_current = self.df_previous[xlim & ylim]
-        self.df_current.fillna(0)
+        self.df_current.fillna(0, inplace=True)
         self.df_current.reset_index(drop=True, inplace=True)
         self.plot_energy_hist_api(df=self.df_current)
         self.plot_time_hist_api(df=self.df_current)
@@ -425,8 +425,6 @@ class ApiMixin:
         self.initialize_plot_api_mca_all()
         date = self.w_api_mca.edit_date.text()
         runnr = int(self.w_api_mca.edit_run.text())
-        print(date)
-        print(runnr)
         self.mca_data = helper_api.read_mca(date=date, runnr=runnr)
         self.create_plot_mca_all()
 
@@ -519,8 +517,6 @@ class ApiMixin:
         self.initialize_plot_api_bin_erg_tr()
         date = self.w_api_bin.edit_date.text()
         runnr = int(self.w_api_bin.edit_run.text())
-        print(date)
-        print(runnr)
         if self.w_api_bin.checkBox_trace_data.isChecked():
             self.df_apibin = helper_api.read_trace_data(date=date, runnr=runnr)
         elif self.w_api_bin.checkBox_bin_data.isChecked():
@@ -848,11 +844,9 @@ class ApiMixin:
             traceback.print_exc()
 
     def create_plot_api3D(self):
-        try:
-            self.df_current
-        except Exception:
+        if not hasattr(self, "df_current"):
             print("Make sure you load an API file on the previous window.")
-            traceback.print_exc()
+            return
         if self.sims_flag:
             X, Y, Z = self.df_current["X"], self.df_current["Y"], self.df_current["Z"]
         else:
