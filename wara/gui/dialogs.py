@@ -1,4 +1,3 @@
-#import pkg_resources
 from importlib.resources import files
 from PyQt5.QtWidgets import QDialog
 from PyQt5.uic import loadUi

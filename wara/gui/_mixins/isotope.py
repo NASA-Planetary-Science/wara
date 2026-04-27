@@ -1,3 +1,4 @@
+import traceback
 import re
 import pandas as pd
 from importlib.resources import files
@@ -72,14 +73,14 @@ class IsotopeMixin:
             else:
                 self.snr_state = "off"
             self.create_graph(fit=True, reset=True)
-        except Exception as e:
+        except Exception:
             print(
                 (
                     "ERROR: non-numeric entry or if more than 9000 channels,"
                     "constrain the range using x0 and x1."
                 )
             )
-            print("An unknown error occurred:", str(e))
+            traceback.print_exc()
 
     def peakFind_check_hpge(self):
         self.w_peak_find.edit_snr.setText("5")
@@ -214,7 +215,8 @@ class IsotopeMixin:
         try:
             eval(s)
             return True
-        except:
+        except Exception:
+            traceback.print_exc()
             return False
 
     def isotID_filter_by_energy(self, df):

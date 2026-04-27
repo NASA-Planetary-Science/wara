@@ -1,3 +1,4 @@
+import traceback
 import random
 from copy import deepcopy
 import pandas as pd
@@ -71,12 +72,12 @@ class PngMixin:
                 self.reset_png_plots()
             self.plot_png_dt()
             self.plot_png_e()
-        except Exception as e:
-            print("An unknown error occurred:", str(e))
+        except Exception:
             print(
                 """ERROR: Could not load file. Make sure you are using the full
                 path and input an integer for the period"""
             )
+            traceback.print_exc()
 
     def reset_png(self):
         self.initialize_plots_png()
@@ -92,8 +93,8 @@ class PngMixin:
                 self.ax_png_e.set_yscale("log")
                 self.png_spect_scale = "log"
             self.fig_png_e.canvas.draw_idle()
-        except Exception as e:
-            print("An unknown error occurred:", str(e))
+        except Exception:
+            traceback.print_exc()
 
     def reset_png_plots(self):
         self.ax_png_dt.clear()
@@ -145,16 +146,16 @@ class PngMixin:
             tbins = eval(self.tbins_png.text())
             self.png.tbins = tbins
             self.plot_png_dt()
-        except Exception as e:
-            print("An unknown error occurred:", str(e))
+        except Exception:
+            traceback.print_exc()
 
     def change_ebins_png(self):
         try:
             ebins = eval(self.ebins_png.text())
             self.png.ebins = ebins
             self.plot_png_e()
-        except Exception as e:
-            print("An unknown error occurred:", str(e))
+        except Exception:
+            traceback.print_exc()
 
     def apply_trange_png(self):
         try:
@@ -164,8 +165,8 @@ class PngMixin:
             self.plot_png_e()
             self.png.plot_vlines_t(ax=self.ax_png_dt, color=random.choice(colors))
             self.fig_png_dt.canvas.draw_idle()
-        except Exception as e:
-            print("An unknown error occurred:", str(e))
+        except Exception:
+            traceback.print_exc()
 
     def apply_erange_png(self):
         try:
@@ -176,8 +177,8 @@ class PngMixin:
             self.png.plot_vlines_e(ax=self.ax_png_e, color=random.choice(colors))
             self.fig_png_e.canvas.draw_idle()
             self.fig_png_et.canvas.draw_idle()
-        except Exception as e:
-            print("An unknown error occurred:", str(e))
+        except Exception:
+            traceback.print_exc()
 
     def apply_die_away(self):
         try:
@@ -186,8 +187,8 @@ class PngMixin:
             self.png.filter_tdata(trange=[t_start, t_end], restore_df=False)
             self.png.hist_time()
             self.plot_png_decay()
-        except Exception as e:
-            print("An unknown error occurred:", str(e))
+        except Exception:
+            traceback.print_exc()
 
     def apply_die_away_fit(self):
         try:
@@ -197,8 +198,8 @@ class PngMixin:
             self.plot_png_fit_decay()
             fit_report = self.exp_png.fit_result.fit_report()
             self.textBrowser_png.setText(fit_report)
-        except Exception as e:
-            print("An unknown error occurred:", str(e))
+        except Exception:
+            traceback.print_exc()
 
     def send_to_spect_png(self):
         try:
@@ -209,5 +210,5 @@ class PngMixin:
             self.spect_orig = deepcopy(self.spect)
             self.create_graph(fit=False, reset=True)
             self.search = 0
-        except Exception as e:
-            print("An unknown error occurred:", str(e))
+        except Exception:
+            traceback.print_exc()

@@ -1,3 +1,4 @@
+import traceback
 from PyQt5 import QtCore, QtGui
 from PyQt5.QtCore import Qt
 
@@ -45,5 +46,5 @@ class TableModel(QtCore.QAbstractTableModel):
                 self._data.columns[Ncol], ascending=not order
             )
             self.layoutChanged.emit()
-        except Exception as e:
-            print(e)
+        except Exception:
+            traceback.print_exc()

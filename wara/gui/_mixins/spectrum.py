@@ -1,3 +1,4 @@
+import traceback
 import numpy as np
 import pandas as pd
 from matplotlib.widgets import SpanSelector
@@ -171,9 +172,9 @@ class SpectrumMixin:
     def try_cust_labels(self):
         try:
             self.cust_labels()
-        except Exception as e:
+        except Exception:
             print("Invalid label/constant values")
-            print("An unknown error occurred:", str(e))
+            traceback.print_exc()
 
     def try_cust_smooth(self):
         self.cust_smooth()
@@ -181,16 +182,16 @@ class SpectrumMixin:
     def try_cust_countRate(self):
         try:
             self.cust_countRate()
-        except Exception as e:
+        except Exception:
             print("Invalid count rate values")
-            print("An unknown error occurred:", str(e))
+            traceback.print_exc()
 
     def try_cust_shift(self):
         try:
             self.cust_shift()
-        except Exception as e:
+        except Exception:
             print("Invalid gain shift values")
-            print("An unknown error occurred:", str(e))
+            traceback.print_exc()
 
     def cust_labels(self):
         description = self.w_cust.descript_txt.text()
@@ -291,18 +292,18 @@ class SpectrumMixin:
     def load_file1(self):
         try:
             self.file1, self.e_units1, self.spect1 = self.open_file()
-        except Exception as e:
+        except Exception:
             self.file1 = "**ERROR loading file**"
-            print("An unknown error occurred:", str(e))
+            traceback.print_exc()
         disp1 = self.file1.split("/")[-1]
         self.w_add_sub.filename1.setText(disp1)
 
     def load_file2(self):
         try:
             self.file2, self.e_units2, self.spect2 = self.open_file()
-        except Exception as e:
+        except Exception:
             self.file2 = "**ERROR loading file**"
-            print("An unknown error occurred:", str(e))
+            traceback.print_exc()
         disp2 = self.file2.split("/")[-1]
         self.w_add_sub.filename2.setText(disp2)
 
@@ -321,9 +322,9 @@ class SpectrumMixin:
                 self.spect = sp.Spectrum(counts=cts, e_units=self.e_units1)
             self.create_graph(fit=False, reset=True)
             self.search = 0
-        except Exception as e:
+        except Exception:
             print("Could not perform operation")
-            print("An unknown error occurred:", str(e))
+            traceback.print_exc()
 
     ## Fitting
     def which_button(self):
@@ -362,9 +363,9 @@ class SpectrumMixin:
                 )
                 data = self.get_values_table_fit()
                 self.activate_fit_table(data)
-            except Exception as e:
+            except Exception:
                 print("update_poly: could not perform fit")
-                print("An unknown error occurred:", str(e))
+                traceback.print_exc()
             self.fig_fit.canvas.draw_idle()
 
     def update_gauss(self):
@@ -383,9 +384,9 @@ class SpectrumMixin:
                 )
                 data = self.get_values_table_fit()
                 self.activate_fit_table(data)
-            except Exception as e:
+            except Exception:
                 print("update_gauss:could not perform fit")
-                print("An unknown error occurred:", str(e))
+                traceback.print_exc()
             self.fig_fit.canvas.draw_idle()
 
     def span_select(self):

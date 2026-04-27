@@ -1,3 +1,4 @@
+import traceback
 from copy import deepcopy
 from wara import diagnostics
 
@@ -75,9 +76,9 @@ class DiagnosticsMixin:
         try:
             self.fit_peaks_diagnostics(integral)
             self.button_diag_save.setEnabled(True)
-        except Exception as e:
+        except Exception:
             print("ERROR: Could not perform fit or integral")
-            print("An unknown error occurred:", str(e))
+            traceback.print_exc()
 
     def fit_peaks_diagnostics(self, integral=False):
         self.ax10.clear()

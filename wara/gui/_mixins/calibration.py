@@ -1,3 +1,4 @@
+import traceback
 import numpy as np
 import pandas as pd
 from PyQt5 import QtWidgets
@@ -34,9 +35,9 @@ class CalibrationMixin:
             self.spect.remove_calibration()
             self.create_graph(fit=False, reset=True)
             self.search = 0
-        except Exception as e:
+        except Exception:
             print("Cannot remove calibration")
-            print("An unknown error occurred:", str(e))
+            traceback.print_exc()
 
     def get_mean_vals(self):
         mean_lst = []
@@ -151,9 +152,9 @@ class CalibrationMixin:
                 self.add_point_fit(erg, mean_vals)
             self.update_ecal_table()
             self.fig_cal.canvas.draw_idle()
-        except Exception as e:
+        except Exception:
             print("Not valid entry for energy calibration")
-            print("An unknown error occurred:", str(e))
+            traceback.print_exc()
 
     def retrieve_evals(self):
         erg = self.w_cal.energy_txt.text().split(",")
@@ -280,9 +281,9 @@ class CalibrationMixin:
             self.plot_point_dont_fit()
             self.update_ecal_table()
             self.fig_cal.canvas.draw_idle()
-        except Exception as e:
+        except Exception:
             print("Calibration data not updated")
-            print("An unknown error occurred:", str(e))
+            traceback.print_exc()
 
     def new_window_cal_eqns(self):
         from ..dialogs import WindowCalEqns
@@ -314,9 +315,9 @@ class CalibrationMixin:
             self.cal.predicted = erg
             self.which_button_cal_eqn()
             self.plot_cal_eqns(self.ecal_eqn)
-        except Exception as e:
+        except Exception:
             print("Could not set calibration equations")
-            print("An unknown error occurred:", str(e))
+            traceback.print_exc()
 
     def plot_cal_eqns(self, label):
         self.reset_cal()
@@ -375,9 +376,9 @@ class CalibrationMixin:
             )
             self.create_graph(fit=False, reset=True)
             self.search = 0
-        except Exception as e:
+        except Exception:
             print("Could not apply calibration")
-            print("An error occurred:", str(e))
+            traceback.print_exc()
 
     def ecal_remove_selected(self):
         if (
@@ -416,6 +417,6 @@ class CalibrationMixin:
                 self.update_cal()
             else:
                 print("Channels and energies must be the same length")
-        except Exception as e:
+        except Exception:
             print("Could not add point manually")
-            print("An unknown error occurred:", str(e))
+            traceback.print_exc()

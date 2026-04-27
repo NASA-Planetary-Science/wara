@@ -1,3 +1,4 @@
+import traceback
 import datetime
 import numpy as np
 import pandas as pd
@@ -35,9 +36,9 @@ class EfficiencyMixin:
         self.df_eff = None
         try:
             self.table_eff.setParent(None)
-        except Exception as e:
+        except Exception:
             print("Cannot reset table")
-            print(str(e))
+            traceback.print_exc()
 
     def new_window_eff(self):
         from ..dialogs import WindowEff
@@ -71,9 +72,9 @@ class EfficiencyMixin:
             self.update_eff_table()
             self.ax_eff_res.clear()
             self.plot_eff_points()
-        except Exception as e:
+        except Exception:
             print("ERROR: could not add efficiency value")
-            print(e)
+            traceback.print_exc()
 
     def plot_eff_points(self):
         if self.df_eff.shape[0] > 0:
@@ -309,8 +310,8 @@ class EfficiencyMixin:
             self.update_table_fwhm()
             self.update_gauss_fwhm()
             self.fig_fwhm.canvas.draw_idle()
-        except Exception as e:
-            print("An unknown error occurred:", str(e))
+        except Exception:
+            traceback.print_exc()
 
     def update_table_fwhm(self):
         self.ax_fwhm_tab.clear()
@@ -342,8 +343,8 @@ class EfficiencyMixin:
             self.fwhm_x.sort()
             self.fwhm.sort()
             self.perform_fwhm()
-        except Exception as e:
-            print("An unknown error occurred:", str(e))
+        except Exception:
+            traceback.print_exc()
 
     def update_fwhm_figure(self):
         self.ax_fwhm.clear()
@@ -386,5 +387,5 @@ class EfficiencyMixin:
                 self.fig_fwhm.canvas.draw_idle()
             else:
                 self.update_fwhm_figure()
-        except Exception as e:
-            print("An unknown error occurred:", str(e))
+        except Exception:
+            traceback.print_exc()

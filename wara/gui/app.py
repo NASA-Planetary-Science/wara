@@ -26,10 +26,10 @@ Note that the detector type input parameters must be changed depending on the
 particular electronic gain used. The examples here are for our specific
 detector configurations.
 """
+import traceback
 import docopt
 import pandas as pd
 import matplotlib.pyplot as plt
-#import pkg_resources
 from importlib.resources import files
 from PyQt5.QtWidgets import QApplication, QMainWindow, QButtonGroup
 from PyQt5.uic import loadUi
@@ -77,9 +77,7 @@ class WaraApp(
     QMainWindow,
 ):
     def __init__(self, commands):
-        print(super())
         super().__init__()
-        #ui_file = pkg_resources.resource_filename("wara", "ui/qt_gui.ui")
         ui_file = str(files("wara").joinpath("ui/qt_gui.ui"))
         loadUi(ui_file, self)
         self.setWindowFlag(Qt.WindowMaximizeButtonHint, True)
@@ -214,7 +212,7 @@ class WaraApp(
             self.create_graph(fit=True, reset=True)
         try:
             self.min_snr = float(self.commands["--min_snr"])
-        except:
+        except Exception:
             print("Opening a blank GUI")
 
         self.button_remove_cal.clicked.connect(self.remove_cal)

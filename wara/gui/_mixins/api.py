@@ -1,3 +1,4 @@
+import traceback
 import numpy as np
 import time
 import tempfile
@@ -20,9 +21,9 @@ class ApiMixin:
     def activate_load_api_file(self):
         try:
             self.load_api_file()
-        except Exception as e:
+        except Exception:
             print("ERROR: Could not load data file")
-            print("An unknown error occurred:", str(e))
+            traceback.print_exc()
 
     def load_api_file(self):
         self.reset_api_figure()
@@ -57,14 +58,14 @@ class ApiMixin:
             ch = 9
             runnr = int(self.api_run_txt.text())
             self.df_api = read_parquet_api.read_parquet_file(
-                date, runnr, ch, flood_field=True, data_path=data_path
+                date, runnr, ch, flood_field=True, data_path_txt=data_path
             )
             FF = True
         else:
             FF = False
             ch = int(ch_txt)
             self.df_api = read_parquet_api.read_parquet_file(
-                date=date, runnr=runnr, ch=ch, flood_field=False, data_path=data_path
+                date=date, runnr=runnr, ch=ch, flood_field=False, data_path_txt=data_path
             )
             self.df_api["dt"] *= 1e9  # to ns
         if self.df_api is None:
@@ -79,9 +80,9 @@ class ApiMixin:
         self.api_textEdit.setText("")
         try:
             self.read_settings_file(date, runnr, ch, data_path)
-        except Exception as e:
+        except Exception:
             print("ERROR: Settings file not found")
-            print(e)
+            traceback.print_exc()
 
     def read_settings_file(self, date, runnr, ch, data_path):
         tot_time = apicalc.get_total_time(date, runnr, ch, data_path)
@@ -160,8 +161,8 @@ class ApiMixin:
             self.df_current = self.df_api.copy()
             self.df_previous = self.df_api.copy()
             self.initialize_plots_api()
-        except Exception as e:
-            print("An unknown error occurred:", str(e))
+        except Exception:
+            traceback.print_exc()
 
     def send_to_spect_api(self):
         try:
@@ -178,8 +179,8 @@ class ApiMixin:
             self.spect_orig = deepcopy(self.spect)
             self.create_graph(fit=False, reset=True)
             self.search = 0
-        except Exception as e:
-            print("An unknown error occurred:", str(e))
+        except Exception:
+            traceback.print_exc()
 
     def plot_energy_hist_api(self, df):
         self.api_gam, self.api_edg = np.histogram(
@@ -228,8 +229,8 @@ class ApiMixin:
             elif self.api_xy_scale == "log":
                 self.plot_xy_api(self.df_current, cbar=False, logxy=False)
                 self.api_xy_scale = "linear"
-        except Exception as e:
-            print("An unknown error occurred:", str(e))
+        except Exception:
+            traceback.print_exc()
 
     def api_on_returnXY(self):
         try:
@@ -237,8 +238,8 @@ class ApiMixin:
             self.plot_xy_api(self.df_current, cbar=False, logxy=False, vmax=self.vmax)
             self.api_xy_scale = "linear"
             self.api_button_logxy.setChecked(False)
-        except Exception as e:
-            print("An unknown error occurred:", str(e))
+        except Exception:
+            traceback.print_exc()
 
     def api_spect_yscale(self):
         try:
@@ -249,8 +250,8 @@ class ApiMixin:
                 self.ax_api_spe.set_yscale("log")
                 self.api_spect_scale = "log"
             self.fig_api.canvas.draw_idle()
-        except Exception as e:
-            print("An unknown error occurred:", str(e))
+        except Exception:
+            traceback.print_exc()
 
     def api_window_filters(self):
         from ..dialogs import WindowAPIfilters
@@ -258,8 +259,8 @@ class ApiMixin:
         self.w_api_filt.show()
         try:
             self.w_api_filt.button_api_apply.clicked.connect(self.apply_api_filters)
-        except Exception as e:
-            print("An unknown error occurred:", str(e))
+        except Exception:
+            traceback.print_exc()
 
     def apply_api_filters(self):
         xmin_txt = self.w_api_filt.xmin_txt.text()
@@ -416,9 +417,9 @@ class ApiMixin:
     def activate_api_mca(self):
         try:
             self.load_api_mca()
-        except Exception as e:
+        except Exception:
             print("ERROR: Could not load MCA file")
-            print("An unknown error occurred:", str(e))
+            traceback.print_exc()
 
     def load_api_mca(self):
         self.initialize_plot_api_mca_all()
@@ -449,9 +450,9 @@ class ApiMixin:
     def activate_api_mca_select(self):
         try:
             self.load_api_mca_select()
-        except Exception as e:
+        except Exception:
             print("ERROR: Could not obtain selected spectrum")
-            print("An unknown error occurred:", str(e))
+            traceback.print_exc()
 
     def load_api_mca_select(self):
         self.initialize_plot_api_mca_select()
@@ -481,9 +482,9 @@ class ApiMixin:
             self.ax_mca_select.clear()
             self.fig_mca_all.canvas.draw_idle()
             self.fig_mca_select.canvas.draw_idle()
-        except Exception as e:
+        except Exception:
             print("ERROR: Could not reset MCA plots")
-            print("An unknown error occurred:", str(e))
+            traceback.print_exc()
 
     def send_to_spect_mca(self):
         try:
@@ -494,9 +495,9 @@ class ApiMixin:
             self.spect_orig = deepcopy(self.spect)
             self.create_graph(fit=False, reset=True)
             self.search = 0
-        except Exception as e:
+        except Exception:
             print("ERROR: Could not send to Spectrum tab")
-            print("An unknown error occurred:", str(e))
+            traceback.print_exc()
 
     # API Binary
     # TODO
@@ -507,9 +508,9 @@ class ApiMixin:
     def activate_api_bin(self):
         try:
             self.load_api_bin()
-        except Exception as e:
+        except Exception:
             print("ERROR: Could not load file")
-            print("An unknown error occurred:", str(e))
+            traceback.print_exc()
 
     def load_api_bin(self):
         self.initialize_plot_api_bin_erg()
@@ -541,9 +542,9 @@ class ApiMixin:
             self.spect_orig = deepcopy(self.spect)
             self.create_graph(fit=False, reset=True)
             self.search = 0
-        except Exception as e:
+        except Exception:
             print("ERROR: Could not send spectrum")
-            print("An unknown error occurred:", str(e))
+            traceback.print_exc()
 
     def send_to_spect_api_bin2(self):
         try:
@@ -556,9 +557,9 @@ class ApiMixin:
             self.spect_orig = deepcopy(self.spect)
             self.create_graph(fit=False, reset=True)
             self.search = 0
-        except Exception as e:
+        except Exception:
             print("ERROR: Could not send spectrum")
-            print("An unknown error occurred:", str(e))
+            traceback.print_exc()
 
     def update_yscale_api_bin(self):
         if self.yscale_api_bin == "log":
@@ -576,9 +577,9 @@ class ApiMixin:
             self.df_apibin_ch = self.df_apibin[self.df_apibin["channel"] == ch]
             print(self.df_apibin_ch.shape)
             self.plot_apibin_energy()
-        except Exception as e:
+        except Exception:
             print("ERROR: Could not read channel")
-            print("An unknown error occurred:", str(e))
+            traceback.print_exc()
 
     def normalize_baseline_api_bin(self):
         self.ax_bin_erg_tr.clear()
@@ -602,9 +603,9 @@ class ApiMixin:
             try:
                 self.calculate_fft()
                 self.plot_fft()
-            except Exception as e:
+            except Exception:
                 print("ERROR: Could not calculate FFT")
-                print("An unknown error occurred:", str(e))
+                traceback.print_exc()
         else:
             self.plot_apibin_rand_traces()
 
@@ -620,9 +621,9 @@ class ApiMixin:
         try:
             self.sample_rand_traces()
             self.plot_apibin_rand_traces()
-        except Exception as e:
+        except Exception:
             print("ERROR: Could not plot random traces")
-            print("An unknown error occurred:", str(e))
+            traceback.print_exc()
 
     def sample_rand_traces(self):
         n_txt = self.w_api_bin.edit_no_traces.text()
@@ -654,9 +655,9 @@ class ApiMixin:
     def cal_own_erg_api_bin(self):
         try:
             self.plot_apibin_energy_from_traces()
-        except Exception as e:
+        except Exception:
             print("ERROR: Could not calculate own energy")
-            print("An unknown error occurred:", str(e))
+            traceback.print_exc()
 
     def initialize_plot_api_bin_erg(self):
         self.fig_bin_erg = self.w_api_bin.plot_energy.canvas.figure
@@ -843,14 +844,15 @@ class ApiMixin:
         self.w_api_3D.show()
         try:
             self.w_api_3D.button_api_plot3D.clicked.connect(self.create_plot_api3D)
-        except Exception as e:
-            print("An unknown error occurred:", str(e))
+        except Exception:
+            traceback.print_exc()
 
     def create_plot_api3D(self):
         try:
             self.df_current
-        except Exception as e:
-            print("Make sure you load an API file on the previous window.", str(e))
+        except Exception:
+            print("Make sure you load an API file on the previous window.")
+            traceback.print_exc()
         if self.sims_flag:
             X, Y, Z = self.df_current["X"], self.df_current["Y"], self.df_current["Z"]
         else:

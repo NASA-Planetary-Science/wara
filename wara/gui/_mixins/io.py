@@ -1,3 +1,4 @@
+import traceback
 from copy import deepcopy
 from PyQt5.QtWidgets import QFileDialog
 from wara import file_reader
@@ -29,9 +30,9 @@ class IOMixin:
 
             with open(f"{fileName}", "w") as text_file:
                 text_file.write(report2)
-        except Exception as e:
+        except Exception:
             print("Cannot save file with fit info")
-            print("An unknown error occurred:", str(e))
+            traceback.print_exc()
 
     def save_spect(self):
         options = QFileDialog.Options()
@@ -44,9 +45,9 @@ class IOMixin:
             else:
                 self.spect.to_csv(fileName)
             print("Saved file: ", fileName)
-        except Exception as e:
+        except Exception:
             print("Cannot save file")
-            print("An unknown error occurred:", str(e))
+            traceback.print_exc()
 
     def save_ID_peaks(self):
         options = QFileDialog.Options()
@@ -60,9 +61,9 @@ class IOMixin:
                 df.to_csv(f"{fileName}", index=False)
             else:
                 df.to_csv(f"{fileName}.csv", index=False)
-        except Exception as e:
+        except Exception:
             print("Cannot save file with peak info")
-            print("An unknown error occurred:", str(e))
+            traceback.print_exc()
 
     def save_multiple_spectra(self):
         options = QFileDialog.Options()
@@ -76,16 +77,16 @@ class IOMixin:
                 df.to_csv(f"{fileName}", index=False)
             else:
                 df.to_csv(f"{fileName}.csv", index=False)
-        except Exception as e:
+        except Exception:
             print("ERROR: Cannot save file")
-            print("An unknown error occurred:", str(e))
+            traceback.print_exc()
 
     def try_display_info_file(self):
         try:
             self.display_info_file()
-        except Exception as e:
+        except Exception:
             print("Make sure to load a spectrum file.")
-            print("The following error occurred:", str(e))
+            traceback.print_exc()
 
     def display_info_file(self):
         from ..dialogs import WindowInfoFile
@@ -134,8 +135,9 @@ class IOMixin:
             self.e_units = deepcopy(self.e_units_orig)
             self.spect = deepcopy(self.spect_orig)
             self.create_graph(fit=False, reset=True)
-        except:
+        except Exception:
             print("Could not reset file")
+            traceback.print_exc()
 
     def load_spe_file(self):
         try:
@@ -144,8 +146,9 @@ class IOMixin:
             self.spect_orig = deepcopy(self.spect)
             self.create_graph(fit=False, reset=False)
             self.setWindowTitle(f"wara: {self.fileName}")
-        except:
+        except Exception:
             print("File could not be opened")
+            traceback.print_exc()
 
     def open_folder(self):
         self.folder_path = QFileDialog.getExistingDirectory(self, "Select Folder")
@@ -155,8 +158,9 @@ class IOMixin:
             self.initialize_plots_diagnostics()
             self.load_diagnostic_data()
             self.plot_diagnostic_total()
-        except:
+        except Exception:
             print("Could not open folder")
+            traceback.print_exc()
 
     def open_file(self):
         options = QFileDialog.Options()
@@ -178,7 +182,7 @@ class IOMixin:
                     try:
                         spect = file_reader.read_csv(fileName)
                         e_units = spect.e_units
-                    except:
+                    except Exception:
                         self.lynxcsv = file_reader.ReadLynxCsv(fileName)
                         spect = self.lynxcsv.spect
                         e_units = spect.e_units
@@ -202,7 +206,7 @@ class IOMixin:
                 else:
                     print("Could not open file")
                     fileName = fileName + " ***INVALID FILE TYPE***"
-            except Exception as e:
+            except Exception:
                 print("Could not open file")
-                print("An unknown error occurred:", str(e))
+                traceback.print_exc()
         return fileName, e_units, spect
