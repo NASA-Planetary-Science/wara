@@ -89,9 +89,13 @@ class DiagnosticsMixin:
         width_txt = self.xmax_diag.text()
         if xmid_txt == "" or width_txt == "":
             print("Must specify X-range bounds")
+            return
         elif self.isevaluable(xmid_txt) and self.isevaluable(width_txt):
             xmid = eval(xmid_txt)
             width = eval(width_txt)
+        else:
+            print("ERROR: Non-numeric X-range values")
+            return
         if integral:
             self.diag_data.calculate_integral(xmid=xmid, width=width)
         else:

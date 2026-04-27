@@ -56,15 +56,14 @@ class PngMixin:
                 df_raw = pd.DataFrame()
                 df_raw["channel"] = caen.df["channel"]
                 df_raw["ts"] = caen.df["ts (ns)"]
+            else:
+                print("ERROR: Select a file format (MultiScan or CAEN)")
+                return
             self.png = tlist.Tlist(df_raw, period=period)
             if self.isevaluable(self.tbins_png.text()):
-                tbins_png = eval(self.tbins_png.text())
-            else:
-                tbins_png = 200
+                self.png.tbins = eval(self.tbins_png.text())
             if self.isevaluable(self.ebins_png.text()):
-                ebins_png = eval(self.ebins_png.text())
-            else:
-                ebins_png = 2**12
+                self.png.ebins = eval(self.ebins_png.text())
             if self.pushButton_keep_png.isChecked():
                 print("Keeping all figures")
             else:
