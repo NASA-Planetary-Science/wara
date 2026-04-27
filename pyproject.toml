@@ -44,7 +44,7 @@ where = ["."]
 include = ["wara*"]
 
 [tool.setuptools.package-data]
-wara = ["nuclear-data/*.txt", "nuclear-data/*.csv", "ui/*.ui"]
+wara = ["nuclear-data/*.txt", "nuclear-data/*.csv", "ui/*.ui", "ui/*.png"]
 
 [tool.setuptools_scm]
 write_to = "wara/version.py"

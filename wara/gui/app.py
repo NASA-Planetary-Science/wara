@@ -26,12 +26,13 @@ Note that the detector type input parameters must be changed depending on the
 particular electronic gain used. The examples here are for our specific
 detector configurations.
 """
+import time
 import traceback
 import docopt
 import pandas as pd
 import matplotlib.pyplot as plt
 from importlib.resources import files
-from PyQt5.QtWidgets import QApplication, QMainWindow, QButtonGroup
+from PyQt5.QtWidgets import QApplication, QMainWindow, QButtonGroup, QSplashScreen
 from PyQt5.uic import loadUi
 from PyQt5 import QtGui
 from PyQt5.QtCore import Qt
@@ -82,7 +83,8 @@ class WaraApp(
         loadUi(ui_file, self)
         self.setWindowFlag(Qt.WindowMaximizeButtonHint, True)
         self.setWindowTitle("wara")
-        self.setWindowIcon(QtGui.QIcon("figs/wara-logo.png"))
+        icon_file = str(files("wara").joinpath("ui/wara-logo.png"))
+        self.setWindowIcon(QtGui.QIcon(icon_file))
         self.scale = "linear"
         self.snr_state = "off"
         self.pushButton_scale.clicked.connect(self.update_scale)
@@ -196,6 +198,9 @@ class WaraApp(
         self.list_xrange = []
         self.commands = commands
         self.search = 0  # initialize dummy search object
+        self.spect_orig = None
+        self.e_units_orig = None
+        self.fileName = None
         # peak fitting
 
         get_input = param_handle.get_spect_search(self.commands)
@@ -210,9 +215,10 @@ class WaraApp(
             self.e_units = self.spect.e_units
             self.fileName = self.commands["<file_name>"]
             self.create_graph(fit=True, reset=True)
-        try:
+        if self.commands["--min_snr"] is not None:
             self.min_snr = float(self.commands["--min_snr"])
-        except Exception:
+        else:
+            self.min_snr = 3.0
             print("Opening a blank GUI")
 
         self.button_remove_cal.clicked.connect(self.remove_cal)
@@ -421,7 +427,7 @@ class WaraApp(
 
         ## Isotope ID
         self.df_isotID_selected = pd.DataFrame()
-        self.df_isotID = []
+        self.df_isotID = pd.DataFrame()
         self.isotID_vlines = []
         self.button_identify_peaks.setStyleSheet("background-color : navajowhite")
         self.button_identify_peaks.clicked.connect(self.activate_isotope_id)
@@ -456,16 +462,24 @@ class WaraApp(
 
 def main():
     commands = docopt.docopt(__doc__)
-    print(commands)
 
-    # initialize figure
     plt.rc("font", size=14)
     plt.style.use("seaborn-v0_8-darkgrid")
 
-    # initialize app
     app = QApplication([])
+    icon_file = str(files("wara").joinpath("ui/wara-logo.png"))
+    splash = QSplashScreen(QtGui.QPixmap(icon_file))
+    splash.show()
+    font = QtGui.QFont("Arial", 26, QtGui.QFont.Bold)
+    splash.setFont(font)
+    splash.showMessage("Initializing...", Qt.AlignBottom | Qt.AlignHCenter,
+                       QtGui.QColor("green"))
+    app.processEvents()
+    time.sleep(3)
+
     window = WaraApp(commands)
     window.show()
+    splash.finish(window)
     app.exec_()
 
 
