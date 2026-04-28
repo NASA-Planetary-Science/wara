@@ -221,7 +221,7 @@ class WaraApp(
             self.min_snr = float(self.commands["--min_snr"])
         else:
             self.min_snr = 3.0
-            print("Opening a blank GUI")
+            print("Welcome to Wara GUI")
 
         self.button_remove_cal.clicked.connect(self.remove_cal)
         # peak search range
@@ -472,7 +472,7 @@ def main():
     icon_file = str(files("wara").joinpath("ui/wara-logo.png"))
     splash = QSplashScreen(QtGui.QPixmap(icon_file))
     splash.show()
-    font = QtGui.QFont("Arial", 26, QtGui.QFont.Bold)
+    font = QtGui.QFont("Helvetica", 24, QtGui.QFont.Bold)
     splash.setFont(font)
     splash.showMessage("Initializing...", Qt.AlignBottom | Qt.AlignHCenter,
                        QtGui.QColor("#39FF14"))
