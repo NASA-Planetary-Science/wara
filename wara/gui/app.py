@@ -1,4 +1,6 @@
 """
+wara - Gamma-ray and Neutron Spectroscopy Analysis GUI
+
 Usage:
   wara <file_name> [options]
   wara [options]
@@ -6,28 +8,34 @@ Usage:
   options:
       -o                        open a blank window
       --fwhm_at_0=<fwhm0>       fwhm value at x=0
-      --min_snr=<msnr>          min SNR
-      --ref_x=<xref>            x reference for fwhm_ref
-      --ref_fwhm=<ref_fwhm>     fwhm ref corresponding to x_ref
-      --cebr                    detector type (cerium bromide)
-      --labr                    detector type (lanthanum bromide)
-      --hpge                    detector type (HPGe)
+      --min_snr=<msnr>          minimum peak SNR for peak search
+      --ref_x=<xref>            x reference channel/energy for fwhm_ref
+      --ref_fwhm=<ref_fwhm>     FWHM at the reference point (ref_x)
+      --cebr                    detector type: cerium bromide (CeBr3)
+      --labr                    detector type: lanthanum bromide (LaBr3)
+      --hpge                    detector type: high-purity germanium (HPGe)
 
+Accepted file formats: CSV (counts | energy_EUNITS, or single "counts" column),
+SPE, .txt, CNF, MCA, others. Channels are inferred automatically starting
+from 0 if not provided.
+EUNITS in the column header sets the energy axis label (e.g. keV, MeV).
 
-Reads a csv file with the following column format: counts | energy_EUNITS,
-where EUNITS can be for examle keV or MeV. It can also read a CSV file with a
-single column named "counts". No need to have channels because
-they are automatically infered starting from channel = 0.
+Specifying a detector type pre-fills the resolution model parameters (fwhm_at_0,
+ref_x, ref_fwhm) with typical values for that detector family. These defaults
+are tuned for specific electronic gain settings and may need adjustment for
+other configurations.
 
-If detector type is defined e.g. --cebr then the code guesses the x_ref and
-fwhm_ref based on the known detector characteristics.
-
-Note that the detector type input parameters must be changed depending on the
-particular electronic gain used. The examples here are for our specific
-detector configurations.
+Features:
+  - Spectrum visualization with linear/log scale toggle
+  - Energy and efficiency calibration
+  - Peak search and peak fitting (Gaussian and skewed Gaussian)
+  - Isotope identification
+  - Detector diagnostics and die-away analysis (PNG/list-mode data)
+  - API/MCA data import (MCA and binary formats)
+  - Spectrum arithmetic (add/subtract)
+  - Export of fit reports and spectra
 """
 import time
-import traceback
 import docopt
 import pandas as pd
 import matplotlib.pyplot as plt
