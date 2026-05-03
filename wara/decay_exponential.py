@@ -102,7 +102,7 @@ class Decay_exp:
 
         best_fit = self.fit_result.best_fit
         best_values = self.fit_result.best_values
-        ax_fit.set_title(f"Reduced $\chi^2$ = {round(self.fit_result.redchi,4)}")
+        ax_fit.set_title(rf"Reduced $\chi^2$ = {round(self.fit_result.redchi,4)}")
         ax_fit.errorbar(
             x=self.x_data,
             y=self.y_data,

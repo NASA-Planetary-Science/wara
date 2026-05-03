@@ -66,7 +66,7 @@ def fwhm_vs_erg(energies, fwhms, x_units, e_units, order=2, fig=None, ax=None):
         ax.legend(loc="best")
         ax.set_xlabel(f"{x_units}")
         ax.set_ylabel(f"FWHM [{e_units}]")
-        ax.set_title("$a+b\sqrt{E}$")
+        ax.set_title(r"$a+b\sqrt{E}$")
     elif order == 2:
         gmodel = lmfit.Model(fwhm2)
         fit = gmodel.fit(fwhms, E=energies, a=0, b=0, c=0)
@@ -108,7 +108,7 @@ def fwhm_vs_erg(energies, fwhms, x_units, e_units, order=2, fig=None, ax=None):
         ax.legend(loc="best")
         ax.set_xlabel(f"{x_units}")
         ax.set_ylabel(f"FWHM [{e_units}]")
-        ax.set_title("$a+b\sqrt{E+cE^2}$")
+        ax.set_title(r"$a+b\sqrt{E+cE^2}$")
     return fit
 
 
@@ -161,7 +161,7 @@ def fwhm_table(
     cols = ["N", f"energy [{e_units}]", f"FWHM [{e_units}]", "FWHM [%]"]
     N = np.arange(1, len(xs) + 1, 1)
     rs = np.array([N, xs, fwhms, fwhm_perc]).T
-    colors = [["lightblue"] * len(cols)] * len(rs)
+    colors = [["#0f1a22"] * len(cols)] * len(rs)
     df = pd.DataFrame(rs, columns=cols)
     df = df.astype({"N": "int32"})
     df = df.astype({"N": "str"})
@@ -172,7 +172,7 @@ def fwhm_table(
         loc="center",
         cellLoc="center",
         colWidths=[1 / 8, 1 / 3, 1 / 3, 1 / 3],
-        colColours=["palegreen"] * len(cols),
+        colColours=["#1a2a3a"] * len(cols),
         cellColours=colors,
     )
     t.scale(t_scale[0], t_scale[1])
