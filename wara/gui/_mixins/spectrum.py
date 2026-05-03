@@ -8,6 +8,7 @@ from wara import peaksearch as ps
 from wara import spectrum as sp
 from wara import advanced_fit as adv
 from ..table import TableModel
+from .. import theme
 
 
 class SpectrumMixin:
@@ -458,13 +459,11 @@ class SpectrumMixin:
         self.table_fit = QtWidgets.QTableView()
         self.table_fit.setAlternatingRowColors(True)
         self.table_fit.setSortingEnabled(True)
-        stylesheet_header = "::section{Background-color:lightgreen}"
-        self.table_fit.horizontalHeader().setStyleSheet(stylesheet_header)
+        self.table_fit.horizontalHeader().setStyleSheet(theme.TABLE_HEADER_STYLE)
         self.table_fit.setSelectionBehavior(QtWidgets.QTableView.SelectRows)
         self.model_fit = TableModel(data)
         self.table_fit.setModel(self.model_fit)
         self.scroll_fit.setWidget(self.table_fit)
-        stylesheet_ix = "::section{Background-color:lightgoldenrodyellow}"
-        self.table_fit.setStyleSheet(stylesheet_ix)
+        self.table_fit.setStyleSheet(theme.TABLE_INDEX_STYLE)
         self.table_fit.setColumnWidth(0, 150)
         self.table_fit.setColumnWidth(5, 160)

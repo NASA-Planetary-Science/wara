@@ -19,9 +19,6 @@
   <property name="windowTitle">
    <string>Dialog</string>
   </property>
-  <property name="styleSheet">
-   <string notr="true">background-color: rgb(190, 209, 206);</string>
-  </property>
   <layout class="QGridLayout" name="gridLayout">
    <property name="leftMargin">
     <number>6</number>
@@ -57,9 +54,6 @@
           <width>0</width>
           <height>400</height>
          </size>
-        </property>
-        <property name="styleSheet">
-         <string notr="true">background-color: rgb(212, 217, 208);</string>
         </property>
         <property name="frameShape">
          <enum>QFrame::Box</enum>
@@ -122,9 +116,6 @@
           <height>16777215</height>
          </size>
         </property>
-        <property name="styleSheet">
-         <string notr="true">background-color: rgb(212, 217, 208);</string>
-        </property>
         <property name="frameShape">
          <enum>QFrame::Box</enum>
         </property>
@@ -140,9 +131,6 @@
               <font>
                <pointsize>12</pointsize>
               </font>
-             </property>
-             <property name="styleSheet">
-              <string notr="true">background-color: rgb(255, 255, 127);</string>
              </property>
              <property name="text">
               <string>Info</string>
@@ -225,9 +213,6 @@
                  <pointsize>12</pointsize>
                 </font>
                </property>
-               <property name="styleSheet">
-                <string notr="true">background-color: rgb(85, 170, 255);</string>
-               </property>
                <property name="text">
                 <string>Save plot</string>
                </property>
@@ -253,9 +238,6 @@
                   <font>
                    <pointsize>10</pointsize>
                   </font>
-                 </property>
-                 <property name="styleSheet">
-                  <string notr="true">background-color: rgb(255, 255, 255);</string>
                  </property>
                  <property name="text">
                   <string>600</string>
@@ -328,9 +310,6 @@
                  <pointsize>10</pointsize>
                 </font>
                </property>
-               <property name="styleSheet">
-                <string notr="true">background-color: rgb(255, 255, 255);</string>
-               </property>
               </widget>
              </item>
             </layout>
@@ -352,9 +331,6 @@
                <font>
                 <pointsize>12</pointsize>
                </font>
-              </property>
-              <property name="styleSheet">
-               <string notr="true">background-color: rgb(85, 255, 255);</string>
               </property>
               <property name="text">
                <string>Detailed report</string>
@@ -441,9 +417,6 @@
             <pointsize>12</pointsize>
            </font>
           </property>
-          <property name="styleSheet">
-           <string notr="true">background-color: rgb(207, 236, 171);</string>
-          </property>
           <property name="text">
            <string>Perform fit</string>
           </property>
@@ -455,9 +428,6 @@
            <font>
             <pointsize>12</pointsize>
            </font>
-          </property>
-          <property name="styleSheet">
-           <string notr="true">background-color: rgb(255, 137, 143);</string>
           </property>
           <property name="text">
            <string>Reset</string>
@@ -488,9 +458,6 @@
             <height>16777215</height>
            </size>
           </property>
-          <property name="styleSheet">
-           <string notr="true">background-color: rgb(188, 196, 200);</string>
-          </property>
           <property name="frameShape">
            <enum>QFrame::Box</enum>
           </property>
@@ -520,9 +487,6 @@
                  <weight>75</weight>
                  <bold>true</bold>
                 </font>
-               </property>
-               <property name="styleSheet">
-                <string notr="true">color: rgb(255, 0, 0);</string>
                </property>
                <property name="text">
                 <string>Fit model</string>
@@ -686,9 +650,6 @@
             <height>16777215</height>
            </size>
           </property>
-          <property name="styleSheet">
-           <string notr="true">background-color: rgb(165, 200, 188);</string>
-          </property>
           <property name="frameShape">
            <enum>QFrame::Box</enum>
           </property>
@@ -724,9 +685,6 @@
                      <pointsize>10</pointsize>
                     </font>
                    </property>
-                   <property name="styleSheet">
-                    <string notr="true">background-color: rgb(255, 255, 255);</string>
-                   </property>
                   </widget>
                  </item>
                 </layout>
@@ -751,9 +709,6 @@
                     <font>
                      <pointsize>10</pointsize>
                     </font>
-                   </property>
-                   <property name="styleSheet">
-                    <string notr="true">background-color: rgb(255, 255, 255);</string>
                    </property>
                   </widget>
                  </item>
@@ -780,9 +735,6 @@
                      <pointsize>10</pointsize>
                     </font>
                    </property>
-                   <property name="styleSheet">
-                    <string notr="true">background-color: rgb(255, 255, 255);</string>
-                   </property>
                   </widget>
                  </item>
                 </layout>
@@ -808,9 +760,6 @@
                      <pointsize>10</pointsize>
                     </font>
                    </property>
-                   <property name="styleSheet">
-                    <string notr="true">background-color: rgb(255, 255, 255);</string>
-                   </property>
                   </widget>
                  </item>
                 </layout>
@@ -835,9 +784,6 @@
                     <font>
                      <pointsize>10</pointsize>
                     </font>
-                   </property>
-                   <property name="styleSheet">
-                    <string notr="true">background-color: rgb(255, 255, 255);</string>
                    </property>
                   </widget>
                  </item>
@@ -867,9 +813,6 @@
                      <pointsize>10</pointsize>
                     </font>
                    </property>
-                   <property name="styleSheet">
-                    <string notr="true">background-color: rgb(255, 255, 255);</string>
-                   </property>
                   </widget>
                  </item>
                 </layout>
@@ -898,9 +841,6 @@
                      <pointsize>10</pointsize>
                     </font>
                    </property>
-                   <property name="styleSheet">
-                    <string notr="true">background-color: rgb(255, 255, 255);</string>
-                   </property>
                   </widget>
                  </item>
                 </layout>
@@ -926,9 +866,6 @@
                      <pointsize>10</pointsize>
                     </font>
                    </property>
-                   <property name="styleSheet">
-                    <string notr="true">background-color: rgb(255, 255, 255);</string>
-                   </property>
                   </widget>
                  </item>
                 </layout>
@@ -941,9 +878,6 @@
                     <font>
                      <pointsize>10</pointsize>
                     </font>
-                   </property>
-                   <property name="styleSheet">
-                    <string notr="true">background-color: rgb(255, 255, 255);</string>
                    </property>
                   </widget>
                  </item>
@@ -973,9 +907,6 @@
                  </item>
                  <item row="0" column="1">
                   <widget class="QLineEdit" name="lineEdit_2">
-                   <property name="styleSheet">
-                    <string notr="true">background-color: rgb(255, 255, 255);</string>
-                   </property>
                   </widget>
                  </item>
                 </layout>
@@ -988,9 +919,6 @@
                     <font>
                      <pointsize>10</pointsize>
                     </font>
-                   </property>
-                   <property name="styleSheet">
-                    <string notr="true">background-color: rgb(255, 255, 255);</string>
                    </property>
                   </widget>
                  </item>
@@ -1041,9 +969,6 @@
                      <pointsize>10</pointsize>
                     </font>
                    </property>
-                   <property name="styleSheet">
-                    <string notr="true">background-color: rgb(255, 255, 255);</string>
-                   </property>
                   </widget>
                  </item>
                  <item row="1" column="0" colspan="2">
@@ -1066,9 +991,6 @@
                       <font>
                        <pointsize>10</pointsize>
                       </font>
-                     </property>
-                     <property name="styleSheet">
-                      <string notr="true">background-color: rgb(255, 255, 255);</string>
                      </property>
                     </widget>
                    </item>
@@ -1121,9 +1043,6 @@
             <height>16777215</height>
            </size>
           </property>
-          <property name="styleSheet">
-           <string notr="true">background-color: rgb(200, 194, 163);</string>
-          </property>
           <property name="frameShape">
            <enum>QFrame::Box</enum>
           </property>
@@ -1175,9 +1094,6 @@
                    <pointsize>10</pointsize>
                   </font>
                  </property>
-                 <property name="styleSheet">
-                  <string notr="true">background-color: rgba(170, 255, 255, 200);</string>
-                 </property>
                  <property name="frameShape">
                   <enum>QFrame::WinPanel</enum>
                  </property>
@@ -1211,9 +1127,6 @@
                   <font>
                    <pointsize>10</pointsize>
                   </font>
-                 </property>
-                 <property name="styleSheet">
-                  <string notr="true">background-color: rgba(170, 255, 255, 100);</string>
                  </property>
                  <property name="frameShape">
                   <enum>QFrame::StyledPanel</enum>
@@ -1254,9 +1167,6 @@
                    <pointsize>10</pointsize>
                   </font>
                  </property>
-                 <property name="styleSheet">
-                  <string notr="true">background-color: rgba(170, 255, 255, 100);</string>
-                 </property>
                  <property name="frameShape">
                   <enum>QFrame::StyledPanel</enum>
                  </property>
@@ -1287,9 +1197,6 @@
                   <font>
                    <pointsize>10</pointsize>
                   </font>
-                 </property>
-                 <property name="styleSheet">
-                  <string notr="true">background-color: rgba(170, 255, 255, 100);</string>
                  </property>
                  <property name="frameShape">
                   <enum>QFrame::StyledPanel</enum>
@@ -1330,9 +1237,6 @@
                    <pointsize>10</pointsize>
                   </font>
                  </property>
-                 <property name="styleSheet">
-                  <string notr="true">background-color: rgba(170, 255, 255, 100);</string>
-                 </property>
                  <property name="frameShape">
                   <enum>QFrame::StyledPanel</enum>
                  </property>
@@ -1363,9 +1267,6 @@
                   <font>
                    <pointsize>10</pointsize>
                   </font>
-                 </property>
-                 <property name="styleSheet">
-                  <string notr="true">background-color: rgba(170, 255, 255, 100);</string>
                  </property>
                  <property name="frameShape">
                   <enum>QFrame::StyledPanel</enum>
@@ -1406,9 +1307,6 @@
                    <pointsize>10</pointsize>
                   </font>
                  </property>
-                 <property name="styleSheet">
-                  <string notr="true">background-color: rgba(170, 255, 255, 100);</string>
-                 </property>
                  <property name="frameShape">
                   <enum>QFrame::StyledPanel</enum>
                  </property>
@@ -1439,9 +1337,6 @@
                   <font>
                    <pointsize>10</pointsize>
                   </font>
-                 </property>
-                 <property name="styleSheet">
-                  <string notr="true">background-color: rgba(170, 255, 255, 100);</string>
                  </property>
                  <property name="frameShape">
                   <enum>QFrame::StyledPanel</enum>
@@ -1482,9 +1377,6 @@
                    <pointsize>10</pointsize>
                   </font>
                  </property>
-                 <property name="styleSheet">
-                  <string notr="true">background-color: rgba(170, 255, 255, 100);</string>
-                 </property>
                  <property name="frameShape">
                   <enum>QFrame::StyledPanel</enum>
                  </property>
@@ -1515,9 +1407,6 @@
                   <font>
                    <pointsize>10</pointsize>
                   </font>
-                 </property>
-                 <property name="styleSheet">
-                  <string notr="true">background-color: rgba(170, 255, 255, 100);</string>
                  </property>
                  <property name="frameShape">
                   <enum>QFrame::StyledPanel</enum>
@@ -1558,9 +1447,6 @@
                    <pointsize>10</pointsize>
                   </font>
                  </property>
-                 <property name="styleSheet">
-                  <string notr="true">background-color: rgba(170, 255, 255, 100);</string>
-                 </property>
                  <property name="frameShape">
                   <enum>QFrame::StyledPanel</enum>
                  </property>
@@ -1591,9 +1477,6 @@
                   <font>
                    <pointsize>10</pointsize>
                   </font>
-                 </property>
-                 <property name="styleSheet">
-                  <string notr="true">background-color: rgba(170, 255, 255, 100);</string>
                  </property>
                  <property name="frameShape">
                   <enum>QFrame::StyledPanel</enum>
@@ -1634,9 +1517,6 @@
                    <pointsize>10</pointsize>
                   </font>
                  </property>
-                 <property name="styleSheet">
-                  <string notr="true">background-color: rgba(170, 255, 255, 100);</string>
-                 </property>
                  <property name="frameShape">
                   <enum>QFrame::StyledPanel</enum>
                  </property>
@@ -1667,9 +1547,6 @@
                   <font>
                    <pointsize>10</pointsize>
                   </font>
-                 </property>
-                 <property name="styleSheet">
-                  <string notr="true">background-color: rgba(170, 255, 255, 100);</string>
                  </property>
                  <property name="frameShape">
                   <enum>QFrame::StyledPanel</enum>
@@ -1709,9 +1586,6 @@
                   <font>
                    <pointsize>10</pointsize>
                   </font>
-                 </property>
-                 <property name="styleSheet">
-                  <string notr="true">background-color: rgba(170, 255, 255, 100);</string>
                  </property>
                  <property name="frameShape">
                   <enum>QFrame::StyledPanel</enum>

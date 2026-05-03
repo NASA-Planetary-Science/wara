@@ -13,9 +13,6 @@
   <property name="windowTitle">
    <string>Dialog</string>
   </property>
-  <property name="styleSheet">
-   <string notr="true">background-color: rgb(190, 209, 206);</string>
-  </property>
   <layout class="QGridLayout" name="gridLayout_9">
    <item row="0" column="0">
     <widget class="QPushButton" name="pushButton">
@@ -23,9 +20,6 @@
       <font>
        <pointsize>12</pointsize>
       </font>
-     </property>
-     <property name="styleSheet">
-      <string notr="true">background-color: rgb(255, 255, 127);</string>
      </property>
      <property name="text">
       <string>Info</string>
@@ -51,9 +45,6 @@
       <font>
        <pointsize>20</pointsize>
       </font>
-     </property>
-     <property name="styleSheet">
-      <string notr="true">background-color: rgb(212, 217, 208);</string>
      </property>
      <property name="frameShape">
       <enum>QFrame::Box</enum>
@@ -168,9 +159,6 @@
                 <pointsize>12</pointsize>
                </font>
               </property>
-              <property name="styleSheet">
-               <string notr="true">background-color: rgb(255, 255, 255);</string>
-              </property>
               <property name="text">
                <string>30</string>
               </property>
@@ -196,9 +184,6 @@
              <font>
               <pointsize>12</pointsize>
              </font>
-            </property>
-            <property name="styleSheet">
-             <string notr="true">background-color: rgb(255, 255, 255);</string>
             </property>
             <property name="text">
              <string>             0</string>
@@ -294,9 +279,6 @@
             <pointsize>12</pointsize>
            </font>
           </property>
-          <property name="styleSheet">
-           <string notr="true">background-color: rgb(255, 255, 255);</string>
-          </property>
           <property name="text">
            <string>5e-6</string>
           </property>
@@ -364,9 +346,6 @@
             <pointsize>12</pointsize>
            </font>
           </property>
-          <property name="styleSheet">
-           <string notr="true">background-color: rgb(255, 255, 255);</string>
-          </property>
           <property name="text">
            <string>      0</string>
           </property>
@@ -419,9 +398,6 @@
             <pointsize>12</pointsize>
            </font>
           </property>
-          <property name="styleSheet">
-           <string notr="true">background-color: rgb(255, 255, 255);</string>
-          </property>
           <property name="text">
            <string>2006-06-01</string>
           </property>
@@ -446,9 +422,6 @@
             <pointsize>12</pointsize>
            </font>
           </property>
-          <property name="styleSheet">
-           <string notr="true">background-color: rgb(255, 255, 255);</string>
-          </property>
           <property name="text">
            <string>2022-08-19</string>
           </property>
@@ -464,9 +437,6 @@
            <font>
             <pointsize>12</pointsize>
            </font>
-          </property>
-          <property name="styleSheet">
-           <string notr="true">background-color: rgb(255, 255, 255);</string>
           </property>
           <property name="text">
            <string>0</string>
@@ -494,9 +464,6 @@
            <font>
             <pointsize>12</pointsize>
            </font>
-          </property>
-          <property name="styleSheet">
-           <string notr="true">background-color: rgb(255, 255, 255);</string>
           </property>
          </widget>
         </item>
@@ -535,9 +502,6 @@
             <pointsize>12</pointsize>
            </font>
           </property>
-          <property name="styleSheet">
-           <string notr="true">background-color: rgb(255, 255, 255);</string>
-          </property>
           <property name="text">
            <string>0.85</string>
           </property>
@@ -561,9 +525,6 @@
            <font>
             <pointsize>12</pointsize>
            </font>
-          </property>
-          <property name="styleSheet">
-           <string notr="true">background-color: rgb(255, 255, 255);</string>
           </property>
           <property name="text">
            <string>          0</string>
@@ -593,9 +554,6 @@
             <pointsize>12</pointsize>
            </font>
           </property>
-          <property name="styleSheet">
-           <string notr="true">background-color: rgb(255, 255, 255);</string>
-          </property>
           <property name="text">
            <string>600</string>
           </property>
@@ -620,9 +578,6 @@
             <pointsize>12</pointsize>
            </font>
           </property>
-          <property name="styleSheet">
-           <string notr="true">background-color: rgb(255, 255, 255);</string>
-          </property>
           <property name="text">
            <string>         0</string>
           </property>
@@ -640,10 +595,6 @@
           <italic>false</italic>
           <bold>false</bold>
          </font>
-        </property>
-        <property name="styleSheet">
-         <string notr="true">background-color: rgb(170, 255, 255);
-font: 75 12pt &quot;MS Shell Dlg 2&quot;;</string>
         </property>
         <property name="orientation">
          <enum>Qt::Horizontal</enum>

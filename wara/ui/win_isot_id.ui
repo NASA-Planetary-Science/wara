@@ -22,9 +22,6 @@
        <verstretch>0</verstretch>
       </sizepolicy>
      </property>
-     <property name="styleSheet">
-      <string notr="true">background-color: rgb(180, 200, 200);</string>
-     </property>
      <property name="frameShape">
       <enum>QFrame::Box</enum>
      </property>
@@ -68,9 +65,6 @@
                <pointsize>12</pointsize>
               </font>
              </property>
-             <property name="styleSheet">
-              <string notr="true">background-color: rgb(255, 255, 255);</string>
-             </property>
             </widget>
            </item>
           </layout>
@@ -100,9 +94,6 @@
              <pointsize>12</pointsize>
             </font>
            </property>
-           <property name="styleSheet">
-            <string notr="true">background-color: rgb(170, 255, 255);</string>
-           </property>
           </widget>
          </item>
         </layout>
@@ -119,9 +110,6 @@
         </property>
         <property name="focusPolicy">
          <enum>Qt::ClickFocus</enum>
-        </property>
-        <property name="styleSheet">
-         <string notr="true">background-color: rgb(255, 255, 127);</string>
         </property>
         <property name="text">
          <string>Info</string>
@@ -186,9 +174,6 @@
             <property name="autoFillBackground">
              <bool>false</bool>
             </property>
-            <property name="styleSheet">
-             <string notr="true">background-color: rgb(255, 0, 0);</string>
-            </property>
             <property name="text">
              <string>Red</string>
             </property>
@@ -233,10 +218,6 @@
             <property name="focusPolicy">
              <enum>Qt::NoFocus</enum>
             </property>
-            <property name="styleSheet">
-             <string notr="true">color: qlineargradient(spread:pad, x1:0, y1:1, x2:0, y2:0, stop:0 rgba(0, 0, 0, 255), stop:0.05 rgba(14, 8, 73, 255), stop:0.36 rgba(28, 17, 145, 255), stop:0.6 rgba(126, 14, 81, 255), stop:0.75 rgba(234, 11, 11, 255), stop:0.79 rgba(244, 70, 5, 255), stop:0.86 rgba(255, 136, 0, 255), stop:0.935 rgba(239, 236, 55, 255));
-background-color: rgb(255, 255, 127);</string>
-            </property>
             <property name="text">
              <string>Plot lines</string>
             </property>
@@ -254,9 +235,6 @@ background-color: rgb(255, 255, 127);</string>
             </property>
             <property name="autoFillBackground">
              <bool>false</bool>
-            </property>
-            <property name="styleSheet">
-             <string notr="true">background-color: rgb(0, 170, 0);</string>
             </property>
             <property name="text">
              <string>Green</string>
@@ -294,12 +272,6 @@ background-color: rgb(255, 255, 127);</string>
             <property name="focusPolicy">
              <enum>Qt::NoFocus</enum>
             </property>
-            <property name="styleSheet">
-             <string notr="true"/>
-            </property>
-            <property name="text">
-             <string>Remove lines</string>
-            </property>
            </widget>
           </item>
           <item row="3" column="0">
@@ -314,9 +286,6 @@ background-color: rgb(255, 255, 127);</string>
             </property>
             <property name="autoFillBackground">
              <bool>false</bool>
-            </property>
-            <property name="styleSheet">
-             <string notr="true">background-color: rgb(85, 170, 255);</string>
             </property>
             <property name="text">
              <string>Blue</string>
@@ -372,9 +341,6 @@ background-color: rgb(255, 255, 127);</string>
             <property name="focusPolicy">
              <enum>Qt::NoFocus</enum>
             </property>
-            <property name="styleSheet">
-             <string notr="true">background-color: rgb(255, 170, 0);</string>
-            </property>
             <property name="text">
              <string>Orange</string>
             </property>
@@ -411,10 +377,6 @@ background-color: rgb(255, 255, 127);</string>
             <bold>false</bold>
            </font>
           </property>
-          <property name="styleSheet">
-           <string notr="true">background-color: rgb(223, 223, 223);
-font: 10pt &quot;MS Shell Dlg 2&quot;;</string>
-          </property>
           <property name="widgetResizable">
            <bool>true</bool>
           </property>
@@ -439,9 +401,6 @@ font: 10pt &quot;MS Shell Dlg 2&quot;;</string>
           <width>16777215</width>
           <height>16777215</height>
          </size>
-        </property>
-        <property name="styleSheet">
-         <string notr="true">background-color: rgb(207, 236, 171);</string>
         </property>
         <property name="frameShape">
          <enum>QFrame::Box</enum>
@@ -502,13 +461,6 @@ font: 10pt &quot;MS Shell Dlg 2&quot;;</string>
                  <pointsize>12</pointsize>
                 </font>
                </property>
-               <property name="styleSheet">
-                <string notr="true"/>
-               </property>
-               <property name="text">
-                <string>Common lab
-sources</string>
-               </property>
                <property name="checkable">
                 <bool>true</bool>
                </property>
@@ -527,13 +479,6 @@ sources</string>
                  <pointsize>12</pointsize>
                 </font>
                </property>
-               <property name="styleSheet">
-                <string notr="true"/>
-               </property>
-               <property name="text">
-                <string>Neutron capture
-(IAEA)</string>
-               </property>
                <property name="autoExclusive">
                 <bool>true</bool>
                </property>
@@ -548,12 +493,6 @@ sources</string>
                 <font>
                  <pointsize>12</pointsize>
                 </font>
-               </property>
-               <property name="styleSheet">
-                <string notr="true"/>
-               </property>
-               <property name="text">
-                <string>Delayed activation</string>
                </property>
                <property name="autoExclusive">
                 <bool>true</bool>
@@ -570,12 +509,6 @@ sources</string>
                  <pointsize>12</pointsize>
                 </font>
                </property>
-               <property name="styleSheet">
-                <string notr="true"/>
-               </property>
-               <property name="text">
-                <string>14 MeV (n,x) - Talys</string>
-               </property>
                <property name="autoExclusive">
                 <bool>true</bool>
                </property>
@@ -587,12 +520,6 @@ sources</string>
                 <font>
                  <pointsize>12</pointsize>
                 </font>
-               </property>
-               <property name="styleSheet">
-                <string notr="true"/>
-               </property>
-               <property name="text">
-                <string>Natural radiation</string>
                </property>
                <property name="autoExclusive">
                 <bool>true</bool>
@@ -609,13 +536,6 @@ sources</string>
                  <pointsize>12</pointsize>
                 </font>
                </property>
-               <property name="styleSheet">
-                <string notr="true"/>
-               </property>
-               <property name="text">
-                <string>Neutron inelastic 
-(Baghdad Atlas)</string>
-               </property>
                <property name="autoExclusive">
                 <bool>true</bool>
                </property>
@@ -631,13 +551,6 @@ sources</string>
                  <pointsize>12</pointsize>
                 </font>
                </property>
-               <property name="styleSheet">
-                <string notr="true"/>
-               </property>
-               <property name="text">
-                <string>Neutron capture
-(CapGam)</string>
-               </property>
                <property name="autoExclusive">
                 <bool>true</bool>
                </property>
@@ -652,12 +565,6 @@ sources</string>
                 <font>
                  <pointsize>12</pointsize>
                 </font>
-               </property>
-               <property name="styleSheet">
-                <string notr="true"/>
-               </property>
-               <property name="text">
-                <string>Berkeley Atlas</string>
                </property>
                <property name="autoExclusive">
                 <bool>true</bool>
@@ -689,9 +596,6 @@ sources</string>
                    <pointsize>12</pointsize>
                   </font>
                  </property>
-                 <property name="styleSheet">
-                  <string notr="true">background-color: rgb(255, 255, 255);</string>
-                 </property>
                 </widget>
                </item>
                <item row="1" column="0">
@@ -713,9 +617,6 @@ sources</string>
                    <pointsize>12</pointsize>
                   </font>
                  </property>
-                 <property name="styleSheet">
-                  <string notr="true">background-color: rgb(255, 255, 255);</string>
-                 </property>
                 </widget>
                </item>
                <item row="2" column="0">
@@ -736,9 +637,6 @@ sources</string>
                   <font>
                    <pointsize>12</pointsize>
                   </font>
-                 </property>
-                 <property name="styleSheet">
-                  <string notr="true">background-color: rgb(255, 255, 255);</string>
                  </property>
                 </widget>
                </item>
@@ -766,9 +664,6 @@ sources</string>
                </property>
                <property name="autoFillBackground">
                 <bool>false</bool>
-               </property>
-               <property name="styleSheet">
-                <string notr="true">background-color: rgb(94, 200, 77);</string>
                </property>
                <property name="title">
                 <string/>

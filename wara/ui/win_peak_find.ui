@@ -13,17 +13,11 @@
   <property name="windowTitle">
    <string>Dialog</string>
   </property>
-  <property name="styleSheet">
-   <string notr="true">background-color: rgb(190, 209, 206);</string>
-  </property>
   <layout class="QVBoxLayout" name="verticalLayout">
    <item>
     <widget class="QFrame" name="frame">
      <property name="whatsThis">
       <string/>
-     </property>
-     <property name="styleSheet">
-      <string notr="true">background-color: rgb(212, 217, 208);</string>
      </property>
      <property name="frameShape">
       <enum>QFrame::Box</enum>
@@ -38,9 +32,6 @@
          <font>
           <pointsize>12</pointsize>
          </font>
-        </property>
-        <property name="styleSheet">
-         <string notr="true">background-color: rgb(255, 255, 127);</string>
         </property>
         <property name="text">
          <string>Info</string>
@@ -140,9 +131,6 @@
                <bold>false</bold>
               </font>
              </property>
-             <property name="styleSheet">
-              <string notr="true">background-color: rgb(255, 255, 255);</string>
-             </property>
             </widget>
            </item>
            <item row="1" column="0">
@@ -168,9 +156,6 @@
                <bold>false</bold>
               </font>
              </property>
-             <property name="styleSheet">
-              <string notr="true">background-color: rgb(255, 255, 255);</string>
-             </property>
             </widget>
            </item>
            <item row="2" column="0">
@@ -195,9 +180,6 @@
                <weight>50</weight>
                <bold>false</bold>
               </font>
-             </property>
-             <property name="styleSheet">
-              <string notr="true">background-color: rgb(255, 255, 255);</string>
              </property>
             </widget>
            </item>
@@ -254,9 +236,6 @@
                <bold>false</bold>
               </font>
              </property>
-             <property name="styleSheet">
-              <string notr="true">background-color: rgb(255, 255, 255);</string>
-             </property>
             </widget>
            </item>
            <item row="0" column="0">
@@ -267,9 +246,6 @@
                <weight>50</weight>
                <bold>false</bold>
               </font>
-             </property>
-             <property name="styleSheet">
-              <string notr="true">background-color: rgb(255, 255, 255);</string>
              </property>
             </widget>
            </item>
@@ -402,9 +378,6 @@
              <bold>true</bold>
             </font>
            </property>
-           <property name="styleSheet">
-            <string notr="true">background-color: rgb(85, 255, 255);</string>
-           </property>
            <property name="text">
             <string>Apply</string>
            </property>
@@ -412,9 +385,6 @@
          </item>
          <item row="6" column="0" colspan="3">
           <widget class="QFrame" name="frame_2">
-           <property name="styleSheet">
-            <string notr="true">background-color: rgb(211, 212, 213);</string>
-           </property>
            <property name="frameShape">
             <enum>QFrame::WinPanel</enum>
            </property>

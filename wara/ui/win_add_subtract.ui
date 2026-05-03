@@ -13,9 +13,6 @@
   <property name="windowTitle">
    <string>Dialog</string>
   </property>
-  <property name="styleSheet">
-   <string notr="true">background-color: rgb(190, 209, 206);</string>
-  </property>
   <layout class="QGridLayout" name="gridLayout">
    <item row="0" column="0">
     <widget class="QPushButton" name="button_info">
@@ -23,9 +20,6 @@
       <font>
        <pointsize>12</pointsize>
       </font>
-     </property>
-     <property name="styleSheet">
-      <string notr="true">background-color: rgb(255, 255, 127);</string>
      </property>
      <property name="text">
       <string>Info</string>
@@ -47,9 +41,6 @@
    </item>
    <item row="1" column="0" colspan="2">
     <widget class="QFrame" name="frame">
-     <property name="styleSheet">
-      <string notr="true">background-color: rgb(212, 217, 208);</string>
-     </property>
      <property name="frameShape">
       <enum>QFrame::Box</enum>
      </property>
@@ -120,9 +111,6 @@
             <pointsize>12</pointsize>
            </font>
           </property>
-          <property name="styleSheet">
-           <string notr="true">background-color: rgb(85, 170, 127);</string>
-          </property>
           <property name="text">
            <string>Load</string>
           </property>
@@ -158,9 +146,6 @@
            <font>
             <pointsize>12</pointsize>
            </font>
-          </property>
-          <property name="styleSheet">
-           <string notr="true">background-color: rgb(0, 85, 255);</string>
           </property>
           <property name="text">
            <string>Load</string>
@@ -241,9 +226,6 @@
           <weight>75</weight>
           <bold>true</bold>
          </font>
-        </property>
-        <property name="styleSheet">
-         <string notr="true">background-color: rgb(255, 170, 0);</string>
         </property>
         <property name="text">
          <string>Plot</string>

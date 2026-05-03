@@ -6,6 +6,7 @@ from PyQt5 import QtWidgets
 from wara import parse_NIST
 from wara import peaksearch as ps
 from ..table import TableModel
+from .. import theme
 
 
 class IsotopeMixin:
@@ -245,8 +246,7 @@ class IsotopeMixin:
         self.table = QtWidgets.QTableView()
         self.table.setAlternatingRowColors(True)
         self.table.setSortingEnabled(True)
-        stylesheet = "::section{Background-color:lightgreen}"
-        self.table.horizontalHeader().setStyleSheet(stylesheet)
+        self.table.horizontalHeader().setStyleSheet(theme.TABLE_HEADER_STYLE)
         self.table.setSelectionBehavior(QtWidgets.QTableView.SelectRows)
         self.model = TableModel(data)
         self.table.setModel(self.model)

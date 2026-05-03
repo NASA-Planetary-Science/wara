@@ -7,6 +7,7 @@ from wara import efficiency
 from wara import resolution
 from wara import peakfit as pf
 from ..table import TableModel
+from .. import theme
 
 
 class EfficiencyMixin:
@@ -116,15 +117,13 @@ class EfficiencyMixin:
         self.table_eff = QtWidgets.QTableView()
         self.table_eff.setAlternatingRowColors(True)
         self.table_eff.setSortingEnabled(False)
-        stylesheet_header = "::section{Background-color:lightgreen}"
-        self.table_eff.horizontalHeader().setStyleSheet(stylesheet_header)
+        self.table_eff.horizontalHeader().setStyleSheet(theme.TABLE_HEADER_STYLE)
         self.table_eff.setSelectionBehavior(QtWidgets.QTableView.SelectRows)
         self.table_eff.resizeColumnsToContents()
         self.model_eff = TableModel(data)
         self.table_eff.setModel(self.model_eff)
         self.table_eff_area.setWidget(self.table_eff)
-        stylesheet_ix = "::section{Background-color:lightgoldenrodyellow}"
-        self.table_eff.setStyleSheet(stylesheet_ix)
+        self.table_eff.setStyleSheet(theme.TABLE_INDEX_STYLE)
         self.table_eff.setColumnWidth(10, 150)
         self.table_eff.setColumnWidth(12, 150)
         self.table_eff.selectionModel().selectionChanged.connect(

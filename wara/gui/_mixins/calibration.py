@@ -5,6 +5,7 @@ from PyQt5 import QtWidgets
 from wara import energy_calibration as ecal
 from wara import spectrum as sp
 from ..table import TableModel
+from .. import theme
 
 
 class CalibrationMixin:
@@ -176,7 +177,7 @@ class CalibrationMixin:
             self.disable_checkRadioButtons()
             txt = "Note: calibration has already been initialized"
             self.w_cal.label_ecal_warning.setText(txt)
-            self.w_cal.label_ecal_warning.setStyleSheet("color: red ; font: 10")
+            self.w_cal.label_ecal_warning.setStyleSheet(theme.WARNING_LABEL_STYLE)
 
     def check_radioButton(self):
         if self.w_cal.radio_button_ev.isChecked():
@@ -208,16 +209,14 @@ class CalibrationMixin:
         self.table_ecal = QtWidgets.QTableView()
         self.table_ecal.setAlternatingRowColors(True)
         self.table_ecal.setSortingEnabled(False)
-        stylesheet_header = "::section{Background-color:lightgreen}"
-        self.table_ecal.horizontalHeader().setStyleSheet(stylesheet_header)
+        self.table_ecal.horizontalHeader().setStyleSheet(theme.TABLE_HEADER_STYLE)
         self.table_ecal.setSelectionBehavior(QtWidgets.QTableView.SelectRows)
         self.model_ecal = TableModel(data)
         ix_not_fit = self.get_index_not_fit_ecal_table()
         self.color_table_rows(ix_not_fit)
         self.table_ecal.setModel(self.model_ecal)
         self.table_ecal_area.setWidget(self.table_ecal)
-        stylesheet_ix = "::section{Background-color:lightgoldenrodyellow}"
-        self.table_ecal.setStyleSheet(stylesheet_ix)
+        self.table_ecal.setStyleSheet(theme.TABLE_INDEX_STYLE)
         self.table_ecal.setColumnWidth(0, 150)
         self.table_ecal.setColumnWidth(1, 150)
         self.table_ecal.setColumnWidth(2, 150)

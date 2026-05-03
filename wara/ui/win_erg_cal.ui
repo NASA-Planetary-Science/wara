@@ -13,15 +13,9 @@
   <property name="windowTitle">
    <string>Dialog</string>
   </property>
-  <property name="styleSheet">
-   <string notr="true">background-color: rgb(190, 209, 206);</string>
-  </property>
   <layout class="QGridLayout" name="gridLayout_2">
    <item row="0" column="0">
     <widget class="QFrame" name="frame">
-     <property name="styleSheet">
-      <string notr="true">background-color: rgb(212, 217, 208);</string>
-     </property>
      <property name="frameShape">
       <enum>QFrame::Box</enum>
      </property>
@@ -124,10 +118,6 @@
           <property name="autoFillBackground">
            <bool>false</bool>
           </property>
-          <property name="styleSheet">
-           <string notr="true">background-color: rgb(170, 255, 255);
-font: 75 12pt &quot;MS Shell Dlg 2&quot;;</string>
-          </property>
           <property name="orientation">
            <enum>Qt::Horizontal</enum>
           </property>
@@ -200,9 +190,6 @@ font: 75 12pt &quot;MS Shell Dlg 2&quot;;</string>
            <font>
             <pointsize>12</pointsize>
            </font>
-          </property>
-          <property name="styleSheet">
-           <string notr="true">background-color: rgb(255, 255, 255);</string>
           </property>
           <property name="alignment">
            <set>Qt::AlignLeading|Qt::AlignLeft|Qt::AlignVCenter</set>

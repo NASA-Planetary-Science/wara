@@ -46,6 +46,7 @@ from PyQt5 import QtGui
 from PyQt5.QtCore import Qt
 from matplotlib.backends.backend_qt5agg import NavigationToolbar2QT as NavigationToolbar
 from wara import param_handle
+from .theme import apply_dark_theme
 
 from .dialogs import (
     WindowMainInfo,
@@ -96,26 +97,18 @@ class WaraApp(
         self.scale = "linear"
         self.snr_state = "off"
         self.pushButton_scale.clicked.connect(self.update_scale)
-        self.pushButton_scale.setStyleSheet("background-color : lightgoldenrodyellow")
-        self.button_add_peak.setStyleSheet("background-color : silver")
         self.button_add_peak.setCheckable(True)
         self.button_add_peak.clicked.connect(self.add_peak)
         # push buttons
         self.enable_fitButtons(False)
         self.bg = "poly1"
         self.e_units = None
-        self.pushButton_poly1.setStyleSheet("background-color : lightgreen")
         self.pushButton_poly1.setCheckable(True)
         self.pushButton_poly1.setChecked(True)
-        self.pushButton_poly2.setStyleSheet("background-color : lightgreen")
         self.pushButton_poly2.setCheckable(True)
-        self.pushButton_poly3.setStyleSheet("background-color : lightgreen")
         self.pushButton_poly3.setCheckable(True)
-        self.pushButton_poly4.setStyleSheet("background-color : lightgreen")
         self.pushButton_poly4.setCheckable(True)
-        self.pushButton_poly5.setStyleSheet("background-color : lightgreen")
         self.pushButton_poly5.setCheckable(True)
-        self.pushButton_exp.setStyleSheet("background-color : lightgreen")
         self.pushButton_exp.setCheckable(True)
         self.btn_grp = QButtonGroup()
         self.btn_grp.setExclusive(True)
@@ -136,21 +129,17 @@ class WaraApp(
 
         # Gaussian or skewed Gaussian?
         self.sk_gauss = False
-        self.pushButton_gauss.setStyleSheet("background-color : silver")
         self.pushButton_gauss.setCheckable(True)
         self.pushButton_gauss.setChecked(True)
-        self.pushButton_gauss2.setStyleSheet("background-color : silver")
         self.pushButton_gauss2.setCheckable(True)
         self.btn_grp_gauss = QButtonGroup()
         self.btn_grp_gauss.setExclusive(True)
         self.btn_grp_gauss.addButton(self.pushButton_gauss)
         self.btn_grp_gauss.addButton(self.pushButton_gauss2)
         self.btn_grp_gauss.buttonClicked.connect(self.update_gauss)
-        self.button_remove_cal.setStyleSheet("background-color : lightcoral")
 
         # customize
         self.w_cust = WindowCust()
-        self.button_customize.setStyleSheet("background-color : lightsteelblue")
         self.button_customize.clicked.connect(self.new_window_custom)
         self.w_cust_info = WindowCustInfo()
         self.w_cust.button_info.clicked.connect(self.customize_info_activate)
@@ -181,13 +170,11 @@ class WaraApp(
         ]:
             tmp = NavigationToolbar(tb.canvas, self)
             tmp.setVisible(False)
-            tmp.setStyleSheet("font-size: 24px; background-color : wheat")
             self.addToolBar(tmp)
             self.toolbars.append(tmp)
         self.toolbars[0].setVisible(True)
 
         self.tabWidget.currentChanged.connect(self.switch_toolbar)
-        self.tabWidget.setStyleSheet("background-color : whitesmoke")
 
         # menu bar
         self.saveFitReport.triggered.connect(self.saveReport)
@@ -262,15 +249,6 @@ class WaraApp(
         self.w_info_cal = WindowCalInfo()
         self.button_info_cal.clicked.connect(self.cal_info_activate)
 
-        # push butons
-        self.button_add_cal.setStyleSheet("background-color : lightblue")
-        self.button_origin.setStyleSheet("background-color : lightgoldenrodyellow")
-        self.button_apply_cal.setStyleSheet("background-color : sandybrown")
-        self.button_reset_cal.setStyleSheet("background-color : lightcoral")
-        self.button_cal1.setStyleSheet("background-color : lightgreen")
-        self.button_cal2.setStyleSheet("background-color : lightgreen")
-        self.button_cal3.setStyleSheet("background-color : lightgreen")
-        self.button_cal_eqns.setStyleSheet("background-color : silver")
         self.button_origin.clicked.connect(self.set_origin)
         self.button_remove_selected.clicked.connect(self.ecal_remove_selected)
 
@@ -299,14 +277,6 @@ class WaraApp(
         self.button_cal_add_point.clicked.connect(self.new_window_cal_add_point)
 
         ## Resolution
-        # push butons
-        self.button_fwhm1.setStyleSheet("background-color : lightblue")
-        self.button_fwhm2.setStyleSheet("background-color : lightblue")
-        self.button_add_fwhm.setStyleSheet("background-color : khaki")
-        self.button_origin_fwhm.setStyleSheet("background-color : lightgoldenrodyellow")
-        self.button_reset_fwhm.setStyleSheet("background-color : lightcoral")
-        self.button_extrapolate.setStyleSheet("background-color : lightgreen")
-
         self.button_fwhm1.setCheckable(True)
         self.button_fwhm2.setCheckable(True)
         self.button_extrapolate.setCheckable(True)
@@ -336,15 +306,10 @@ class WaraApp(
         # push butons
         self.w_info_eff = WindowEffInfo()
         self.button_info_eff.clicked.connect(self.eff_info_activate)
-        self.button_yscale_eff.setStyleSheet("background-color : lightgoldenrodyellow")
         self.button_yscale_eff.clicked.connect(self.eff_yscale)
-        self.button_reset_eff.setStyleSheet("background-color : lightcoral")
         self.button_reset_eff.clicked.connect(self.reset_eff_all)
-        self.button_fit1_eff.setStyleSheet("background-color : lightgreen")
         self.button_fit1_eff.clicked.connect(self.eff_fit1)
-        self.button_fit2_eff.setStyleSheet("background-color : lightgreen")
         self.button_fit2_eff.clicked.connect(self.eff_fit2)
-        self.button_add_eff.setStyleSheet("background-color : sandybrown")
         self.button_add_eff.clicked.connect(self.new_window_eff)
         self.button_remove_selected_eff.clicked.connect(self.eff_remove_selected)
         self.reset_eff_figure()
@@ -424,7 +389,6 @@ class WaraApp(
         self.w_api_bin.layout_own_erg.addWidget(self.toolbar_apibin4)
 
         ## Find peaks
-        self.button_find_peaks.setStyleSheet("background-color : mediumaquamarine")
         self.button_find_peaks.clicked.connect(self.activate_peak_finder)
         self.w_peak_find = WindowPeakFinder()
         self.w_peak_find.button_kernel_apply.clicked.connect(self.peakFind_kernel_apply)
@@ -439,14 +403,10 @@ class WaraApp(
         self.df_isotID_selected = pd.DataFrame()
         self.df_isotID = pd.DataFrame()
         self.isotID_vlines = []
-        self.button_identify_peaks.setStyleSheet("background-color : navajowhite")
         self.button_identify_peaks.clicked.connect(self.activate_isotope_id)
         self.w_isot_id = WindowIsotID()
-        self.w_isot_id.isotID_button_apply.setStyleSheet("background-color : lightblue")
-        self.w_isot_id.isotID_button_clear.setStyleSheet("background-color : lightcoral")
         self.w_isot_id.isotID_button_apply.clicked.connect(self.isotID_apply)
         self.w_isot_id.isotID_button_clear.clicked.connect(self.isotID_clear)
-        self.w_isot_id.button_remove_vlines.setStyleSheet("background-color : lightcoral")
         self.w_isot_id.button_plot_vlines.clicked.connect(self.isotID_plot_vlines)
         self.w_isot_id.button_remove_vlines.clicked.connect(self.isotID_remove_vlines)
         self.w_isot_id.edit_element_search.returnPressed.connect(self.isotID_textSearch)
@@ -474,9 +434,9 @@ def main():
     commands = docopt.docopt(__doc__)
 
     plt.rc("font", size=14)
-    plt.style.use("seaborn-v0_8-darkgrid")
 
     app = QApplication([])
+    apply_dark_theme(app)
     icon_file = str(files("wara").joinpath("ui/wara-logo.png"))
     splash = QSplashScreen(QtGui.QPixmap(icon_file))
     splash.show()

@@ -19,9 +19,6 @@
   <property name="windowTitle">
    <string>MainWindow</string>
   </property>
-  <property name="styleSheet">
-   <string notr="true">background-color: rgb(190, 209, 206);</string>
-  </property>
   <widget class="QWidget" name="centralwidget">
    <layout class="QGridLayout" name="gridLayout_2">
     <item row="0" column="0">
@@ -36,11 +33,6 @@
       </property>
       <property name="autoFillBackground">
        <bool>false</bool>
-      </property>
-      <property name="styleSheet">
-       <string notr="true">background-color: rgb(193, 229, 195);
-
-</string>
       </property>
       <property name="currentIndex">
        <number>0</number>
@@ -57,9 +49,6 @@
             <width>16777215</width>
             <height>130</height>
            </size>
-          </property>
-          <property name="styleSheet">
-           <string notr="true">background-color: rgb(244, 244, 183);</string>
           </property>
           <property name="frameShape">
            <enum>QFrame::WinPanel</enum>
@@ -105,9 +94,6 @@
                   <font>
                    <pointsize>14</pointsize>
                   </font>
-                 </property>
-                 <property name="styleSheet">
-                  <string notr="true">background-color: rgb(170, 255, 255);</string>
                  </property>
                  <property name="text">
                   <string>Add/Subtract Spectra</string>
@@ -287,9 +273,6 @@
                    <pointsize>14</pointsize>
                   </font>
                  </property>
-                 <property name="styleSheet">
-                  <string notr="true">background-color: rgb(255, 255, 127);</string>
-                 </property>
                  <property name="text">
                   <string>Info</string>
                  </property>
@@ -301,9 +284,6 @@
                   <font>
                    <pointsize>14</pointsize>
                   </font>
-                 </property>
-                 <property name="styleSheet">
-                  <string notr="true">background-color: rgb(166, 206, 106);</string>
                  </property>
                  <property name="text">
                   <string>Reset</string>
@@ -353,9 +333,6 @@
            <font>
             <pointsize>12</pointsize>
            </font>
-          </property>
-          <property name="styleSheet">
-           <string notr="true">background-color: rgb(212, 217, 208);</string>
           </property>
           <property name="frameShape">
            <enum>QFrame::Box</enum>
@@ -410,9 +387,6 @@
            <font>
             <pointsize>12</pointsize>
            </font>
-          </property>
-          <property name="styleSheet">
-           <string notr="true">background-color: rgb(212, 217, 208);</string>
           </property>
           <property name="frameShape">
            <enum>QFrame::Box</enum>
@@ -507,9 +481,6 @@
                    <pointsize>12</pointsize>
                   </font>
                  </property>
-                 <property name="styleSheet">
-                  <string notr="true">background-color: rgb(170, 255, 0);</string>
-                 </property>
                  <property name="text">
                   <string>Advanced fitting</string>
                  </property>
@@ -545,10 +516,6 @@
                  <italic>false</italic>
                  <bold>false</bold>
                 </font>
-               </property>
-               <property name="styleSheet">
-                <string notr="true">background-color: rgb(162, 194, 200);
-font: 12pt &quot;MS Shell Dlg 2&quot;;</string>
                </property>
                <property name="verticalScrollBarPolicy">
                 <enum>Qt::ScrollBarAlwaysOff</enum>
@@ -594,9 +561,6 @@ font: 12pt &quot;MS Shell Dlg 2&quot;;</string>
             <height>80</height>
            </size>
           </property>
-          <property name="styleSheet">
-           <string notr="true">background-color: rgb(244, 244, 183);</string>
-          </property>
           <property name="frameShape">
            <enum>QFrame::WinPanel</enum>
           </property>
@@ -610,9 +574,6 @@ font: 12pt &quot;MS Shell Dlg 2&quot;;</string>
               <font>
                <pointsize>14</pointsize>
               </font>
-             </property>
-             <property name="styleSheet">
-              <string notr="true">background-color: rgb(255, 255, 127);</string>
              </property>
              <property name="text">
               <string>Info</string>
@@ -797,9 +758,6 @@ font: 12pt &quot;MS Shell Dlg 2&quot;;</string>
             <height>16777215</height>
            </size>
           </property>
-          <property name="styleSheet">
-           <string notr="true">background-color: rgb(212, 217, 208);</string>
-          </property>
           <property name="frameShape">
            <enum>QFrame::Box</enum>
           </property>
@@ -828,9 +786,6 @@ font: 12pt &quot;MS Shell Dlg 2&quot;;</string>
             <height>16777215</height>
            </size>
           </property>
-          <property name="styleSheet">
-           <string notr="true">background-color: rgb(212, 217, 208);</string>
-          </property>
           <property name="frameShape">
            <enum>QFrame::Box</enum>
           </property>
@@ -845,9 +800,6 @@ font: 12pt &quot;MS Shell Dlg 2&quot;;</string>
                <pointsize>12</pointsize>
               </font>
              </property>
-             <property name="styleSheet">
-              <string notr="true">background-color: rgb(255, 170, 127);</string>
-             </property>
              <property name="text">
               <string>Remove selected</string>
              </property>
@@ -855,10 +807,6 @@ font: 12pt &quot;MS Shell Dlg 2&quot;;</string>
            </item>
            <item row="0" column="0" colspan="2">
             <widget class="QScrollArea" name="table_ecal_area">
-             <property name="styleSheet">
-              <string notr="true">background-color: rgb(223, 223, 223);
-font: 12pt &quot;MS Shell Dlg 2&quot;;</string>
-             </property>
              <property name="widgetResizable">
               <bool>true</bool>
              </property>
@@ -880,9 +828,6 @@ font: 12pt &quot;MS Shell Dlg 2&quot;;</string>
               <font>
                <pointsize>12</pointsize>
               </font>
-             </property>
-             <property name="styleSheet">
-              <string notr="true">background-color: rgb(153, 230, 230);</string>
              </property>
              <property name="text">
               <string>Add point manually</string>
@@ -906,9 +851,6 @@ font: 12pt &quot;MS Shell Dlg 2&quot;;</string>
             <width>16777215</width>
             <height>80</height>
            </size>
-          </property>
-          <property name="styleSheet">
-           <string notr="true">background-color: rgb(244, 244, 183);</string>
           </property>
           <property name="frameShape">
            <enum>QFrame::WinPanel</enum>
@@ -1013,9 +955,6 @@ font: 12pt &quot;MS Shell Dlg 2&quot;;</string>
                <pointsize>14</pointsize>
               </font>
              </property>
-             <property name="styleSheet">
-              <string notr="true">background-color: rgb(255, 255, 127);</string>
-             </property>
              <property name="text">
               <string>Info</string>
              </property>
@@ -1031,9 +970,6 @@ font: 12pt &quot;MS Shell Dlg 2&quot;;</string>
             <horstretch>0</horstretch>
             <verstretch>0</verstretch>
            </sizepolicy>
-          </property>
-          <property name="styleSheet">
-           <string notr="true">background-color: rgb(212, 217, 208);</string>
           </property>
           <property name="frameShape">
            <enum>QFrame::Box</enum>
@@ -1068,9 +1004,6 @@ font: 12pt &quot;MS Shell Dlg 2&quot;;</string>
             <height>16777215</height>
            </size>
           </property>
-          <property name="styleSheet">
-           <string notr="true">background-color: rgb(212, 217, 208);</string>
-          </property>
           <property name="frameShape">
            <enum>QFrame::Box</enum>
           </property>
@@ -1084,9 +1017,6 @@ font: 12pt &quot;MS Shell Dlg 2&quot;;</string>
               <font>
                <pointsize>12</pointsize>
               </font>
-             </property>
-             <property name="styleSheet">
-              <string notr="true">background-color: rgb(255, 170, 127);</string>
              </property>
              <property name="text">
               <string>Remove selected</string>
@@ -1103,10 +1033,6 @@ font: 12pt &quot;MS Shell Dlg 2&quot;;</string>
                <italic>false</italic>
                <bold>false</bold>
               </font>
-             </property>
-             <property name="styleSheet">
-              <string notr="true">background-color: rgb(223, 223, 223);
-font: 11pt &quot;MS Shell Dlg 2&quot;;</string>
              </property>
              <property name="widgetResizable">
               <bool>true</bool>
@@ -1140,9 +1066,6 @@ font: 11pt &quot;MS Shell Dlg 2&quot;;</string>
             <width>16777215</width>
             <height>80</height>
            </size>
-          </property>
-          <property name="styleSheet">
-           <string notr="true">background-color: rgb(244, 244, 183);</string>
           </property>
           <property name="frameShape">
            <enum>QFrame::Panel</enum>
@@ -1235,9 +1158,6 @@ font: 11pt &quot;MS Shell Dlg 2&quot;;</string>
                <pointsize>14</pointsize>
               </font>
              </property>
-             <property name="styleSheet">
-              <string notr="true">background-color: rgb(255, 255, 127);</string>
-             </property>
              <property name="text">
               <string>Info</string>
              </property>
@@ -1248,9 +1168,6 @@ font: 11pt &quot;MS Shell Dlg 2&quot;;</string>
         </item>
         <item row="1" column="0">
          <widget class="QFrame" name="frame_20">
-          <property name="styleSheet">
-           <string notr="true">background-color: rgb(212, 217, 208);</string>
-          </property>
           <property name="frameShape">
            <enum>QFrame::Box</enum>
           </property>
@@ -1292,9 +1209,6 @@ font: 11pt &quot;MS Shell Dlg 2&quot;;</string>
             <height>160</height>
            </size>
           </property>
-          <property name="styleSheet">
-           <string notr="true">background-color: rgb(244, 244, 183);</string>
-          </property>
           <property name="frameShape">
            <enum>QFrame::WinPanel</enum>
           </property>
@@ -1324,9 +1238,6 @@ font: 11pt &quot;MS Shell Dlg 2&quot;;</string>
                  <pointsize>14</pointsize>
                 </font>
                </property>
-               <property name="styleSheet">
-                <string notr="true">background-color: rgb(255, 170, 0);</string>
-               </property>
                <property name="text">
                 <string>Plot 3D</string>
                </property>
@@ -1338,9 +1249,6 @@ font: 11pt &quot;MS Shell Dlg 2&quot;;</string>
                 <font>
                  <pointsize>14</pointsize>
                 </font>
-               </property>
-               <property name="styleSheet">
-                <string notr="true">background-color: rgb(188, 200, 190);</string>
                </property>
                <property name="text">
                 <string>Filters</string>
@@ -1390,9 +1298,6 @@ font: 11pt &quot;MS Shell Dlg 2&quot;;</string>
                    <pointsize>12</pointsize>
                   </font>
                  </property>
-                 <property name="styleSheet">
-                  <string notr="true">background-color: rgb(255, 255, 255);</string>
-                 </property>
                  <property name="text">
                   <string/>
                  </property>
@@ -1420,9 +1325,6 @@ font: 11pt &quot;MS Shell Dlg 2&quot;;</string>
                  <pointsize>14</pointsize>
                 </font>
                </property>
-               <property name="styleSheet">
-                <string notr="true">background-color: rgb(233, 231, 255);</string>
-               </property>
                <property name="text">
                 <string>LogXY</string>
                </property>
@@ -1437,9 +1339,6 @@ font: 11pt &quot;MS Shell Dlg 2&quot;;</string>
                <pointsize>12</pointsize>
               </font>
              </property>
-             <property name="styleSheet">
-              <string notr="true">background-color: rgb(248, 249, 255);</string>
-             </property>
              <property name="readOnly">
               <bool>true</bool>
              </property>
@@ -1453,9 +1352,6 @@ font: 11pt &quot;MS Shell Dlg 2&quot;;</string>
                 <font>
                  <pointsize>12</pointsize>
                 </font>
-               </property>
-               <property name="styleSheet">
-                <string notr="true">background-color: rgb(255, 255, 255);</string>
                </property>
                <property name="text">
                 <string/>
@@ -1521,9 +1417,6 @@ font: 11pt &quot;MS Shell Dlg 2&quot;;</string>
                  <pointsize>12</pointsize>
                 </font>
                </property>
-               <property name="styleSheet">
-                <string notr="true">background-color: rgb(255, 255, 255);</string>
-               </property>
                <property name="text">
                 <string/>
                </property>
@@ -1554,9 +1447,6 @@ font: 11pt &quot;MS Shell Dlg 2&quot;;</string>
                  <pointsize>12</pointsize>
                 </font>
                </property>
-               <property name="styleSheet">
-                <string notr="true">background-color: rgb(255, 255, 255);</string>
-               </property>
                <property name="text">
                 <string/>
                </property>
@@ -1568,9 +1458,6 @@ font: 11pt &quot;MS Shell Dlg 2&quot;;</string>
                 <font>
                  <pointsize>12</pointsize>
                 </font>
-               </property>
-               <property name="styleSheet">
-                <string notr="true">background-color: rgb(255, 255, 255);</string>
                </property>
                <property name="text">
                 <string/>
@@ -1626,9 +1513,6 @@ font: 11pt &quot;MS Shell Dlg 2&quot;;</string>
                  <pointsize>14</pointsize>
                 </font>
                </property>
-               <property name="styleSheet">
-                <string notr="true">background-color: rgb(170, 255, 255);</string>
-               </property>
                <property name="text">
                 <string>Load
 File</string>
@@ -1645,9 +1529,6 @@ File</string>
                 <font>
                  <pointsize>14</pointsize>
                 </font>
-               </property>
-               <property name="styleSheet">
-                <string notr="true">background-color: rgb(170, 170, 255);</string>
                </property>
                <property name="text">
                 <string>MCA</string>
@@ -1667,9 +1548,6 @@ File</string>
                  <pointsize>14</pointsize>
                 </font>
                </property>
-               <property name="styleSheet">
-                <string notr="true">background-color: rgb(170, 255, 0);</string>
-               </property>
                <property name="text">
                 <string>Stats</string>
                </property>
@@ -1681,9 +1559,6 @@ File</string>
                 <font>
                  <pointsize>14</pointsize>
                 </font>
-               </property>
-               <property name="styleSheet">
-                <string notr="true">background-color: rgb(170, 255, 255);</string>
                </property>
                <property name="text">
                 <string>Binary</string>
@@ -1701,9 +1576,6 @@ File</string>
                  <pointsize>14</pointsize>
                 </font>
                </property>
-               <property name="styleSheet">
-                <string notr="true">background-color: rgb(170, 255, 127);</string>
-               </property>
                <property name="text">
                 <string>Send to Spectrum</string>
                </property>
@@ -1716,9 +1588,6 @@ File</string>
                  <pointsize>14</pointsize>
                 </font>
                </property>
-               <property name="styleSheet">
-                <string notr="true">background-color: rgb(0, 170, 255);</string>
-               </property>
                <property name="text">
                 <string>Y-scale</string>
                </property>
@@ -1730,9 +1599,6 @@ File</string>
                 <font>
                  <pointsize>14</pointsize>
                 </font>
-               </property>
-               <property name="styleSheet">
-                <string notr="true">background-color: rgb(255, 192, 172);</string>
                </property>
                <property name="text">
                 <string>Reset</string>
@@ -1756,9 +1622,6 @@ File</string>
            <font>
             <pointsize>11</pointsize>
            </font>
-          </property>
-          <property name="styleSheet">
-           <string notr="true">background-color: rgb(212, 217, 208);</string>
           </property>
           <property name="frameShape">
            <enum>QFrame::Box</enum>
@@ -1824,9 +1687,6 @@ File</string>
                <pointsize>12</pointsize>
               </font>
              </property>
-             <property name="styleSheet">
-              <string notr="true">background-color: rgb(255, 255, 127);</string>
-             </property>
              <property name="text">
               <string>Info</string>
              </property>
@@ -1839,9 +1699,6 @@ File</string>
                <pointsize>12</pointsize>
               </font>
              </property>
-             <property name="styleSheet">
-              <string notr="true">background-color: rgb(255, 170, 0);</string>
-             </property>
              <property name="text">
               <string>Clear Plots</string>
              </property>
@@ -1853,9 +1710,6 @@ File</string>
               <font>
                <pointsize>12</pointsize>
               </font>
-             </property>
-             <property name="styleSheet">
-              <string notr="true">background-color: rgb(200, 188, 58);</string>
              </property>
              <property name="text">
               <string>Save Data</string>
@@ -1882,9 +1736,6 @@ File</string>
                <pointsize>12</pointsize>
               </font>
              </property>
-             <property name="styleSheet">
-              <string notr="true">background-color: rgb(198, 200, 152);</string>
-             </property>
              <property name="text">
               <string>Load Folder</string>
              </property>
@@ -1896,9 +1747,6 @@ File</string>
               <font>
                <pointsize>12</pointsize>
               </font>
-             </property>
-             <property name="styleSheet">
-              <string notr="true">background-color: rgb(85, 255, 127);</string>
              </property>
              <property name="text">
               <string>Combine and
@@ -1913,9 +1761,6 @@ Spectrum</string>
               <font>
                <pointsize>12</pointsize>
               </font>
-             </property>
-             <property name="styleSheet">
-              <string notr="true">background-color: rgb(255, 170, 127);</string>
              </property>
              <property name="text">
               <string>Gain correction</string>
@@ -1944,9 +1789,6 @@ Spectrum</string>
                  <pointsize>12</pointsize>
                 </font>
                </property>
-               <property name="styleSheet">
-                <string notr="true">background-color: rgb(170, 255, 255);</string>
-               </property>
                <property name="text">
                 <string>Fit</string>
                </property>
@@ -1973,17 +1815,10 @@ Spectrum</string>
                    <pointsize>12</pointsize>
                   </font>
                  </property>
-                 <property name="styleSheet">
-                  <string notr="true">background-color: rgb(255, 255, 255);</string>
-                 </property>
                 </widget>
                </item>
                <item row="0" column="1">
                 <widget class="QLineEdit" name="xmax_diag">
-                 <property name="styleSheet">
-                  <string notr="true">background-color: rgb(255, 255, 255);
-font: 12pt &quot;MS Shell Dlg 2&quot;;</string>
-                 </property>
                 </widget>
                </item>
                <item row="1" column="0">
@@ -2024,9 +1859,6 @@ font: 12pt &quot;MS Shell Dlg 2&quot;;</string>
                 <font>
                  <pointsize>12</pointsize>
                 </font>
-               </property>
-               <property name="styleSheet">
-                <string notr="true">background-color: rgb(0, 170, 255);</string>
                </property>
                <property name="text">
                 <string>Integral</string>
@@ -2122,9 +1954,6 @@ font: 12pt &quot;MS Shell Dlg 2&quot;;</string>
               <font>
                <pointsize>11</pointsize>
               </font>
-             </property>
-             <property name="styleSheet">
-              <string notr="true">background-color: rgb(158, 192, 200);</string>
              </property>
              <property name="text">
               <string>Counts / Count Rate</string>
@@ -2261,9 +2090,6 @@ font: 12pt &quot;MS Shell Dlg 2&quot;;</string>
                <pointsize>11</pointsize>
               </font>
              </property>
-             <property name="styleSheet">
-              <string notr="true">background-color: rgb(158, 192, 200);</string>
-             </property>
              <property name="text">
               <string>Counts / Count Rate</string>
              </property>
@@ -2290,9 +2116,6 @@ font: 12pt &quot;MS Shell Dlg 2&quot;;</string>
               <font>
                <pointsize>11</pointsize>
               </font>
-             </property>
-             <property name="styleSheet">
-              <string notr="true">background-color: rgb(158, 192, 200);</string>
              </property>
              <property name="text">
               <string>Centroid / Max</string>
@@ -2362,9 +2185,6 @@ font: 12pt &quot;MS Shell Dlg 2&quot;;</string>
                <height>150</height>
               </size>
              </property>
-             <property name="styleSheet">
-              <string notr="true">background-color: rgb(244, 244, 183);</string>
-             </property>
              <property name="frameShape">
               <enum>QFrame::WinPanel</enum>
              </property>
@@ -2381,9 +2201,6 @@ font: 12pt &quot;MS Shell Dlg 2&quot;;</string>
                     <pointsize>14</pointsize>
                    </font>
                   </property>
-                  <property name="styleSheet">
-                   <string notr="true">background-color: rgb(255, 192, 172);</string>
-                  </property>
                   <property name="text">
                    <string>Reset</string>
                   </property>
@@ -2396,9 +2213,6 @@ font: 12pt &quot;MS Shell Dlg 2&quot;;</string>
                     <pointsize>14</pointsize>
                    </font>
                   </property>
-                  <property name="styleSheet">
-                   <string notr="true">background-color: rgb(170, 255, 127);</string>
-                  </property>
                   <property name="text">
                    <string>Send to Spectrum</string>
                   </property>
@@ -2410,9 +2224,6 @@ font: 12pt &quot;MS Shell Dlg 2&quot;;</string>
                    <font>
                     <pointsize>14</pointsize>
                    </font>
-                  </property>
-                  <property name="styleSheet">
-                   <string notr="true">background-color: rgb(255, 255, 127);</string>
                   </property>
                   <property name="text">
                    <string>Info</string>
@@ -2443,9 +2254,6 @@ font: 12pt &quot;MS Shell Dlg 2&quot;;</string>
                     <pointsize>14</pointsize>
                    </font>
                   </property>
-                  <property name="styleSheet">
-                   <string notr="true">background-color: rgb(170, 255, 255);</string>
-                  </property>
                   <property name="text">
                    <string>Load File</string>
                   </property>
@@ -2457,9 +2265,6 @@ font: 12pt &quot;MS Shell Dlg 2&quot;;</string>
                    <font>
                     <pointsize>11</pointsize>
                    </font>
-                  </property>
-                  <property name="styleSheet">
-                   <string notr="true">background-color: rgb(255, 255, 255);</string>
                   </property>
                   <property name="text">
                    <string/>
@@ -2496,9 +2301,6 @@ font: 12pt &quot;MS Shell Dlg 2&quot;;</string>
                    <font>
                     <pointsize>11</pointsize>
                    </font>
-                  </property>
-                  <property name="styleSheet">
-                   <string notr="true">background-color: rgb(255, 255, 255);</string>
                   </property>
                   <property name="text">
                    <string/>
@@ -2560,9 +2362,6 @@ font: 12pt &quot;MS Shell Dlg 2&quot;;</string>
                   <pointsize>14</pointsize>
                  </font>
                 </property>
-                <property name="styleSheet">
-                 <string notr="true">background-color: rgb(0, 170, 255);</string>
-                </property>
                 <property name="text">
                  <string>Y-scale</string>
                 </property>
@@ -2579,9 +2378,6 @@ font: 12pt &quot;MS Shell Dlg 2&quot;;</string>
                <height>16777215</height>
               </size>
              </property>
-             <property name="styleSheet">
-              <string notr="true">background-color: rgb(212, 217, 208);</string>
-             </property>
              <property name="frameShape">
               <enum>QFrame::Panel</enum>
              </property>
@@ -2595,9 +2391,6 @@ font: 12pt &quot;MS Shell Dlg 2&quot;;</string>
                  <font>
                   <pointsize>12</pointsize>
                  </font>
-                </property>
-                <property name="styleSheet">
-                 <string notr="true">background-color: rgb(255, 243, 206);</string>
                 </property>
                 <property name="text">
                  <string>Keep Plots</string>
@@ -2630,9 +2423,6 @@ font: 12pt &quot;MS Shell Dlg 2&quot;;</string>
                       <pointsize>11</pointsize>
                      </font>
                     </property>
-                    <property name="styleSheet">
-                     <string notr="true">background-color: rgb(255, 255, 255);</string>
-                    </property>
                    </widget>
                   </item>
                   <item row="0" column="2" rowspan="2">
@@ -2641,9 +2431,6 @@ font: 12pt &quot;MS Shell Dlg 2&quot;;</string>
                      <font>
                       <pointsize>11</pointsize>
                      </font>
-                    </property>
-                    <property name="styleSheet">
-                     <string notr="true">background-color: rgb(255, 170, 127);</string>
                     </property>
                     <property name="text">
                      <string>Apply</string>
@@ -2669,9 +2456,6 @@ font: 12pt &quot;MS Shell Dlg 2&quot;;</string>
                       <pointsize>11</pointsize>
                      </font>
                     </property>
-                    <property name="styleSheet">
-                     <string notr="true">background-color: rgb(255, 255, 255);</string>
-                    </property>
                    </widget>
                   </item>
                  </layout>
@@ -2684,9 +2468,6 @@ font: 12pt &quot;MS Shell Dlg 2&quot;;</string>
                      <font>
                       <pointsize>11</pointsize>
                      </font>
-                    </property>
-                    <property name="styleSheet">
-                     <string notr="true">background-color: rgb(255, 255, 255);</string>
                     </property>
                     <property name="text">
                      <string>4096</string>
@@ -2711,9 +2492,6 @@ font: 12pt &quot;MS Shell Dlg 2&quot;;</string>
                      <font>
                       <pointsize>11</pointsize>
                      </font>
-                    </property>
-                    <property name="styleSheet">
-                     <string notr="true">background-color: rgb(170, 255, 255);</string>
                     </property>
                     <property name="text">
                      <string>Apply</string>
@@ -2757,9 +2535,6 @@ font: 12pt &quot;MS Shell Dlg 2&quot;;</string>
                     <pointsize>11</pointsize>
                    </font>
                   </property>
-                  <property name="styleSheet">
-                   <string notr="true">background-color: rgb(255, 255, 255);</string>
-                  </property>
                  </widget>
                 </item>
                 <item row="0" column="2" rowspan="2">
@@ -2768,9 +2543,6 @@ font: 12pt &quot;MS Shell Dlg 2&quot;;</string>
                    <font>
                     <pointsize>11</pointsize>
                    </font>
-                  </property>
-                  <property name="styleSheet">
-                   <string notr="true">background-color: rgb(255, 170, 127);</string>
                   </property>
                   <property name="text">
                    <string>Apply</string>
@@ -2795,9 +2567,6 @@ font: 12pt &quot;MS Shell Dlg 2&quot;;</string>
                    <font>
                     <pointsize>11</pointsize>
                    </font>
-                  </property>
-                  <property name="styleSheet">
-                   <string notr="true">background-color: rgb(255, 255, 255);</string>
                   </property>
                  </widget>
                 </item>
@@ -2857,9 +2626,6 @@ font: 12pt &quot;MS Shell Dlg 2&quot;;</string>
                     <pointsize>11</pointsize>
                    </font>
                   </property>
-                  <property name="styleSheet">
-                   <string notr="true">background-color: rgb(255, 170, 127);</string>
-                  </property>
                   <property name="text">
                    <string>Apply fit</string>
                   </property>
@@ -2871,9 +2637,6 @@ font: 12pt &quot;MS Shell Dlg 2&quot;;</string>
                    <font>
                     <pointsize>11</pointsize>
                    </font>
-                  </property>
-                  <property name="styleSheet">
-                   <string notr="true">background-color: rgb(238, 255, 222);</string>
                   </property>
                   <property name="text">
                    <string>Show Fit Components</string>
@@ -2903,9 +2666,6 @@ font: 12pt &quot;MS Shell Dlg 2&quot;;</string>
                       <pointsize>11</pointsize>
                      </font>
                     </property>
-                    <property name="styleSheet">
-                     <string notr="true">background-color: rgb(255, 255, 255);</string>
-                    </property>
                    </widget>
                   </item>
                   <item row="0" column="2" rowspan="2">
@@ -2914,9 +2674,6 @@ font: 12pt &quot;MS Shell Dlg 2&quot;;</string>
                      <font>
                       <pointsize>11</pointsize>
                      </font>
-                    </property>
-                    <property name="styleSheet">
-                     <string notr="true">background-color: rgb(255, 170, 127);</string>
                     </property>
                     <property name="text">
                      <string>Apply</string>
@@ -2936,9 +2693,6 @@ font: 12pt &quot;MS Shell Dlg 2&quot;;</string>
                      <font>
                       <pointsize>11</pointsize>
                      </font>
-                    </property>
-                    <property name="styleSheet">
-                     <string notr="true">background-color: rgb(255, 255, 255);</string>
                     </property>
                    </widget>
                   </item>
@@ -2960,9 +2714,6 @@ font: 12pt &quot;MS Shell Dlg 2&quot;;</string>
                       <pointsize>11</pointsize>
                      </font>
                     </property>
-                    <property name="styleSheet">
-                     <string notr="true">background-color: rgb(255, 255, 255);</string>
-                    </property>
                     <property name="text">
                      <string>200</string>
                     </property>
@@ -2974,9 +2725,6 @@ font: 12pt &quot;MS Shell Dlg 2&quot;;</string>
                      <font>
                       <pointsize>12</pointsize>
                      </font>
-                    </property>
-                    <property name="styleSheet">
-                     <string notr="true">background-color: rgb(170, 255, 255);</string>
                     </property>
                     <property name="text">
                      <string>Apply</string>
@@ -3018,9 +2766,6 @@ font: 12pt &quot;MS Shell Dlg 2&quot;;</string>
                   <pointsize>11</pointsize>
                  </font>
                 </property>
-                <property name="styleSheet">
-                 <string notr="true">background-color: rgb(237, 253, 255);</string>
-                </property>
                 <property name="frameShape">
                  <enum>QFrame::NoFrame</enum>
                 </property>
@@ -3037,9 +2782,6 @@ font: 12pt &quot;MS Shell Dlg 2&quot;;</string>
            </item>
            <item row="1" column="1">
             <widget class="QFrame" name="frame_24">
-             <property name="styleSheet">
-              <string notr="true">background-color: rgb(212, 217, 208);</string>
-             </property>
              <property name="frameShape">
               <enum>QFrame::Box</enum>
              </property>
@@ -3070,9 +2812,6 @@ font: 12pt &quot;MS Shell Dlg 2&quot;;</string>
            </item>
            <item row="1" column="2">
             <widget class="QFrame" name="frame_25">
-             <property name="styleSheet">
-              <string notr="true">background-color: rgb(212, 217, 208);</string>
-             </property>
              <property name="frameShape">
               <enum>QFrame::Box</enum>
              </property>
@@ -3100,9 +2839,6 @@ font: 12pt &quot;MS Shell Dlg 2&quot;;</string>
            </item>
            <item row="2" column="1">
             <widget class="QFrame" name="frame_27">
-             <property name="styleSheet">
-              <string notr="true">background-color: rgb(212, 217, 208);</string>
-             </property>
              <property name="frameShape">
               <enum>QFrame::Box</enum>
              </property>
@@ -3130,9 +2866,6 @@ font: 12pt &quot;MS Shell Dlg 2&quot;;</string>
            </item>
            <item row="2" column="2">
             <widget class="QFrame" name="frame_26">
-             <property name="styleSheet">
-              <string notr="true">background-color: rgb(212, 217, 208);</string>
-             </property>
              <property name="frameShape">
               <enum>QFrame::Box</enum>
              </property>

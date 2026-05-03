@@ -13,15 +13,9 @@
   <property name="windowTitle">
    <string>Dialog</string>
   </property>
-  <property name="styleSheet">
-   <string notr="true">background-color: rgb(190, 209, 206);</string>
-  </property>
   <layout class="QGridLayout" name="gridLayout">
    <item row="2" column="2">
     <widget class="QFrame" name="frame_4">
-     <property name="styleSheet">
-      <string notr="true">background-color: rgb(212, 217, 208);</string>
-     </property>
      <property name="frameShape">
       <enum>QFrame::Box</enum>
      </property>
@@ -83,9 +77,6 @@
             <pointsize>12</pointsize>
            </font>
           </property>
-          <property name="styleSheet">
-           <string notr="true">background-color: rgb(255, 255, 255);</string>
-          </property>
          </widget>
         </item>
        </layout>
@@ -110,9 +101,6 @@
           <pointsize>14</pointsize>
          </font>
         </property>
-        <property name="styleSheet">
-         <string notr="true">background-color: rgb(170, 255, 0);</string>
-        </property>
         <property name="text">
          <string>Apply</string>
         </property>
@@ -123,9 +111,6 @@
    </item>
    <item row="1" column="2">
     <widget class="QFrame" name="frame_2">
-     <property name="styleSheet">
-      <string notr="true">background-color: rgb(212, 217, 208);</string>
-     </property>
      <property name="frameShape">
       <enum>QFrame::Box</enum>
      </property>
@@ -153,9 +138,6 @@
           <pointsize>12</pointsize>
          </font>
         </property>
-        <property name="styleSheet">
-         <string notr="true">background-color: rgb(255, 255, 255);</string>
-        </property>
        </widget>
       </item>
       <item row="3" column="0">
@@ -176,9 +158,6 @@
          <font>
           <pointsize>12</pointsize>
          </font>
-        </property>
-        <property name="styleSheet">
-         <string notr="true">background-color: rgb(255, 255, 255);</string>
         </property>
        </widget>
       </item>
@@ -227,9 +206,6 @@
           <pointsize>14</pointsize>
          </font>
         </property>
-        <property name="styleSheet">
-         <string notr="true">background-color: rgb(170, 255, 0);</string>
-        </property>
         <property name="text">
          <string>Apply</string>
         </property>
@@ -258,9 +234,6 @@
        <pointsize>12</pointsize>
       </font>
      </property>
-     <property name="styleSheet">
-      <string notr="true">background-color: rgb(255, 255, 127);</string>
-     </property>
      <property name="text">
       <string>Info</string>
      </property>
@@ -268,9 +241,6 @@
    </item>
    <item row="1" column="0" colspan="2">
     <widget class="QFrame" name="frame">
-     <property name="styleSheet">
-      <string notr="true">background-color: rgb(212, 217, 208);</string>
-     </property>
      <property name="frameShape">
       <enum>QFrame::Box</enum>
      </property>
@@ -296,9 +266,6 @@
          <font>
           <pointsize>12</pointsize>
          </font>
-        </property>
-        <property name="styleSheet">
-         <string notr="true">background-color: rgb(255, 255, 255);</string>
         </property>
        </widget>
       </item>
@@ -346,9 +313,6 @@
           <pointsize>12</pointsize>
          </font>
         </property>
-        <property name="styleSheet">
-         <string notr="true">background-color: rgb(255, 255, 255);</string>
-        </property>
        </widget>
       </item>
       <item row="6" column="0">
@@ -373,9 +337,6 @@
           <pointsize>12</pointsize>
          </font>
         </property>
-        <property name="styleSheet">
-         <string notr="true">background-color: rgb(255, 255, 255);</string>
-        </property>
        </widget>
       </item>
       <item row="3" column="1">
@@ -384,9 +345,6 @@
          <font>
           <pointsize>12</pointsize>
          </font>
-        </property>
-        <property name="styleSheet">
-         <string notr="true">background-color: rgb(255, 255, 255);</string>
         </property>
        </widget>
       </item>
@@ -409,9 +367,6 @@
           <pointsize>14</pointsize>
          </font>
         </property>
-        <property name="styleSheet">
-         <string notr="true">background-color: rgb(170, 255, 0);</string>
-        </property>
         <property name="text">
          <string>Apply</string>
         </property>
@@ -426,9 +381,6 @@
          <font>
           <pointsize>12</pointsize>
          </font>
-        </property>
-        <property name="styleSheet">
-         <string notr="true">background-color: rgb(255, 255, 255);</string>
         </property>
        </widget>
       </item>
@@ -451,9 +403,6 @@
           <pointsize>12</pointsize>
          </font>
         </property>
-        <property name="styleSheet">
-         <string notr="true">background-color: rgb(255, 255, 255);</string>
-        </property>
        </widget>
       </item>
       <item row="0" column="0">
@@ -475,9 +424,6 @@
           <pointsize>12</pointsize>
          </font>
         </property>
-        <property name="styleSheet">
-         <string notr="true">background-color: rgb(255, 255, 255);</string>
-        </property>
        </widget>
       </item>
      </layout>
@@ -485,9 +431,6 @@
    </item>
    <item row="2" column="0" colspan="2">
     <widget class="QFrame" name="frame_3">
-     <property name="styleSheet">
-      <string notr="true">background-color: rgb(212, 217, 208);</string>
-     </property>
      <property name="frameShape">
       <enum>QFrame::Box</enum>
      </property>
@@ -503,9 +446,6 @@
            <font>
             <pointsize>12</pointsize>
            </font>
-          </property>
-          <property name="styleSheet">
-           <string notr="true">background-color: rgb(255, 255, 255);</string>
           </property>
          </widget>
         </item>
@@ -527,9 +467,6 @@
            <font>
             <pointsize>14</pointsize>
            </font>
-          </property>
-          <property name="styleSheet">
-           <string notr="true">background-color: rgb(170, 255, 0);</string>
           </property>
           <property name="text">
            <string>Apply</string>
