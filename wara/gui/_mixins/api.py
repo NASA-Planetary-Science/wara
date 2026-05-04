@@ -899,9 +899,15 @@ class ApiMixin:
             scene_xaxis_showticklabels=False,
             scene_yaxis_showticklabels=False,
             scene_zaxis_showticklabels=False,
+            scene_xaxis_title="<b>x</b>",
+            scene_yaxis_title="<b>y</b>",
+            scene_zaxis_title="<b>z</b>",
+            scene_xaxis_title_font_size=25,
+            scene_yaxis_title_font_size=25,
+            scene_zaxis_title_font_size=25,
+            scene_dragmode="orbit",
         )
         self.w_api_3D.browser.setHtml(fig.to_html(include_plotlyjs="cdn"))
-        # Render the plot to an HTML file
         html = pio.to_html(fig, full_html=True)
         # Write the HTML to a temporary file and load it in the QWebEngineView
         with tempfile.NamedTemporaryFile(delete=False, suffix=".html") as f:

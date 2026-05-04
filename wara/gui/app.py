@@ -476,6 +476,7 @@ def main():
     plt.rc("font", size=14)
     plt.style.use("seaborn-v0_8-darkgrid")
 
+    QApplication.setAttribute(Qt.AA_ShareOpenGLContexts)
     app = QApplication([])
     icon_file = str(files("wara").joinpath("ui/wara-logo.png"))
     splash = QSplashScreen(QtGui.QPixmap(icon_file))
