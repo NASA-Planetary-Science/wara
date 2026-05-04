@@ -1,4 +1,4 @@
-"""
+﻿"""
 Example usage of the peakfit class
 """
 from wara import spectrum as sp
@@ -10,7 +10,7 @@ from wara import file_reader
 
 
 # dataset 1
-file = "../data/gui_test_data_cebr.csv"
+file = "../data/test_data_cebr.csv"
 
 # Required input parameters (in channels)
 fwhm_at_0 = 1.0

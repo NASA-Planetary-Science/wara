@@ -1,4 +1,4 @@
-"""
+﻿"""
 Minimum working example of the Spectrum class
 Plus rebinning and smoothing features
 """
@@ -9,7 +9,7 @@ import matplotlib.pyplot as plt
 import pandas as pd
 
 # dataset 1
-file = "../data/gui_test_data_cebr_cal.csv"
+file = "../data/test_data_cebr_cal.csv"
 df = pd.read_csv(file)
 
 # Instantiate a Spectrum object

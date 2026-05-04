@@ -1,4 +1,4 @@
-"""
+﻿"""
 Example tlist
 """
 
@@ -9,7 +9,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 import lmfit
 
-file = "../data/gui_test_data_tlist.txt"
+file = "../data/test_data_tlist.txt"
 ms = file_reader.ReadMultiScanTlist(file)
 ms.read_file()
 df_raw = ms.df

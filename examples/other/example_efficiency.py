@@ -1,6 +1,6 @@
-"""
+﻿"""
 Efficiency curve example.
-Data file: data/gui_test_data_lab_sources.cnf
+Data file: data/test_data_lab_sources.cnf
 """
 import numpy as np
 from wara import file_reader
@@ -10,7 +10,7 @@ from wara import peakfit as pf
 from wara import efficiency
 import pandas as pd
 
-file = "../data/gui_test_data_lab_sources.cnf"
+file = "../data/test_data_lab_sources.cnf"
 spe = file_reader.read_cnf(file)
 # The energy calibration is off. Let's use a better one
 erg_new = -0.8801 + 0.9328*spe.channels

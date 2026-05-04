@@ -1,4 +1,4 @@
-# wara
+﻿# wara
 Gamma spectrocopy tools and visualizations. Some of its capabilitis include:
 
 1. Spectrum smoothing, rebinning, plotting
@@ -18,7 +18,7 @@ Gamma spectrocopy tools and visualizations. Some of its capabilitis include:
 wara runs on Python 3.6 or higher version. You can install it by
 downloading the package directly using
 ```
-git clone https://github.com/mauricioAyllon/wara
+git clone https://github.com/NASA-Planetary-Science/wara.git
 ```
 and then run
 ```
@@ -34,7 +34,7 @@ wara -o
 ```
 If running through the Spyder IDE, replace the keyword "Python" for "run".
 The GUI window should appear.
-Then select File -> open -> examples -> data -> gui_test_data_labr.csv.
+Then select File -> open -> examples -> data -> test_data_labr.csv.
 Click on "Find peaks", select LaBr/CeBr and hit apply.
 You should see several lines identified in the spectrum. Drag the mouse over one or more lines and feel free to play around.
 Info buttons are placed strategically to guide the user.

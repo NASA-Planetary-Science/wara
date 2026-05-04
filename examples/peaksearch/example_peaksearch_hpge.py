@@ -1,4 +1,4 @@
-"""
+﻿"""
 Example of peaksearch functionality for a HPGe detector
 """
 from wara import peaksearch as ps
@@ -7,7 +7,7 @@ import time
 
 
 # dataset 
-file = "../data/gui_test_data_hpge_NH3.txt"
+file = "../data/test_data_hpge_NH3.txt"
 # instantiate a Spectrum object
 spect = file_reader.read_txt(file)
 

@@ -1,4 +1,4 @@
-"""
+﻿"""
 Pytest tests for file_reader module.
 Uses example files from wara/examples/data.
 """
@@ -23,12 +23,12 @@ from wara.file_reader import (
 
 DATA_DIR = Path(__file__).parent.parent / "examples" / "data"
 
-CSV_NO_CAL   = str(DATA_DIR / "gui_test_data_cebr.csv")
-CSV_WITH_CAL = str(DATA_DIR / "gui_test_data_cebr_cal.csv")
-TXT_FILE     = str(DATA_DIR / "gui_test_data_hpge_NH3.txt")
-MCA_FILE     = str(DATA_DIR / "gui_test_data_3He.mca")
-SPE_FILE     = str(DATA_DIR / "gui_test_data_hpge_Cu.Spe")
-CNF_FILE     = str(DATA_DIR / "gui_test_data_lab_sources.cnf")
+CSV_NO_CAL   = str(DATA_DIR / "test_data_cebr.csv")
+CSV_WITH_CAL = str(DATA_DIR / "test_data_cebr_cal.csv")
+TXT_FILE     = str(DATA_DIR / "test_data_hpge_NH3.txt")
+MCA_FILE     = str(DATA_DIR / "test_data_3He.mca")
+SPE_FILE     = str(DATA_DIR / "test_data_hpge_Cu.Spe")
+CNF_FILE     = str(DATA_DIR / "test_data_lab_sources.cnf")
 
 
 # ---------------------------------------------------------------------------

@@ -1,4 +1,4 @@
-"""
+﻿"""
 Example of peaksearch functionality for a CeBr3 detector
 """
 from wara import peaksearch as ps
@@ -6,7 +6,7 @@ from wara import file_reader
 
 
 # dataset
-file = "../data/gui_test_data_cebr.csv"
+file = "../data/test_data_cebr.csv"
 # instantiate a Spectrum object
 spect = file_reader.read_csv(file)
 
