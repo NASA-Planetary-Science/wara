@@ -1,5 +1,16 @@
-﻿# wara
-Gamma spectrocopy tools and visualizations. Some of its capabilitis include:
+<p align="center">
+  <img src="figs/wara-logo.png" alt="wara logo" width="300"/>
+</p>
+
+<h1 align="center">Welcome to wara</h1>
+
+<p align="center">
+  <em>Gamma Ray &amp; Neutron Spectroscopy for Planetary Exploration</em>
+</p>
+
+---
+
+**wara** is a Python package for gamma-ray spectroscopy analysis and visualization. Some of its capabilities include:
 
 1. Spectrum smoothing, rebinning, plotting
 2. Peak searching given detector resolution and minimum SNR
@@ -15,36 +26,37 @@ Gamma spectrocopy tools and visualizations. Some of its capabilitis include:
 12. Gamma energy identification with built-in databases. Emphasis is placed on neutron induced gamma ray emission.
 
 ## Installation
-wara runs on Python 3.6 or higher version. You can install it by
-downloading the package directly using
+
+wara runs on Python 3.6 or higher. You can install it by downloading the package directly:
 ```
 git clone https://github.com/NASA-Planetary-Science/wara.git
 ```
-and then run
+then run
 ```
 pip install -e .
 ```
-from the directory where the setup.py file is located.
+from the directory where the `setup.py` file is located.
 
 ## Using wara
-Try running the following (if the path is set correctly, the GUI can run from any directory.
-Otherwise, run from inside the "wara" folder):
+
+Try running the following (if the path is set correctly, the GUI can run from any directory;
+otherwise, run from inside the `wara` folder):
 ```
 wara -o
 ```
-If running through the Spyder IDE, replace the keyword "Python" for "run".
-The GUI window should appear.
-Then select File -> open -> examples -> data -> test_data_labr.csv.
-Click on "Find peaks", select LaBr/CeBr and hit apply.
-You should see several lines identified in the spectrum. Drag the mouse over one or more lines and feel free to play around.
-Info buttons are placed strategically to guide the user.
+If running through the Spyder IDE, replace `python` with `run`.
+
+The GUI window should appear. Then select **File → Open → examples → data → test_data_cebr.csv**.
+Click on **Find peaks**, select LaBr/CeBr, and hit **Apply**.
+You should see several lines identified in the spectrum. Drag the mouse over one or more lines to perform
+a Gaussian fit and feel free to play around. Info buttons are placed strategically to guide the user.
 
 ![gammaGUI](figs/gammaGUI_qt.png)
 ![peakIdentifer](figs/gammaGUI_qt_peak_identifier.png)
 ![ecalGUI](figs/gammaGUI_qt_cal.png)
 
-
 ## Data path configuration
+
 If you use the API data loading features, create a file called `data-path.txt`
 in the repo root directory with one data folder path per line:
 ```
@@ -57,13 +69,3 @@ This file is excluded from version control, so each user keeps their own local c
 ## Development
 
 Code contributions are welcome!
-
-We use pre-commit to format the code with black. To enable pre-commit, you need to install it using:
-```
-pip install pre-commit
-```
-and then run
-```
-pre-commit install
-```
-inside the git repository.
