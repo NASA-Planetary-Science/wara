@@ -4,3 +4,5 @@ __pycache__
 wara/version.py
 data-path.txt
 .claude
+docs/_build/
+docs/autoapi/
