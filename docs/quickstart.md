@@ -19,17 +19,25 @@ Info buttons throughout the GUI provide contextual guidance.
 ## Using wara in Python
 
 ```python
-import wara
+from wara import peaksearch as ps
+from wara import peakfit as pf
+from wara import file_reader
 
 # Load a spectrum from a CSV file
-sp = wara.Spectrum.from_file("my_spectrum.csv")
+file = "examples/data/test_data_cebr_cal.csv"
+spect = file_reader.read_csv(file)
+ax_spe = spect.plot()
 
 # Search for peaks
-ps = wara.PeakSearch(sp, fwhm=10, snr=3)
-ps.find_peaks()
+search = ps.PeakSearch(spectrum=spect, ref_x=420, ref_fwhm=20, min_snr=5)
+search.plot()
 
 # Fit the peaks
-pf = wara.PeakFit(sp, ps.peaks)
-pf.fit()
-pf.plot()
+fit = pf.PeakFit(search=search, xrange=[1080,1450], bkg="poly1")
+fit.plot()
+
+# Print some useful information
+print(f"Peak 1 Energy: {fit.peak_info[0]['mean']} keV")
+print(f"Peak 1 Area: {fit.peak_info[0]['area']} counts")
+print(f"Peak 1 FWHM: {fit.peak_info[0]['fwhm']} keV")
 ```

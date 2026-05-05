@@ -8,6 +8,8 @@
   <em>Gamma Ray &amp; Neutron Spectroscopy for Planetary Exploration</em>
 </p>
 
+[![Documentation](https://readthedocs.org/projects/wara/badge/?version=latest)](https://wara.readthedocs.io/en/latest/)
+
 ---
 
 **wara** is a Python package for gamma-ray spectroscopy analysis and visualization. Some of its capabilities include:
@@ -27,7 +29,7 @@
 
 ## Installation
 
-wara runs on Python 3.6 or higher. You can install it by downloading the package directly:
+wara runs on Python 3.8 or higher. You can install it by downloading the package directly:
 ```
 git clone https://github.com/NASA-Planetary-Science/wara.git
 ```
@@ -35,7 +37,7 @@ then run
 ```
 pip install -e .
 ```
-from the directory where the `setup.py` file is located.
+from the directory where `pyproject.toml` is located.
 
 ## Using wara
 
@@ -65,6 +67,23 @@ D:/external-drive/more-data
 ```
 wara will search each path in order and use the first one that contains the requested run.
 This file is excluded from version control, so each user keeps their own local copy.
+
+## Testing
+
+After installation, run the test suite with:
+```
+pip install pytest
+pytest tests/
+```
+
+To run a specific test file:
+```
+pytest tests/test_spectrum.py
+```
+
+## Documentation
+
+Full documentation is available at **[wara.readthedocs.io](https://wara.readthedocs.io)**.
 
 ## Development
 
