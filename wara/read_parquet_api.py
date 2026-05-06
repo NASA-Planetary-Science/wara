@@ -59,7 +59,7 @@ def read_parquet_file(date, runnr, ch=None, flood_field=False, data_path_txt=Non
     if not files:
         print(f"ERROR: No parquet file available for run {date}-{runnr}")
         return None
-    df = pd.concat([pd.read_parquet(f) for f in files])
+    df = pd.concat([pd.read_parquet(f, engine="fastparquet") for f in files])
 
     if flood_field or ch is None:
         df.reset_index(drop=True, inplace=True)
