@@ -6,6 +6,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 import datetime
+from wara.matplotlib_theme import apply_theme
 
 
 def calculate_t_elapsed(date0, date1):
@@ -159,7 +160,7 @@ def plot_points(e_vals, eff_vals, err_vals, e_units="keV", ax=None):
 
 def eff_fit(en, eff, eff_err, order=1, ax_fit=None, ax_res=None):
     plt.rc("font", size=14)
-    plt.style.use("seaborn-darkgrid")
+    apply_theme()
 
     def eff_func(x, a0, a1, a2, a3):
         return (a0 + a1 * np.log(x) + a2 * (np.log(x)) ** 2 + a3 * (np.log(x)) ** 3) / x

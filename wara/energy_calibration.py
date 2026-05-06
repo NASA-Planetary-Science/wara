@@ -8,6 +8,7 @@ import pandas as pd
 from itertools import combinations
 from math import comb
 from scipy.stats import linregress
+from wara.matplotlib_theme import apply_theme
 
 
 class EnergyCalibration:
@@ -111,7 +112,7 @@ class EnergyCalibration:
         equation = self._build_equation()
     
         plt.rc("font", size=14)
-        plt.style.use("seaborn-v0_8-darkgrid")
+        apply_theme()
         x_offset = 100
     
         if residual:
@@ -360,7 +361,7 @@ class PiecewiseLinearCalibration:
         ax : matplotlib Axes
         """
         plt.rc("font", size=14)
-        plt.style.use("seaborn-v0_8-darkgrid")
+        apply_theme()
 
         if ax is None:
             fig, ax = plt.subplots(figsize=(12, 6), constrained_layout=True)

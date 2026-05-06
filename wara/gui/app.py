@@ -46,6 +46,7 @@ from PyQt5 import QtGui
 from PyQt5.QtCore import Qt
 from matplotlib.backends.backend_qt5agg import NavigationToolbar2QT as NavigationToolbar
 from wara import param_handle
+from wara.matplotlib_theme import apply_theme
 
 from .dialogs import (
     WindowMainInfo,
@@ -474,7 +475,7 @@ def main():
     commands = docopt.docopt(__doc__)
 
     plt.rc("font", size=14)
-    plt.style.use("seaborn-v0_8-darkgrid")
+    apply_theme()
 
     QApplication.setAttribute(Qt.AA_ShareOpenGLContexts)
     app = QApplication([])

@@ -5,6 +5,7 @@ import lmfit
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
+from wara.matplotlib_theme import apply_theme
 
 
 def fwhm1(E, a, b):
@@ -17,7 +18,7 @@ def fwhm2(E, a, b, c):
 
 def fwhm_vs_erg(energies, fwhms, x_units, e_units, order=2, fig=None, ax=None):
     plt.rc("font", size=14)
-    plt.style.use("seaborn-v0_8-darkgrid")
+    apply_theme()
     if fig is None:
         fig = plt.figure(constrained_layout=True, figsize=(16, 8))
     if ax is None:

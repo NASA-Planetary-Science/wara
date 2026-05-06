@@ -7,6 +7,7 @@ import numpy as np
 from scipy.signal import find_peaks
 from . import spectrum as sp
 import pandas as pd
+from .matplotlib_theme import apply_theme
 
 
 def gaussian(x, mean, sigma):
@@ -489,7 +490,7 @@ class PeakSearch:
 
         """
         plt.rc("font", size=12)
-        plt.style.use("seaborn-v0_8-darkgrid")
+        apply_theme()
         x = self._get_x()
         if ax is None:
             fig = plt.figure(figsize=(10, 6))
@@ -532,7 +533,7 @@ class PeakSearch:
         """
         x = self._get_x()
         plt.rc("font", size=12)
-        plt.style.use("seaborn-v0_8-darkgrid")
+        apply_theme()
         if ax is None:
             fig = plt.figure(figsize=(10, 6))
             ax = fig.add_subplot()

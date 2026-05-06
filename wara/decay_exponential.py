@@ -5,6 +5,7 @@ Exponential decay functions for fitting
 import lmfit
 import numpy as np
 import matplotlib.pyplot as plt
+from wara.matplotlib_theme import apply_theme
 
 
 def single_decay_plus_constant(t, A, k, C):
@@ -77,19 +78,19 @@ class Decay_exp:
         only_fit = False
         if ax_fit is None and ax_res is None:
             # plt.rc("font", size=12)
-            plt.style.use("seaborn-v0_8-darkgrid")
+            apply_theme()
             fig = plt.figure(constrained_layout=True, figsize=(8, 6))
             gs = fig.add_gridspec(2, 1, height_ratios=[1, 4])
             ax_res = fig.add_subplot(gs[0, 0])
             ax_fit = fig.add_subplot(gs[1, 0])
         elif ax_fit is None and ax_res is not None:
             # plt.rc("font", size=12)
-            plt.style.use("seaborn-v0_8-darkgrid")
+            apply_theme()
             fig = plt.figure(constrained_layout=True, figsize=(8, 6))
             ax_fit = fig.add_subplot()
         elif ax_fit is not None and ax_res is None:
             # plt.rc("font", size=12)
-            plt.style.use("seaborn-v0_8-darkgrid")
+            apply_theme()
             only_fit = True
 
         if only_fit is False:
