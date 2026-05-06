@@ -6,6 +6,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 import datetime
+from wara.matplotlib_theme import apply_theme
 
 
 def calculate_t_elapsed(date0, date1):
@@ -159,7 +160,7 @@ def plot_points(e_vals, eff_vals, err_vals, e_units="keV", ax=None):
 
 def eff_fit(en, eff, eff_err, order=1, ax_fit=None, ax_res=None):
     plt.rc("font", size=14)
-    plt.style.use("seaborn-darkgrid")
+    apply_theme()
 
     def eff_func(x, a0, a1, a2, a3):
         return (a0 + a1 * np.log(x) + a2 * (np.log(x)) ** 2 + a3 * (np.log(x)) ** 3) / x
@@ -189,7 +190,7 @@ def eff_fit(en, eff, eff_err, order=1, ax_fit=None, ax_res=None):
         ax_res.hlines(y=0, xmin=energies.min(), xmax=energies.max(), lw=3)
         ax_res.set_ylabel("Residual")
         # ax_res.set_xlim([energies.min(), energies.max()])
-        ax_res.set_title(f"Reduced $\chi^2$ = {round(fit.redchi,4)}")
+        ax_res.set_title(rf"Reduced $\chi^2$ = {round(fit.redchi,4)}")
         ax_fit.legend(loc="best")
     elif order == 2:
         emodel = lmfit.Model(eff_func)
@@ -220,7 +221,7 @@ def eff_fit(en, eff, eff_err, order=1, ax_fit=None, ax_res=None):
         ax_res.plot(energies, res, ".", ms=12, alpha=0.5, color="C1")
         ax_res.hlines(y=0, xmin=energies.min(), xmax=energies.max(), lw=3)
         ax_res.set_ylabel("Residual")
-        ax_res.set_title(f"Reduced $\chi^2$ = {round(fit.redchi,4)}")
+        ax_res.set_title(rf"Reduced $\chi^2$ = {round(fit.redchi,4)}")
     return ye
 
 
@@ -243,7 +244,7 @@ def eff_table(
     cols = ["N", f"energy [{e_units}]", "efficiency [%]"]
     N = np.arange(1, len(xs) + 1, 1)
     rs = np.array([N, xs, effs]).T
-    colors = [["lightblue"] * len(cols)] * len(rs)
+    colors = [["#0f1a22"] * len(cols)] * len(rs)
     df = pd.DataFrame(rs, columns=cols)
     df = df.astype({"N": "int32"})
     df = df.astype({"N": "str"})
@@ -254,7 +255,7 @@ def eff_table(
         loc="center",
         cellLoc="center",
         colWidths=[1 / 8, 1 / 2, 1 / 2],
-        colColours=["palegreen"] * len(cols),
+        colColours=["#1a2a3a"] * len(cols),
         cellColours=colors,
     )
     t.scale(t_scale[0], t_scale[1])

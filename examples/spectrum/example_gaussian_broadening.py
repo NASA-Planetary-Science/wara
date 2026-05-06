@@ -1,11 +1,11 @@
-"""
+﻿"""
 Gaussian energy broadening example 
 """
 from wara import file_reader
 import matplotlib.pyplot as plt
 import numpy as np
 
-data = "../data/gui_test_data_hpge_NH3.txt"
+data = "../data/test_data_hpge_NH3.txt"
 
 spe1 = file_reader.read_txt(data)
 fig1 = plt.figure()

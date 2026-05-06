@@ -1,13 +1,13 @@
-"""
+﻿"""
 Example usage of file_reader
 """
 from wara import file_reader
 
-file_txt = "../data/gui_test_data_hpge_NH3.txt"
-file_csv = "../data/gui_test_data_cebr_cal.csv"
-file_mca = "../data/gui_test_data_3He.mca"
-file_spe = "../data/gui_test_data_hpge_Cu.Spe"
-file_cnf = "../data/gui_test_data_lab_sources.cnf"
+file_txt = "../data/test_data_hpge_NH3.txt"
+file_csv = "../data/test_data_cebr_cal.csv"
+file_mca = "../data/test_data_3He.mca"
+file_spe = "../data/test_data_hpge_Cu.Spe"
+file_cnf = "../data/test_data_lab_sources.cnf"
 
 # Read the files and return spectrum objects
 spe_txt = file_reader.read_txt(file_txt)

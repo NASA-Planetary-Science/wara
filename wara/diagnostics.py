@@ -5,6 +5,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 import pandas as pd
 from wara import spectrum as sp
+from wara.matplotlib_theme import apply_theme
 from wara import peaksearch as ps
 from wara import peakfit as pf
 from wara import file_reader
@@ -15,7 +16,7 @@ import natsort
 class Diagnostics:
     def __init__(self, folder_path=None):
         plt.rc("font", size=14)
-        plt.style.use("seaborn-v0_8-darkgrid")
+        apply_theme()
         self.folder_path = folder_path
         self.load_data()
         self.means = []

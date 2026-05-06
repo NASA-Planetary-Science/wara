@@ -8,6 +8,7 @@ import numpy as np
 import pandas as pd
 
 from . import peaksearch as ps
+from .matplotlib_theme import apply_theme
 
 
 class PeakFit:
@@ -294,7 +295,7 @@ class PeakFit:
             res.redchi = res.redchi * self.search.spectrum.livetime
 
         plt.rc("font", size=12)
-        plt.style.use("seaborn-v0_8-darkgrid")
+        apply_theme()
         if fig is None:
             fig = plt.figure(constrained_layout=True, figsize=(8, 6))
             gs = fig.add_gridspec(2, 1, height_ratios=[1, 4])
@@ -537,7 +538,7 @@ class GaussianComponents:
         None.
         """
         plt.rc("font", size=12)
-        plt.style.use("seaborn-v0_8-darkgrid")
+        apply_theme()
         if fig is None:
             fig = plt.figure(figsize=(12, 8))
         if ax is None:

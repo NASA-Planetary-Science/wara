@@ -1,4 +1,4 @@
-"""
+﻿"""
 energy calibration example with non-linear spectrum.
 Currently not working as expected
 """
@@ -12,7 +12,7 @@ from wara import file_reader
 import matplotlib.pyplot as plt
 import numpy as np
 
-file = "../data/gui_test_data_nonlinear.csv"
+file = "../data/test_data_nonlinear.csv"
 df = pd.read_csv(file)
 spect = file_reader.read_csv(file)
 fwhm_at_0 = 1.0

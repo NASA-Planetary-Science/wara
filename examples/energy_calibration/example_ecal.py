@@ -1,4 +1,4 @@
-"""
+﻿"""
 energy calibration example
 """
 
@@ -11,7 +11,7 @@ from wara import file_reader
 import matplotlib.pyplot as plt
 import numpy as np
 
-file = "../data/gui_test_data_cebr.csv"
+file = "../data/test_data_cebr.csv"
 spect = file_reader.read_csv(file)
 fwhm_at_0 = 1.0
 ref_x = 1315

@@ -1,4 +1,4 @@
-"""
+﻿"""
 Example of gain shifting the spectrum
 """
 
@@ -8,7 +8,7 @@ import matplotlib.pyplot as plt
 import pandas as pd
 
 # dataset 1
-file = "../data/gui_test_data_cebr.csv"
+file = "../data/test_data_cebr.csv"
 df = pd.read_csv(file)
 
 cts_np = df.counts.to_numpy()

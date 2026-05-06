@@ -1,4 +1,4 @@
-"""
+﻿"""
 Example using auto_scan.
 """
 from wara import spectrum as sp
@@ -15,7 +15,7 @@ ref_x = 420
 min_snr = 15
 
 # instantiate a Spectrum object
-file = Path(__file__).parent.parent / "data/gui_test_data_hpge_NH3.txt"
+file = Path(__file__).parent.parent / "data/test_data_hpge_NH3.txt"
 spect = file_reader.read_txt(file)
 
 # peaksearch class

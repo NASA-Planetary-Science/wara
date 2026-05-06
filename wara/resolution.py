@@ -5,6 +5,7 @@ import lmfit
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
+from wara.matplotlib_theme import apply_theme
 
 
 def fwhm1(E, a, b):
@@ -17,7 +18,7 @@ def fwhm2(E, a, b, c):
 
 def fwhm_vs_erg(energies, fwhms, x_units, e_units, order=2, fig=None, ax=None):
     plt.rc("font", size=14)
-    plt.style.use("seaborn-v0_8-darkgrid")
+    apply_theme()
     if fig is None:
         fig = plt.figure(constrained_layout=True, figsize=(16, 8))
     if ax is None:
@@ -66,7 +67,7 @@ def fwhm_vs_erg(energies, fwhms, x_units, e_units, order=2, fig=None, ax=None):
         ax.legend(loc="best")
         ax.set_xlabel(f"{x_units}")
         ax.set_ylabel(f"FWHM [{e_units}]")
-        ax.set_title("$a+b\sqrt{E}$")
+        ax.set_title(r"$a+b\sqrt{E}$")
     elif order == 2:
         gmodel = lmfit.Model(fwhm2)
         fit = gmodel.fit(fwhms, E=energies, a=0, b=0, c=0)
@@ -108,7 +109,7 @@ def fwhm_vs_erg(energies, fwhms, x_units, e_units, order=2, fig=None, ax=None):
         ax.legend(loc="best")
         ax.set_xlabel(f"{x_units}")
         ax.set_ylabel(f"FWHM [{e_units}]")
-        ax.set_title("$a+b\sqrt{E+cE^2}$")
+        ax.set_title(r"$a+b\sqrt{E+cE^2}$")
     return fit
 
 
@@ -161,7 +162,7 @@ def fwhm_table(
     cols = ["N", f"energy [{e_units}]", f"FWHM [{e_units}]", "FWHM [%]"]
     N = np.arange(1, len(xs) + 1, 1)
     rs = np.array([N, xs, fwhms, fwhm_perc]).T
-    colors = [["lightblue"] * len(cols)] * len(rs)
+    colors = [["#0f1a22"] * len(cols)] * len(rs)
     df = pd.DataFrame(rs, columns=cols)
     df = df.astype({"N": "int32"})
     df = df.astype({"N": "str"})
@@ -172,7 +173,7 @@ def fwhm_table(
         loc="center",
         cellLoc="center",
         colWidths=[1 / 8, 1 / 3, 1 / 3, 1 / 3],
-        colColours=["palegreen"] * len(cols),
+        colColours=["#1a2a3a"] * len(cols),
         cellColours=colors,
     )
     t.scale(t_scale[0], t_scale[1])

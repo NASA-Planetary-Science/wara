@@ -8,6 +8,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 import datetime
+from wara.matplotlib_theme import apply_theme
 
 
 class Spectrum:
@@ -687,8 +688,8 @@ class Spectrum:
  
         """
         plt.rc("font", size=fontsize)
-        plt.style.use("seaborn-v0_8-darkgrid")
- 
+        apply_theme()
+
         if ax is None:
            fig = plt.figure(figsize=(10, 6))
            fig.patch.set_alpha(0.3)  # set background transparent
@@ -738,7 +739,7 @@ def plot_overlay(spectra, scale="log", fontsize=14, ax=None, colors=None):
     if not spectra:
         raise ValueError("spectra list cannot be empty")
     plt.rc("font", size=fontsize)
-    plt.style.use("seaborn-v0_8-darkgrid")
+    apply_theme()
     if ax is None:
         fig = plt.figure(figsize=(10, 6))
         fig.patch.set_alpha(0.3)

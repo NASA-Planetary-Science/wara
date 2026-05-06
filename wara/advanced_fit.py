@@ -9,6 +9,7 @@ from wara import file_reader
 from wara import spectrum as sp
 from wara import peaksearch as ps
 from wara import peakfit as pf
+from wara.matplotlib_theme import apply_theme
 
 
 class PeakAreaLinearBkg:
@@ -264,7 +265,7 @@ class PeakAreaLinearBkg:
     
     def plot(self, ax=None, areas=False):
         plt.rc("font", size=14)
-        plt.style.use("seaborn-v0_8-darkgrid")
+        apply_theme()
         if ax is None:
             fig = plt.figure(figsize=(10, 6))
             fig.patch.set_alpha(0.3)

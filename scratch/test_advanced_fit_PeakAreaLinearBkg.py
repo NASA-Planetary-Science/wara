@@ -1,4 +1,4 @@
-"""
+﻿"""
 Test advanced fitting PeakAreaLinearBkg class
 """
 import matplotlib.pyplot as plt
@@ -6,8 +6,8 @@ from wara import spectrum as sp
 from wara import advanced_fit as adv
 from wara import file_reader
 
-f1 = "../examples/data/gui_test_data_cebr.csv"
-f2 = "../examples/data/gui_test_data_cebr_cal.csv"
+f1 = "../examples/data/test_data_cebr.csv"
+f2 = "../examples/data/test_data_cebr_cal.csv"
 
 spe1 = file_reader.read_csv_file(f1)
 spe2 = file_reader.read_csv_file(f2)

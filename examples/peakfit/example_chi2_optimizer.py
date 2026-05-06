@@ -1,4 +1,4 @@
-"""
+﻿"""
 Example usage of the chi-squared optimizer.
 It finds the x-range that produces the fit with the best chi-squared
 """
@@ -11,7 +11,7 @@ from wara import file_reader
 
 
 # dataset 1
-file = "../data/gui_test_data_lab_sources.cnf"
+file = "../data/test_data_lab_sources.cnf"
 
 # Required input parameters (in channels)
 fwhm_at_0 = 1.0
