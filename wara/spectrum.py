@@ -8,7 +8,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 import datetime
-from wara.matplotlib_theme import apply_theme
+from wara.matplotlib_theme import apply_theme, style_axes, get_theme, DARK, ACCENT_CYAN
 
 
 class Spectrum:
@@ -705,11 +705,16 @@ class Spectrum:
         else:
              label = self.label
        
-        ax.fill_between(self.x, 0, self.counts, alpha=0.2, color="C1", step="pre")
-        ax.plot(self.x, self.counts, drawstyle="steps", alpha=0.7, label=label)
+        if get_theme() == DARK:
+            color, fill_alpha, line_alpha = ACCENT_CYAN, 0.12, 0.95
+        else:
+            color, fill_alpha, line_alpha = "C1", 0.2, 0.7
+        ax.fill_between(self.x, 0, self.counts, alpha=fill_alpha, color=color, step="pre", linewidth=0)
+        ax.plot(self.x, self.counts, drawstyle="steps", linewidth=1.5, alpha=line_alpha, label=label)
         ax.set_yscale(scale)
         ax.set_xlabel(self.x_units, fontsize=fontsize)
         ax.set_ylabel(self.y_label, fontsize=fontsize)
+        style_axes(ax)
         ax.legend()
         return ax
 

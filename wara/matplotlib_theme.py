@@ -18,6 +18,7 @@ The active theme is stored as a module-level string; the default is SEABORN.
 
 import matplotlib.pyplot as plt
 import matplotlib as mpl
+import matplotlib.ticker as ticker
 
 # ── Theme name constants ───────────────────────────────────────────────────────
 SEABORN     = "seaborn"
@@ -25,37 +26,47 @@ DARK        = "dark"
 PUBLICATION = "publication"
 
 # ── Module-level active theme ──────────────────────────────────────────────────
-_active_theme: str = SEABORN
+_active_theme: str = DARK
 
 # ── Dark theme palette (matches gamma_viewer_tmp.py) ──────────────────────────
-_BG_DARK   = "#0a0a0f"
-_BG_PANEL  = "#0f0f1a"
-_BORDER    = "#1e1e3a"
-_GRID      = "#1a1a2e"
-_TEXT_DIM  = "#5c6bc0"
-_TEXT_PRI  = "#e8eaf6"
+_BG_DARK     = "#0a0a0f"
+_BG_PANEL    = "#0f0f1a"
+_BORDER      = "#1e1e3a"
+_GRID        = "#1a1a2e"
+_TEXT_DIM    = "#5c6bc0"
+_TEXT_PRI    = "#e8eaf6"
+ACCENT_CYAN  = "#00e5ff"
+
+_FONT_FAMILY = "sans-serif"
+_FONT_SANS   = ["DejaVu Sans", "Arial", "Helvetica", "Liberation Sans"]
+_FONT_SIZE   = 14
 
 _DARK_PARAMS: dict = {
     "figure.facecolor":  _BG_DARK,
     "axes.facecolor":    "#06060e",
     "axes.edgecolor":    _BORDER,
     "axes.labelcolor":   _TEXT_DIM,
+    "axes.labelsize":    14,
+    "axes.titlesize":    14,
     "axes.grid":         True,
     "grid.color":        _GRID,
     "grid.linewidth":    0.5,
     "grid.alpha":        0.7,
     "xtick.color":       _TEXT_DIM,
     "ytick.color":       _TEXT_DIM,
-    "xtick.labelsize":   9,
-    "ytick.labelsize":   9,
+    "xtick.labelsize":   14,
+    "ytick.labelsize":   14,
     "text.color":        _TEXT_PRI,
+    "font.family":       _FONT_FAMILY,
+    "font.sans-serif":   _FONT_SANS,
+    "font.size":         _FONT_SIZE,
     "figure.edgecolor":  _BG_DARK,
     "savefig.facecolor": _BG_DARK,
     "legend.facecolor":  _BG_PANEL,
     "legend.edgecolor":  _BORDER,
     "legend.labelcolor": _TEXT_PRI,
-    "legend.fontsize":   9,
-    "lines.linewidth":   1.2,
+    "legend.fontsize":   12,
+    "lines.linewidth":   1.5,
     "axes.prop_cycle":   mpl.cycler(color=[
         "#00e5ff", "#39ff14", "#ffb300", "#ff3b5c",
         "#b388ff", "#69f0ae", "#ff6d00", "#40c4ff",
@@ -82,8 +93,8 @@ _PUBLICATION_PARAMS: dict = {
     "axes.edgecolor":          "black",
     "axes.linewidth":          0.8,
     "axes.labelcolor":         "black",
-    "axes.labelsize":          11,
-    "axes.titlesize":          11,
+    "axes.labelsize":          14,
+    "axes.titlesize":          14,
     "axes.grid":               True,
     "grid.color":              "#cccccc",
     "grid.linewidth":          0.5,
@@ -91,8 +102,8 @@ _PUBLICATION_PARAMS: dict = {
     "grid.alpha":              0.6,
     "xtick.color":             "black",
     "ytick.color":             "black",
-    "xtick.labelsize":         9,
-    "ytick.labelsize":         9,
+    "xtick.labelsize":         12,
+    "ytick.labelsize":         12,
     "xtick.direction":         "in",
     "ytick.direction":         "in",
     "xtick.top":               True,
@@ -108,22 +119,36 @@ _PUBLICATION_PARAMS: dict = {
     "xtick.minor.size":        2.0,
     "ytick.minor.size":        2.0,
     "text.color":              "black",
-    "font.family":             "sans-serif",
-    "font.sans-serif":         ["DejaVu Sans", "Arial", "Helvetica", "Liberation Sans"],
-    "font.size":               10,
+    "font.family":             _FONT_FAMILY,
+    "font.sans-serif":         _FONT_SANS,
+    "font.size":               _FONT_SIZE,
     "figure.edgecolor":        "white",
     "savefig.facecolor":       "white",
     "savefig.dpi":             300,
     "savefig.bbox":            "tight",
     "legend.facecolor":        "white",
     "legend.edgecolor":        "#aaaaaa",
-    "legend.fontsize":         9,
+    "legend.fontsize":         12,
     "legend.framealpha":       0.9,
     "lines.linewidth":         1.5,
     "lines.markersize":        5,
     "figure.figsize":          [6.4, 4.0],
     "axes.prop_cycle":         mpl.cycler(color=_WONG_COLORS),
 }
+
+
+def style_axes(ax) -> None:
+    """Apply per-axis styling that cannot be set via rcParams (spines, minor grid, tick params).
+    Only has effect when the active theme is DARK; a no-op otherwise."""
+    if _active_theme != DARK:
+        return
+    for spine in ax.spines.values():
+        spine.set_color(_BORDER)
+    ax.tick_params(colors=_TEXT_DIM, which="both", length=3)
+    ax.xaxis.set_minor_locator(ticker.AutoMinorLocator())
+    ax.yaxis.set_minor_locator(ticker.AutoMinorLocator())
+    ax.grid(True, which="major", color=_GRID, linewidth=0.5, alpha=0.7)
+    ax.grid(True, which="minor", color=_GRID, linewidth=0.2, alpha=0.3)
 
 
 def set_theme(theme: str) -> None:
@@ -153,6 +178,11 @@ def apply_theme(theme: str | None = None) -> None:
 
     if target == SEABORN:
         plt.style.use("seaborn-v0_8-darkgrid")
+        mpl.rcParams.update({
+            "font.family":    _FONT_FAMILY,
+            "font.sans-serif": _FONT_SANS,
+            "font.size":      _FONT_SIZE,
+        })
 
     elif target == DARK:
         plt.style.use("default")
