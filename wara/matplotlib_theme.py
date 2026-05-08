@@ -26,7 +26,7 @@ DARK        = "dark"
 PUBLICATION = "publication"
 
 # ── Module-level active theme ──────────────────────────────────────────────────
-_active_theme: str = DARK
+_active_theme: str = SEABORN 
 
 # ── Dark theme palette (matches gamma_viewer_tmp.py) ──────────────────────────
 _BG_DARK     = "#0a0a0f"
