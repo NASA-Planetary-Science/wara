@@ -715,7 +715,7 @@ class Spectrum:
         ax.set_xlabel(self.x_units, fontsize=fontsize)
         ax.set_ylabel(self.y_label, fontsize=fontsize)
         style_axes(ax)
-        ax.legend()
+        ax.legend(fontsize=fontsize)
         return ax
 
 
