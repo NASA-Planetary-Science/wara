@@ -1,10 +1,7 @@
 ﻿"""
 Example of advanced fitting: peak area minus linear background
 """
-from wara import spectrum as sp
-import numpy as np
 import matplotlib.pyplot as plt
-import pandas as pd
 from wara import file_reader
 from wara import advanced_fit as af
 

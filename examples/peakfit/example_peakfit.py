@@ -54,3 +54,22 @@ gauss = gaussian(xg, Ag, mug, sigg)
 print(f"Area using peakfit = {Ag}")
 print(f"Area using independent Gaussian = {gauss.sum()}")
 
+
+# ---------------------------------------------------------------------------
+# summary() — one DataFrame row per peak with values and uncertainties
+# ---------------------------------------------------------------------------
+print("\nSummary table:")
+print(fit.summary())
+
+
+# ---------------------------------------------------------------------------
+# fit_quality() — goodness-of-fit metrics beyond reduced chi-squared
+# ---------------------------------------------------------------------------
+quality = fit.fit_quality()
+print("\nFit quality:")
+for k, v in quality.items():
+    print(f"  {k:>20s} = {v}")
+# normaltest_pvalue interpretation: p > ~0.05 → residuals consistent with
+# the expected normal distribution; very small p → the model is likely
+# missing structure (extra peak, wrong background, etc.).
+

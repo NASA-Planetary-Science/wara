@@ -1,15 +1,13 @@
 """
 Advanced fitting classes and functions
 """
+import lmfit
 import matplotlib.pyplot as plt
 import numpy as np
-import pandas as pd
 import mplcursors
-from wara import file_reader
 from wara import spectrum as sp
-from wara import peaksearch as ps
-from wara import peakfit as pf
 from wara.matplotlib_theme import apply_theme
+from wara.peakfit import PeakFit
 
 
 class PeakAreaLinearBkg:
@@ -340,3 +338,247 @@ class PeakAreaLinearBkg:
         ax.set_xlabel(self.spect.x_units)
         ax.set_ylabel(self.spect.y_label)
         plt.show()
+
+
+# ---------------------------------------------------------------------------
+# Extra peak-profile families on top of the basic PeakFit Gaussian model.
+# ---------------------------------------------------------------------------
+
+_PROFILE_MODELS = {
+    "gauss":   lmfit.models.GaussianModel,
+    "voigt":   lmfit.models.VoigtModel,
+    "pvoigt":  lmfit.models.PseudoVoigtModel,
+    "skewed":  lmfit.models.SkewedGaussianModel,
+    "doniach": lmfit.models.DoniachModel,
+}
+
+
+class MultiProfilePeakFit(PeakFit):
+    """
+    PeakFit variant supporting additional line shapes:
+
+    * ``"gauss"``   — plain Gaussian (same as :class:`PeakFit`).
+    * ``"voigt"``   — Voigt (Gaussian * Lorentzian).
+    * ``"pvoigt"``  — Pseudo-Voigt (weighted G+L sum).
+    * ``"skewed"``  — SkewedGaussian (low-energy tailing).
+    * ``"doniach"`` — Doniach-Sunjic (photoemission asymmetry).
+
+    Parameters
+    ----------
+    profile : str
+        Line-shape family. Default ``"voigt"``.
+    *args, **kwargs
+        Forwarded to :class:`wara.peakfit.PeakFit`. The legacy
+        ``skew=True`` kwarg is honoured for backwards compatibility but
+        ``profile="skewed"`` is the preferred spelling.
+
+    Notes
+    -----
+    ``shared_sigma=True`` constrains every peak's *Gaussian* sigma via
+    ``fwhm = a + b*sqrt(E)``. For Voigt / PseudoVoigt the *total* FWHM is
+    a function of both sigma and gamma, so the shared constraint is
+    approximate (it only links the Gaussian component). Override gamma
+    or fraction via ``hints`` if you need finer control.
+    """
+
+    def __init__(self, search, xrange, *args, profile="voigt", **kwargs):
+        profile = profile.lower()
+        if profile not in _PROFILE_MODELS:
+            raise ValueError(
+                f"Unknown profile {profile!r}. "
+                f"Choose from {sorted(_PROFILE_MODELS)}."
+            )
+        self.profile = profile
+        # The "skewed" profile is also reachable via skew=True on the
+        # parent class; pick consistent behaviour without surprising the
+        # parent's gamma seeding.
+        if profile == "skewed":
+            kwargs.setdefault("skew", True)
+        super().__init__(search, xrange, *args, **kwargs)
+
+    def _make_peak_component(self, prefix):
+        return _PROFILE_MODELS[self.profile](prefix=prefix)
+
+
+# ---------------------------------------------------------------------------
+# Continuum-only background fit (no peaks).
+# ---------------------------------------------------------------------------
+
+
+class ContinuumFit:
+    """
+    Fit a polynomial continuum to a spectrum, masking out peak regions.
+
+    Useful for estimating the smooth baseline under one or many peaks
+    without modelling the peaks themselves. The peak locations and widths
+    come from a PeakSearch; every channel within +/-``mask_fwhm`` FWHMs
+    of a detected peak is excluded from the fit. The polynomial is fit to
+    what remains, weighted by the spectrum's per-bin uncertainties.
+
+    Parameters
+    ----------
+    search : PeakSearch
+        Provides both the spectrum and the list of peaks to mask out.
+    xrange : 2-element list or None, optional
+        Window over which to fit the continuum, in the same units as
+        PeakFit's xrange (energies if calibrated, otherwise channels).
+        Defaults to the full spectrum.
+    degree : int, optional
+        Polynomial degree (0-7, lmfit's limit). Default 3.
+    mask_fwhm : float, optional
+        Number of FWHMs around each peak to exclude from the fit.
+        Default 3.0 (covers ~99.7% of a Gaussian peak's area).
+
+    Attributes
+    ----------
+    fit_result : lmfit.model.ModelResult
+        The underlying lmfit result. Carries ``redchi``, ``aic``, ``bic``,
+        covariance, etc.
+    continuum_mask : ndarray of bool
+        True for channels used in the fit (in-range and not under a peak).
+    x_cont, y_cont, err_cont : ndarray
+        The points actually fed to the polynomial fit.
+    """
+
+    def __init__(self, search, xrange=None, degree=3, mask_fwhm=3.0):
+        from . import peaksearch as ps
+
+        if not isinstance(search, ps.PeakSearch):
+            raise TypeError(
+                f"search must be a PeakSearch object, got {type(search)}"
+            )
+        if not 0 <= degree <= 7:
+            raise ValueError(
+                f"degree must be in [0, 7] (lmfit limit), got {degree}"
+            )
+        self.search = search
+        self.degree = int(degree)
+        self.mask_fwhm = float(mask_fwhm)
+
+        spect = search.spectrum
+        if spect.energies is None:
+            self.x = spect.channels
+        else:
+            self.x = spect.energies
+        if xrange is None:
+            xrange = [float(self.x[0]), float(self.x[-1])]
+        self.xrange = list(xrange)
+
+        self._fit()
+
+    def _build_mask(self):
+        """Return boolean mask of channels kept for the continuum fit."""
+        x = self.x
+        keep = (x >= self.xrange[0]) & (x <= self.xrange[1])
+        # PeakSearch.fwhm_guess is parametrized in channels, so we mask
+        # in channel-index space — this avoids the channel<->energy
+        # FWHM rescaling that bites elsewhere in the package.
+        n = len(x)
+        for pidx, fwhm in zip(
+            self.search.peaks_idx, self.search.fwhm_guess
+        ):
+            half = int(np.ceil(self.mask_fwhm * fwhm))
+            lo = max(0, int(pidx) - half)
+            hi = min(n, int(pidx) + half + 1)
+            keep[lo:hi] = False
+        return keep
+
+    def _fit(self):
+        spect = self.search.spectrum
+        mask = self._build_mask()
+        if mask.sum() < self.degree + 1:
+            raise ValueError(
+                f"Only {int(mask.sum())} continuum points available after "
+                f"masking, need at least {self.degree + 1} for a "
+                f"degree-{self.degree} polynomial. Try a wider xrange, "
+                "a smaller mask_fwhm, or a lower degree."
+            )
+        x_cont = self.x[mask]
+        y_cont = spect.counts[mask].copy()
+        err_cont = spect.counts_err[mask].copy()
+        err_cont[err_cont <= 0] = 1.0
+
+        model = lmfit.models.PolynomialModel(degree=self.degree)
+        pars = model.guess(y_cont, x=x_cont)
+        # scale_covar=False matches PeakFit's convention: treat the
+        # provided weights as absolute (known) uncertainties.
+        self.fit_result = model.fit(
+            y_cont,
+            pars,
+            x=x_cont,
+            weights=1.0 / err_cont,
+            scale_covar=False,
+        )
+        self.continuum_mask = mask
+        self.x_cont = x_cont
+        self.y_cont = y_cont
+        self.err_cont = err_cont
+
+    def evaluate(self, x=None):
+        """
+        Evaluate the fitted continuum at the given x values.
+
+        Defaults to evaluating across the full xrange of the fit.
+        """
+        if x is None:
+            in_range = (self.x >= self.xrange[0]) & (self.x <= self.xrange[1])
+            x = self.x[in_range]
+        return self.fit_result.eval(x=np.asarray(x))
+
+    def subtract(self):
+        """
+        Return (x, residual) over the fit window — counts minus continuum.
+
+        Useful as a quick way to look at "what's left" after the smooth
+        baseline is removed (peaks plus noise).
+        """
+        in_range = (self.x >= self.xrange[0]) & (self.x <= self.xrange[1])
+        x_full = self.x[in_range]
+        y_full = self.search.spectrum.counts[in_range]
+        return x_full, y_full - self.evaluate(x_full)
+
+    def plot(self, ax=None):
+        """
+        Plot the spectrum, the masked-out peak regions, and the fitted
+        continuum.
+        """
+        from .matplotlib_theme import apply_theme
+
+        apply_theme()
+        with plt.rc_context({"font.size": 12}):
+            if ax is None:
+                fig, ax = plt.subplots(figsize=(10, 6))
+                fig.patch.set_alpha(0.3)
+
+            in_range = (self.x >= self.xrange[0]) & (self.x <= self.xrange[1])
+            x_full = self.x[in_range]
+            y_full = self.search.spectrum.counts[in_range]
+            ax.plot(x_full, y_full, drawstyle="steps-mid", lw=1, label="data")
+
+            # Highlight the channels under peaks (excluded from the fit).
+            masked_out = in_range & ~self.continuum_mask
+            ax.plot(
+                self.x[masked_out],
+                self.search.spectrum.counts[masked_out],
+                ".",
+                color="red",
+                ms=4,
+                alpha=0.5,
+                label=f"masked ({self.mask_fwhm:g}xFWHM around peaks)",
+            )
+
+            y_cont_full = self.evaluate(x_full)
+            ax.plot(
+                x_full,
+                y_cont_full,
+                "g-",
+                lw=2,
+                label=f"poly{self.degree} continuum",
+            )
+
+            ax.set_xlabel(self.search.spectrum.x_units)
+            ax.set_ylabel("Counts")
+            ax.set_title(
+                rf"Continuum fit: $\chi^2_\nu$ = {self.fit_result.redchi:.3f}"
+            )
+            ax.legend(loc="best")

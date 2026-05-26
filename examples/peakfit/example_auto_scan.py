@@ -1,9 +1,7 @@
 ﻿"""
 Example using auto_scan.
+Produces a list of peakfit objects given a single search object
 """
-from wara import spectrum as sp
-import numpy as np
-import pandas as pd
 from wara import peaksearch as ps
 from wara import peakfit as pf
 from wara import file_reader

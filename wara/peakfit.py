@@ -2,6 +2,11 @@
 Peak fit class: Gaussian + Linear fit
 """
 
+import json
+import re
+import warnings
+from pathlib import Path
+
 import lmfit
 import matplotlib.pyplot as plt
 import numpy as np
@@ -12,7 +17,16 @@ from .matplotlib_theme import apply_theme
 
 
 class PeakFit:
-    def __init__(self, search, xrange, bkg="poly1", skew=False):
+    def __init__(
+        self,
+        search,
+        xrange,
+        bkg="poly1",
+        skew=False,
+        *,
+        shared_sigma=False,
+        hints=None,
+    ):
         """
         Use the package LMfit to fit and plot peaks with Gaussians with a
         given background. It must be initialized with a PeakSearch object.
@@ -29,16 +43,37 @@ class PeakFit:
             Can be 'linear', 'quadratic', 'exponential' or 'polyn', where n
             is any degree polynomial. The default is 'poly1'.
         skew : bool, optional
-            fit a skewed Gaussian instead. The default is 'False'
+            fit a skewed Gaussian instead. The default is 'False'.
+        shared_sigma : bool, optional
+            Link every peak's sigma through the same resolution curve
+
+                fwhm(E) = |a + b * sqrt(E)|,  sigma = fwhm / 2.355
+
+            (the same parametrization used by PeakSearch, wrapped in abs()
+            so the derived sigma can never go negative during optimization).
+            Two free shared parameters ``_fwhm_a`` and ``_fwhm_b`` replace
+            the individual sigmas. Initial values come from the PeakSearch.
+            When the window contains only one peak, ``_fwhm_b`` is fixed at
+            the search's value (otherwise the pair is underdetermined).
+            Either parameter can be pinned through ``hints``. Note: in a
+            narrow window where all peaks have similar sqrt(E), the (a, b)
+            pair is degenerate — the fit will pick *some* (a, b) that
+            reproduces the right sigmas, possibly with unphysical signs;
+            only the derived FWHMs are meaningful in that regime. The
+            default is False.
+        hints : dict, optional
+            Per-parameter overrides applied after defaults (and after the
+            shared-sigma expressions) but before the fit. Maps parameter
+            name to a dict of attributes accepted by
+            ``lmfit.Parameter.set`` (e.g. ``value``, ``min``, ``max``,
+            ``vary``, ``expr``). Example::
+
+                hints={"g1_center": {"value": 661.7, "vary": False}}
 
         Raises
         ------
-        Exception
+        TypeError
             'search' must be a PeakSearch object.
-
-        Returns
-        -------
-        None.
 
         """
 
@@ -48,7 +83,9 @@ class PeakFit:
         self.xrange = xrange
         self.continuum = None
         self.bkg_key = None
-        self.bkg = bkg
+        # Normalize the user-supplied bkg name once, here, so the rest of
+        # the class can rely on canonical values ("exponential", not "exp").
+        self.bkg = "exponential" if bkg == "exp" else bkg
         self.x_data = None
         self.y_data = None
         self.peak_info = []
@@ -56,11 +93,33 @@ class PeakFit:
         self.fit_result = None
         self.x_units = search.spectrum.x_units
         self.chan = search.spectrum.channels
+        self.skew = bool(skew)
+        self.shared_sigma = bool(shared_sigma)
+        self.hints = dict(hints) if hints else {}
         if search.spectrum.energies is None:
             self.x = search.spectrum.channels
         else:
             self.x = search.spectrum.energies
         self.gaussians_bkg(skew)
+
+    # -- Hooks for subclasses ----------------------------------------------
+    def _make_peak_component(self, prefix):
+        """
+        Build a single peak component model. Override in subclasses to use
+        Voigt, PseudoVoigt, etc. The returned model MUST expose parameters
+        ``{prefix}center``, ``{prefix}sigma``, and ``{prefix}amplitude``.
+        """
+        if self.skew:
+            return lmfit.models.SkewedGaussianModel(prefix=prefix)
+        return lmfit.models.GaussianModel(prefix=prefix)
+
+    def _set_peak_initial_values(self, pars, prefix, center, sigma, amplitude):
+        """Seed per-peak parameter values. Override to seed any extras."""
+        pars[f"{prefix}center"].set(value=center)
+        pars[f"{prefix}sigma"].set(value=sigma)
+        pars[f"{prefix}amplitude"].set(value=amplitude)
+        if self.skew:
+            pars[f"{prefix}gamma"].set(value=-1)
 
     def find_peaks_range(self):
         """
@@ -76,11 +135,11 @@ class PeakFit:
 
         """
 
-        mask = (self.x[self.search.peaks_idx] > self.xrange[0]) * (
+        mask = (self.x[self.search.peaks_idx] > self.xrange[0]) & (
             self.x[self.search.peaks_idx] < self.xrange[1]
         )
 
-        if sum(mask) == 0:
+        if mask.sum() == 0:
             raise ValueError(
                 f"No peaks found within range {self.xrange}. "
                 "Try lowering min_snr or adjusting the xrange."
@@ -145,11 +204,14 @@ class PeakFit:
         None.
 
         """
-        maskx = (self.x > self.xrange[0]) * (self.x < self.xrange[1])
+        maskx = (self.x > self.xrange[0]) & (self.x < self.xrange[1])
         m, b, amp, erg, sig = self.init_values()
         npeaks = len(erg)
 
-        y0 = self.search.spectrum.counts[maskx]
+        # .copy() is important: y0 gets mutated below (zero-replacement) and
+        # boolean indexing usually copies, but we don't want to depend on that
+        # — we must never alter spectrum.counts.
+        y0 = self.search.spectrum.counts[maskx].copy()
         x0 = self.x[maskx]
 
         # Use propagated per-bin uncertainties from the Spectrum object.
@@ -176,32 +238,91 @@ class PeakFit:
             pars = quad_mod.guess(y0, x=x0)
             model = quad_mod
             self.bkg_key = "quadratic"
-        elif self.bkg == "exp" or self.bkg == "exponential":
+        elif self.bkg == "exponential":
             exp_mod = lmfit.models.ExponentialModel()
             pars = exp_mod.guess(y0, x=x0)
             model = exp_mod
-            self.bkg = "exponential"
             self.bkg_key = "exponential"
         else:
-            # assume polynomial of degree n
-            n = [int(s) for s in list(self.bkg) if s.isdigit()][0]
+            # polynomial of degree n, specified as "polyN" (e.g. "poly3").
+            # lmfit's PolynomialModel supports degree 0–7.
+            match = re.fullmatch(r"poly(\d+)", self.bkg)
+            if match is None:
+                raise ValueError(
+                    f"Unknown bkg {self.bkg!r}. Expected 'linear', "
+                    "'quadratic', 'exponential', or 'polyN' with N=0..7."
+                )
+            n = int(match.group(1))
+            if not 0 <= n <= 7:
+                raise ValueError(
+                    f"Polynomial degree must be 0..7, got {n} (bkg={self.bkg!r})."
+                )
             poly_mod = lmfit.models.PolynomialModel(degree=n)
             pars = poly_mod.guess(y0, x=x0)
             model = poly_mod
             self.bkg_key = "polynomial"
 
         for i in range(npeaks):
-            if skeweness:
-                gauss0 = lmfit.models.SkewedGaussianModel(prefix=f"g{i+1}_")
+            prefix = f"g{i+1}_"
+            comp = self._make_peak_component(prefix)
+            pars.update(comp.make_params())
+            self._set_peak_initial_values(pars, prefix, erg[i], sig[i], amp[i])
+            model += comp
+
+        # --- Shared sigma: link every peak's sigma through fwhm = a + b*sqrt(E)
+        if self.shared_sigma and npeaks > 0:
+            # Seed a, b from PeakSearch's resolution curve. The search
+            # works in channels; rescale to whatever units self.x is in
+            # by the local energy-per-channel slope. NOTE: the `m`
+            # returned by init_values() is the BACKGROUND slope (can be
+            # negative) — not what we want here, so compute the
+            # energy/channel slope explicitly.
+            chan_in = self.chan[maskx]
+            x_in = self.x[maskx]
+            if len(chan_in) > 1 and self.search.spectrum.energies is not None:
+                eperch = float(np.polyfit(chan_in, x_in, 1)[0])
             else:
-                gauss0 = lmfit.models.GaussianModel(prefix=f"g{i+1}_")
-            pars.update(gauss0.make_params())
-            pars[f"g{i+1}_center"].set(value=erg[i])
-            pars[f"g{i+1}_sigma"].set(value=sig[i])
-            pars[f"g{i+1}_amplitude"].set(value=amp[i])
-            if skeweness:
-                pars[f"g{i+1}_gamma"].set(value=-1)
-            model += gauss0
+                eperch = 1.0
+            a_init = eperch * self.search.fwhm_at_0
+            b_init = (
+                np.sqrt(eperch)
+                * self.search.ref_fwhm
+                / np.sqrt(self.search.ref_x)
+            )
+            # Leave _fwhm_a, _fwhm_b unbounded so the optimizer can compute
+            # a proper covariance (hard bounds at zero block the Jacobian
+            # estimate when peaks at similar energies drive b to ~0).
+            # The abs() in the sigma expression below keeps the derived
+            # sigma strictly positive regardless of sign.
+            pars.add("_fwhm_a", value=float(a_init), vary=True)
+            # With only one peak, a and b are degenerate — keep b at the
+            # search's value and let a absorb any offset.
+            b_vary = npeaks > 1
+            pars.add("_fwhm_b", value=float(b_init), vary=b_vary)
+            # Bound each peak's center to the fit window so the
+            # sqrt(center) term in the expression below can never see a
+            # negative number during optimization.
+            for i in range(npeaks):
+                prefix = f"g{i+1}_"
+                pars[f"{prefix}center"].set(
+                    min=max(0.0, float(self.xrange[0])),
+                    max=float(self.xrange[1]),
+                )
+                pars[f"{prefix}sigma"].set(
+                    expr=(
+                        f"abs(_fwhm_a + _fwhm_b * sqrt({prefix}center))"
+                        " / 2.355"
+                    )
+                )
+
+        # --- Apply user hints last so they always win
+        for pname, attrs in self.hints.items():
+            if pname not in pars:
+                raise KeyError(
+                    f"hints contains {pname!r}, but no such parameter exists. "
+                    f"Available: {sorted(pars.keys())}"
+                )
+            pars[pname].set(**attrs)
 
         # weights = 1/σ so that χ² = Σ [(y - f) / σ]²
         # Using counts_err gives correct weights even for background-subtracted
@@ -219,15 +340,26 @@ class PeakFit:
         # Save peak info: mean, net area, fwhm, and corresponding errors
         self.continuum = components[self.bkg_key].sum()
         epar = fit0.params
+
+        # Correction factor: A = (counts/ch) * keV → multiply by ch/keV.
+        # Rate factor converts area into cps when the spectrum has a
+        # livetime and is stored as raw counts; if the spectrum is already
+        # in cps, the amplitude is already a rate and no division is
+        # needed. Without livetime, leave as raw counts.
+        spect = self.search.spectrum
+        if spect.energies is None:
+            correct_f = 1.0
+        else:
+            che = self.chan[maskx]
+            correct_f = float(np.diff(spect.energies[che]).mean())
+        if spect.cps or spect.livetime is None:
+            rate_factor = 1.0
+        else:
+            rate_factor = spect.livetime
+
         for i in range(npeaks):
             mean0 = fit0.best_values[f"g{i+1}_center"]
-            if self.search.spectrum.energies is None:
-                correct_f = 1
-            else:
-                che = self.chan[maskx]
-                correct_f = np.diff(self.search.spectrum.energies[che]).mean()
-            # Correction factor: A = (counts/ch) * keV → multiply by ch/keV
-            area0 = fit0.best_values[f"g{i+1}_amplitude"] / correct_f
+            area0 = fit0.best_values[f"g{i+1}_amplitude"] / correct_f / rate_factor
             fwhm0 = fit0.best_values[f"g{i+1}_sigma"] * 2.355
             dict_peak_info = {
                 "mean": mean0,
@@ -242,10 +374,7 @@ class PeakFit:
 
             amp_err = epar[f"g{i+1}_amplitude"].stderr
             amp_err = amp_err if amp_err is not None else np.nan
-            if self.search.spectrum.livetime is None:
-                area_err = amp_err / correct_f
-            else:
-                area_err = amp_err / correct_f / self.search.spectrum.livetime
+            area_err = amp_err / correct_f / rate_factor
 
             sig_err = epar[f"g{i+1}_sigma"].stderr
             sig_err = sig_err if sig_err is not None else np.nan
@@ -257,6 +386,105 @@ class PeakFit:
                 "fwhm_err": fwhm_err,
             }
             self.peak_err.append(dict_peak_err)
+
+    # -- Result introspection ----------------------------------------------
+    def summary(self):
+        """
+        Return a DataFrame with one row per fitted peak.
+
+        Columns: mean, mean_err, area, area_err, fwhm, fwhm_err.
+        """
+        rows = []
+        for info, err in zip(self.peak_info, self.peak_err):
+            rows.append({
+                "mean": info["mean"],
+                "mean_err": err["mean_err"],
+                "area": info["area"],
+                "area_err": err["area_err"],
+                "fwhm": info["fwhm"],
+                "fwhm_err": err["fwhm_err"],
+            })
+        return pd.DataFrame(rows)
+
+    def fit_quality(self):
+        """
+        Goodness-of-fit metrics beyond reduced chi-squared.
+
+        Returns
+        -------
+        dict with:
+            redchi : reduced chi-squared from lmfit
+            aic    : Akaike information criterion
+            bic    : Bayesian information criterion
+            nfev   : number of model evaluations
+            success : lmfit's success flag
+            normaltest_pvalue : p-value of D'Agostino-Pearson normality test
+                on standardized residuals (y - model)/sigma. p > ~0.05 is
+                consistent with normally distributed residuals; very small
+                values suggest the model is missing structure. NaN if there
+                are too few points to compute the test.
+        """
+        from scipy import stats
+
+        res = self.fit_result
+        err = self.search.spectrum.counts_err[
+            (self.x > self.xrange[0]) & (self.x < self.xrange[1])
+        ]
+        err = np.where(err > 0, err, 1.0)
+        std_resid = res.residual  # lmfit residual = (data - model) * weights
+        if len(std_resid) >= 8:
+            _, pval = stats.normaltest(std_resid)
+        else:
+            pval = float("nan")
+        return {
+            "redchi": float(res.redchi),
+            "aic": float(res.aic),
+            "bic": float(res.bic),
+            "nfev": int(res.nfev),
+            "success": bool(res.success),
+            "normaltest_pvalue": float(pval),
+        }
+
+    # -- Serialization -----------------------------------------------------
+    def save_json(self, path):
+        """
+        Save the underlying lmfit result and minimal metadata to a JSON
+        file. Restore with ``PeakFit.load_json(path, search)``.
+
+        Note: the parent ``PeakSearch`` and ``Spectrum`` are NOT serialized
+        — load_json takes the search separately so the same spectrum can
+        be re-attached.
+        """
+        path = Path(path)
+        payload = {
+            "fit_result": self.fit_result.dumps(),
+            "xrange": list(self.xrange),
+            "bkg": self.bkg,
+            "skew": self.skew,
+            "shared_sigma": self.shared_sigma,
+            "hints": self.hints,
+        }
+        path.write_text(json.dumps(payload, indent=2))
+
+    @classmethod
+    def load_json(cls, path, search):
+        """Restore a PeakFit previously written with ``save_json``."""
+        path = Path(path)
+        payload = json.loads(path.read_text())
+        obj = cls(
+            search=search,
+            xrange=payload["xrange"],
+            bkg=payload["bkg"],
+            skew=payload["skew"],
+            shared_sigma=payload.get("shared_sigma", False),
+            hints=payload.get("hints", {}),
+        )
+        # Replace the freshly-fit result with the saved one so the round
+        # trip preserves the exact reported parameters/covariance.
+        # lmfit's ModelResult.loads() reconstructs into self; we use the
+        # freshly-built result as the host (its .model matches the saved one).
+        obj.fit_result.loads(payload["fit_result"])
+        return obj
 
     def plot(
         self,
@@ -292,68 +520,76 @@ class PeakFit:
         y_pred = res.eval(x=x_pred)
         comps = res.eval_components()
         if self.search.spectrum.cps and self.search.spectrum.livetime is not None:
-            res.redchi = res.redchi * self.search.spectrum.livetime
+            redchi_display = res.redchi * self.search.spectrum.livetime
+        else:
+            redchi_display = res.redchi
 
-        plt.rc("font", size=12)
         apply_theme()
-        if fig is None:
-            fig = plt.figure(constrained_layout=True, figsize=(8, 6))
-            gs = fig.add_gridspec(2, 1, height_ratios=[1, 4])
-        if ax_res is None:
-            ax_res = fig.add_subplot(gs[0, 0])
-        if ax_fit is None:
-            ax_fit = fig.add_subplot(gs[1, 0])
-        fig.patch.set_alpha(0.3)
+        with plt.rc_context({"font.size": 12}):
+            if fig is None:
+                fig = plt.figure(constrained_layout=True, figsize=(8, 6))
+            # Build a 2-row gridspec on demand whenever we need to create
+            # an axis. Without this, passing `fig` but leaving
+            # `ax_res`/`ax_fit` as None used to raise NameError because
+            # `gs` was only defined in the `fig is None` branch.
+            if ax_res is None or ax_fit is None:
+                gs = fig.add_gridspec(2, 1, height_ratios=[1, 4])
+            if ax_res is None:
+                ax_res = fig.add_subplot(gs[0, 0])
+            if ax_fit is None:
+                ax_fit = fig.add_subplot(gs[1, 0])
+            fig.patch.set_alpha(0.3)
 
-        ax_res.plot(x, res.residual, ".", ms=10, alpha=0.5)
-        ax_res.hlines(y=0, xmin=x.min(), xmax=x.max(), lw=3)
-        ax_res.set_ylabel("Residual")
-        ax_res.set_xlim([x.min(), x.max()])
-        ax_res.set_xticks([])
+            ax_res.plot(x, res.residual, ".", ms=10, alpha=0.5)
+            ax_res.hlines(y=0, xmin=x.min(), xmax=x.max(), lw=3)
+            ax_res.set_ylabel("Residual")
+            ax_res.set_xlim([x.min(), x.max()])
+            ax_res.set_xticks([])
 
-        ax_fit.set_title(rf"Reduced $\chi^2$ = {res.redchi:.4f}")
-        ax_fit.plot(x, y, "bo", alpha=0.5, label="data")
-        ax_fit.plot(x_pred, y_pred, "r", lw=3, alpha=0.5, label="Best fit")
-        ax_fit.plot(x, comps[self.bkg_key], "g--", lw=3, label=f"bkg: {self.bkg}")
-        m = 1
-        for cp in range(len(comps) - 1):
-            if m == 1:
+            ax_fit.set_title(rf"Reduced $\chi^2$ = {redchi_display:.4f}")
+            ax_fit.plot(x, y, "bo", alpha=0.5, label="data")
+            ax_fit.plot(x_pred, y_pred, "r", lw=3, alpha=0.5, label="Best fit")
+            ax_fit.plot(
+                x, comps[self.bkg_key], "g--", lw=3, label=f"bkg: {self.bkg}"
+            )
+            n_gauss = len(comps) - 1
+            for cp in range(n_gauss):
+                label = "Components" if cp == 0 else None
                 ax_fit.plot(
                     x,
                     comps[self.bkg_key] + comps[f"g{cp+1}_"],
                     "k--",
                     lw=2,
-                    label="Components",
-                )
-                m = 0
-            else:
-                ax_fit.plot(
-                    x, comps[self.bkg_key] + comps[f"g{cp+1}_"], "k--", lw=2
+                    label=label,
                 )
 
-        dely = res.eval_uncertainty(x=x_pred, sigma=3)
-        ax_fit.fill_between(
-            x_pred,
-            y_pred - dely,
-            y_pred + dely,
-            color="#ABABAB",
-            label=r"3-$\sigma$ uncertainty band",
-        )
-        ax_fit.set_xlabel(self.x_units)
-        if legend == "on":
-            ax_fit.legend(loc="upper left", ncol=2)
+            dely = res.eval_uncertainty(x=x_pred, sigma=3)
+            ax_fit.fill_between(
+                x_pred,
+                y_pred - dely,
+                y_pred + dely,
+                color="#ABABAB",
+                label=r"3-$\sigma$ uncertainty band",
+            )
+            ax_fit.set_xlabel(self.x_units)
+            if legend == "on":
+                ax_fit.legend(loc="upper left", ncol=2)
 
-    def optimize_xrange(self, max_extend=2.0, n_steps=20, verbose=False):
+    def optimize_xrange(
+        self, max_extend=2.0, n_steps=10, symmetric=False, verbose=False
+    ):
         """
-        Optimize the fit range by varying the left and right edges symmetrically
-        and selecting the range whose reduced chi-squared is closest to 1.
+        Optimize the fit range by widening the left and right edges and
+        selecting the range whose reduced chi-squared is closest to 1.
 
-        The search spans from shrinking the current range inward (to the minimum
-        viable window enclosing all peaks) to expanding it outward by
-        `max_extend` FWHMs beyond each original edge.  A single offset `δ` is
-        applied to both edges simultaneously:
-            tested range = [x0 - δ, x1 + δ]
-        so negative δ shrinks and positive δ expands.
+        By default the two edges are searched independently (asymmetric
+        grid). The candidate range is
+
+            [x0 - δ_left, x1 + δ_right]
+
+        with each δ ∈ [0, max_extend * avg_fwhm]. Set ``symmetric=True`` to
+        force δ_left == δ_right (the old behaviour), which is cheaper
+        (n_steps trials vs n_steps² trials).
 
         The objective is min |redchi - 1|, which penalises both under-fitting
         (redchi >> 1, range too narrow to constrain the background) and
@@ -367,7 +603,12 @@ class PeakFit:
             Maximum number of FWHMs by which each edge may be moved outward
             beyond the original xrange. The default is 2.0.
         n_steps : int, optional
-            Number of candidate offsets to try. The default is 20.
+            Number of candidate offsets per edge. With ``symmetric=False``
+            the total number of trial fits is ``n_steps**2``. The default
+            is 10.
+        symmetric : bool, optional
+            If True, search only a single δ applied to both edges. The
+            default is False.
         verbose : bool, optional
             If True, print a summary table of all trials. The default is False.
 
@@ -384,59 +625,65 @@ class PeakFit:
         _, pidx = self.find_peaks_range()
         mask_peaks = (self.search.peaks_idx >= pidx[0]) & (self.search.peaks_idx <= pidx[-1])
         avg_fwhm = float(np.mean(self.search.fwhm_guess[mask_peaks]))
-
-        # --- Lower bound on δ: range must keep at least 1σ clearance around
-        #     the outermost peak centres so the Gaussians are never clipped. ---
-        sigma_approx = avg_fwhm / 2.355
-        peak_x = self.x[pidx]
-        inner_left  = float(peak_x[0]  - sigma_approx)   # leftmost allowed left edge
-        inner_right = float(peak_x[-1] + sigma_approx)   # rightmost allowed right edge
-
-        # Start exactly at the original xrange and only widen from there
-        delta_min = 0.0
         delta_max = max_extend * avg_fwhm
 
-        deltas = np.linspace(delta_min, delta_max, n_steps)
+        deltas = np.linspace(0.0, delta_max, n_steps)
+        if symmetric:
+            candidates = [(d, d) for d in deltas]
+        else:
+            candidates = [(dl, dr) for dl in deltas for dr in deltas]
 
-        # --- Grid search ---
-        best_delta   = 0.0
+        # Carry constructor kwargs that aren't reconstructible from the
+        # required positional args (skew, shared_sigma, hints would
+        # otherwise silently revert to defaults).
+        cls = type(self)
+        trial_kwargs = dict(
+            bkg=self.bkg,
+            skew=self.skew,
+            shared_sigma=self.shared_sigma,
+            hints=self.hints,
+        )
+
+        best_pair    = (0.0, 0.0)
         best_redchi  = self.fit_result.redchi
         best_obj     = abs(best_redchi - 1.0)
-        best_fit_obj = None   # will hold the winning lmfit result
+        best_fit_obj = None
+        results = []
 
-        results = []  # for verbose output
-
-        for delta in deltas:
-            trial_range = [x0_orig - delta, x1_orig + delta]
+        for dl, dr in candidates:
+            trial_range = [x0_orig - dl, x1_orig + dr]
             try:
-                trial = PeakFit(
-                    self.search,
-                    trial_range,
-                    bkg=self.bkg,
-                    skew=False,
-                )
+                trial = cls(self.search, trial_range, **trial_kwargs)
                 rc = trial.fit_result.redchi
                 obj = abs(rc - 1.0)
-                results.append((delta, trial_range, rc, obj))
+                results.append((dl, dr, trial_range, rc, obj))
                 if obj < best_obj:
-                    best_obj      = obj
-                    best_delta    = delta
-                    best_redchi   = rc
-                    best_fit_obj  = trial
+                    best_obj     = obj
+                    best_pair    = (dl, dr)
+                    best_redchi  = rc
+                    best_fit_obj = trial
             except Exception:
-                # range may be invalid (too few points, no peaks, etc.)
-                results.append((delta, trial_range, None, None))
+                results.append((dl, dr, trial_range, None, None))
 
         if verbose:
-            print(f"\n{'δ':>10}  {'left':>10}  {'right':>10}  {'redchi':>10}  {'|χ²-1|':>10}")
-            print("-" * 56)
-            for delta, rng, rc, obj in results:
+            print(
+                f"\n{'δL':>8}  {'δR':>8}  {'left':>10}  {'right':>10}  "
+                f"{'redchi':>10}  {'|χ²-1|':>10}"
+            )
+            print("-" * 64)
+            for dl, dr, rng, rc, obj in results:
                 rc_str  = f"{rc:.4f}"  if rc  is not None else "   failed"
                 obj_str = f"{obj:.4f}" if obj is not None else "        "
-                print(f"{delta:10.4f}  {rng[0]:10.4f}  {rng[1]:10.4f}  {rc_str:>10}  {obj_str:>10}")
-            print(f"\nBest δ = {best_delta:.4f}  →  xrange = "
-                  f"[{x0_orig - best_delta:.4f}, {x1_orig + best_delta:.4f}]  "
-                  f"redchi = {best_redchi:.4f}")
+                print(
+                    f"{dl:8.4f}  {dr:8.4f}  {rng[0]:10.4f}  {rng[1]:10.4f}  "
+                    f"{rc_str:>10}  {obj_str:>10}"
+                )
+            dl_b, dr_b = best_pair
+            print(
+                f"\nBest (δL, δR) = ({dl_b:.4f}, {dr_b:.4f})  →  xrange = "
+                f"[{x0_orig - dl_b:.4f}, {x1_orig + dr_b:.4f}]  "
+                f"redchi = {best_redchi:.4f}"
+            )
 
         # --- Update instance with best fit ---
         if best_fit_obj is not None:
@@ -461,7 +708,7 @@ class GaussianComponents:
         Parameters
         ----------
         fit_obj_lst : list, optional
-            list of FitPeak objects. The default is None.
+            list of PeakFit objects. The default is None.
         df_peak : pandas dataframe, optional
             dataframe of peak info as saved by using the class AddPeaks.
             The default is None.
@@ -499,8 +746,9 @@ class GaussianComponents:
                 mean = fit_obj.peak_info[i]["mean"]
                 area = fit_obj.peak_info[i]["area"]
                 fwhm = fit_obj.peak_info[i]["fwhm"]
-                g = list(fit_obj.fit_result.eval_components().keys())[i + 1]
-                gauss = comps[g]
+                # Address gaussian components by their known prefix instead
+                # of relying on dict-insertion order in eval_components().
+                gauss = comps[f"g{i+1}_"]
                 self.mean.append(mean)
                 self.area.append(area)
                 self.fwhm.append(fwhm)
@@ -537,68 +785,84 @@ class GaussianComponents:
         -------
         None.
         """
-        plt.rc("font", size=12)
         apply_theme()
-        if fig is None:
-            fig = plt.figure(figsize=(12, 8))
-        if ax is None:
-            ax = fig.add_subplot()
+        with plt.rc_context({"font.size": 12}):
+            if fig is None:
+                fig = plt.figure(figsize=(12, 8))
+            if ax is None:
+                ax = fig.add_subplot()
 
-        if plot_type == "simple":
-            for i in range(self.npeaks):
-                x = self.x_data[i]
-                y = self.gauss[i]
-                ax.fill_between(x, 0, y, alpha=0.2)
-                x0 = round(self.mean[i], 2)
-                y0 = y.max()
-                a = round(self.area[i], 2)
-                str0 = f"mean={x0} \narea={a}"
-                ax.text(x0, y0, str0)
-            ax.set_xlabel(self.x_units)
-            ax.set_ylabel("Cts")
+            if plot_type == "simple":
+                for i in range(self.npeaks):
+                    x = self.x_data[i]
+                    y = self.gauss[i]
+                    ax.fill_between(x, 0, y, alpha=0.2)
+                    x0 = round(self.mean[i], 2)
+                    y0 = y.max()
+                    a = round(self.area[i], 2)
+                    str0 = f"mean={x0} \narea={a}"
+                    ax.text(x0, y0, str0)
+                ax.set_xlabel(self.x_units)
+                ax.set_ylabel("Cts")
 
-        elif plot_type == "fwhm":
-            for i in range(self.npeaks):
-                x = self.x_data[i]
-                y = self.gauss[i]
-                ax.fill_between(x, 0, y, alpha=0.2)
-                x0 = self.mean[i]
-                y0 = y.max()
-                ax.text(
-                    x0,
-                    y0,
-                    int(i + 1),
-                    bbox=dict(facecolor="red", alpha=0.1),
-                    weight="bold",
-                )
-            ax.set_xlabel(self.x_units)
-            ax.set_ylabel("Cts")
-            ax.set_title("Gaussian Components")
+            elif plot_type == "fwhm":
+                for i in range(self.npeaks):
+                    x = self.x_data[i]
+                    y = self.gauss[i]
+                    ax.fill_between(x, 0, y, alpha=0.2)
+                    x0 = self.mean[i]
+                    y0 = y.max()
+                    ax.text(
+                        x0,
+                        y0,
+                        int(i + 1),
+                        bbox=dict(facecolor="red", alpha=0.1),
+                        weight="bold",
+                    )
+                ax.set_xlabel(self.x_units)
+                ax.set_ylabel("Cts")
+                ax.set_title("Gaussian Components")
 
 
 class AddPeaks:
-    def __init__(self, filename, n=0):
+    def __init__(self, filename, n=0, overwrite=False):
         """
         Save peak fit objects to a pandas dataframe for further analysis.
 
         Parameters
         ----------
-        filename : string.
-            filename to save peak info as hdf.
+        filename : str or pathlib.Path
+            Path to the hdf file. The ``.hdf`` suffix is appended if missing
+            (so both ``"out"`` and ``"out.hdf"`` resolve to ``out.hdf``).
         n : integer, optional
             Add peaks to an existing hdf file with n being the row number
             to append peaks. The default is 0.
+        overwrite : bool, optional
+            When n == 0 and the target hdf file already exists, the previous
+            behaviour was to silently overwrite it. Set ``overwrite=True`` to
+            opt in. The default is False, which raises FileExistsError.
 
         Returns
         -------
         None.
 
         """
-
-        self.filename = filename
+        # Accept Path or str; ensure exactly one ".hdf" suffix.
+        hdf_path = Path(filename)
+        if hdf_path.suffix != ".hdf":
+            hdf_path = hdf_path.with_suffix(hdf_path.suffix + ".hdf")
+        self.hdf_path = hdf_path
+        # Keep .filename as the suffix-less stem for backward compatibility
+        # with downstream code that did f"{self.filename}.hdf".
+        self.filename = str(hdf_path.with_suffix(""))
         self.all_peaks = []
         self.n = n
         if n == 0:
+            if hdf_path.exists() and not overwrite:
+                raise FileExistsError(
+                    f"{hdf_path} already exists. Pass overwrite=True to "
+                    "replace it, or pass n > 0 to append to existing rows."
+                )
             cols = [
                 "x_data",
                 "y_data",
@@ -617,10 +881,10 @@ class AddPeaks:
                 "x_units",
             ]
             self.df = pd.DataFrame(columns=cols)
-            self.df.to_hdf(f"{filename}.hdf", key="data")
+            self.df.to_hdf(str(hdf_path), key="data")
         else:
-            print(f"Appending to existing file: {filename}.hdf")
-            self.df = pd.read_hdf(f"{filename}.hdf", key="data")
+            print(f"Appending to existing file: {hdf_path}")
+            self.df = pd.read_hdf(str(hdf_path), key="data")
 
     def add_peak(self, fit_obj):
         self.all_peaks.append(fit_obj)
@@ -630,7 +894,6 @@ class AddPeaks:
         y_data = fit_obj.y_data
         best_fit = fit_obj.fit_result.best_fit
         redchi = fit_obj.fit_result.redchi
-        bkg = list(fit_obj.fit_result.eval_components().keys())[0]
         comps = fit_obj.fit_result.eval_components()
         uncertainty = fit_obj.fit_result.eval_uncertainty()
         bkg_type = fit_obj.bkg
@@ -642,9 +905,8 @@ class AddPeaks:
             self.df.loc[self.n, "fwhm"] = fit_obj.peak_info[i]["fwhm"]
             self.df.loc[self.n, "best_fit"] = best_fit
             self.df.loc[self.n, "redchi"] = redchi
-            self.df.loc[self.n, "bkg"] = comps[bkg]
-            gauss = list(fit_obj.fit_result.eval_components().keys())[i + 1]
-            self.df.loc[self.n, "gauss"] = comps[gauss]
+            self.df.loc[self.n, "bkg"] = comps[fit_obj.bkg_key]
+            self.df.loc[self.n, "gauss"] = comps[f"g{i+1}_"]
             self.df.loc[self.n, "uncertainty"] = uncertainty
             self.df.loc[self.n, "bkg_type"] = bkg_type
             self.df.loc[self.n, "mean_err"] = fit_obj.peak_err[i]["mean_err"]
@@ -652,7 +914,7 @@ class AddPeaks:
             self.df.loc[self.n, "fwhm_err"] = fit_obj.peak_err[i]["fwhm_err"]
             self.df.loc[self.n, "x_units"] = fit_obj.x_units
             self.n += 1
-        self.df.to_hdf(f"{self.filename}.hdf", key="data")
+        self.df.to_hdf(str(self.hdf_path), key="data")
 
     def reset(self):
         self.all_peaks = []
@@ -668,9 +930,17 @@ def consecutive(data, stepsize=0):
 
 
 def auto_range(search, fwhm_factor):
+    """
+    Group nearby peaks into fit windows.
+
+    Returned ranges are expressed in the same units PeakFit's xrange expects:
+    energies if the spectrum is calibrated, otherwise channels.
+    """
     f = fwhm_factor
     pidx = search.peaks_idx
     chan = search.spectrum.channels[:-1]
+    n_chan = len(search.spectrum.channels)
+    energies = search.spectrum.energies
 
     fwhm_guess = search.fwhm_guess
     density = sum((abs(xi - chan) < f * fw) for xi, fw in zip(pidx, fwhm_guess))
@@ -682,11 +952,16 @@ def auto_range(search, fwhm_factor):
         if arr[:, 1].sum() != 0 and np.isin(arr[:, 0], pidx).sum() > 0:
             mi = arr[:, 0].min()
             ma = arr[:, 0].max()
-            left = round(mi - 2 * search.fwhm(mi))
-            right = round(ma + 2 * search.fwhm(ma))
-            if right > pidx.max():
-                right = pidx.max()
-            ranges.append([int(left), int(right)])
+            left = int(round(mi - 2 * search.fwhm(mi)))
+            right = int(round(ma + 2 * search.fwhm(ma)))
+            # Clamp to the valid channel range — previously this clamped to
+            # pidx.max(), which is the last peak channel, not the last bin.
+            left = max(left, 0)
+            right = min(right, n_chan - 1)
+            if energies is not None:
+                ranges.append([float(energies[left]), float(energies[right])])
+            else:
+                ranges.append([left, right])
 
     return ranges
 
@@ -732,22 +1007,19 @@ def auto_scan(search, xlst=None, bkglst=None, plot=False):
                 elif fit0.fit_result.redchi < redchi:
                     fitx = fit0
                     redchi = fitx.fit_result.redchi
-            if plot and fitx is not None:
-                fitx.plot(plot_type="full")
             if fitx is None:
-                import warnings
                 warnings.warn(
-                    f"No successful fit found for range {rg}. "
-                    "None appended to fits list.",
+                    f"No successful fit found for range {rg}. Skipped.",
                     UserWarning,
                 )
+                continue
+            if plot:
+                fitx.plot()
             fits.append(fitx)
     elif xlst is not None and bkglst is not None:
-        ranges = xlst
-        bkgs = bkglst
-        for rg, bk in zip(ranges, bkgs):
+        for rg, bk in zip(xlst, bkglst):
             fit0 = PeakFit(search, rg, bkg=bk)
             if plot:
-                fit0.plot(plot_type="full")
+                fit0.plot()
             fits.append(fit0)
     return fits
