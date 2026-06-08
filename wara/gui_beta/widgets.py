@@ -1,6 +1,7 @@
 """Reusable widgets for the beta GUI: canvas, option panels, pages."""
 import matplotlib.ticker as ticker
 from matplotlib.figure import Figure
+from matplotlib.widgets import SpanSelector
 from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
 
 from PyQt5.QtWidgets import (
@@ -101,6 +102,7 @@ def check_row(checkbox, widget):
 class SpectrumCanvas(FigureCanvas):
     cursor_moved = pyqtSignal(float, float)
     point_clicked = pyqtSignal(float, float)   # left-click in manual peak mode
+    roi_selected = pyqtSignal(float, float)    # Drag-and-Fit region selected
 
     def __init__(self):
         self.fig = Figure(figsize=(10, 5), tight_layout=True, facecolor=T.BG_PLOT)
@@ -120,6 +122,9 @@ class SpectrumCanvas(FigureCanvas):
         self._xlabel = None       # axis-label overrides (None = derive from spectrum)
         self._ylabel = None
         self._ref_lines = []      # Nuclear Database reference lines: (energy, label, color)
+        self.nav_toolbar = None   # set by the page; its view history is reset on redraw
+        self._span = None         # Drag-and-Fit ROI selector
+        self._roi_active = False
         self.mpl_connect("motion_notify_event", self._on_move)
         self.mpl_connect("button_press_event", self._on_click)
         self.draw_empty()
@@ -168,6 +173,45 @@ class SpectrumCanvas(FigureCanvas):
     def set_manual(self, on):
         self._manual = on
 
+    # ── Drag-and-Fit ROI selection ───────────────────────────────────────────
+    def enable_roi(self):
+        self._roi_active = True
+        self._make_span()
+
+    def disable_roi(self):
+        self._roi_active = False
+        if self._span is not None:
+            try:
+                self._span.disconnect_events()
+                self._span.set_visible(False)
+            except Exception:  # noqa: BLE001
+                pass
+            self._span = None
+        self.draw_idle()
+
+    def _make_span(self):
+        if self._span is not None:
+            try:
+                self._span.disconnect_events()
+            except Exception:  # noqa: BLE001
+                pass
+        self._span = SpanSelector(
+            self.ax, self._on_span, "horizontal", interactive=True, useblit=False,
+            props=dict(alpha=0.18, facecolor=T.LOGO_GREEN))
+
+    def _on_span(self, xmin, xmax):
+        if xmax - xmin > 0:
+            self.roi_selected.emit(float(xmin), float(xmax))
+
+    def set_span_extents(self, x0, x1):
+        """Move the ROI span programmatically (e.g. from the fit window)."""
+        if self._span is not None:
+            try:
+                self._span.extents = (x0, x1)
+                self.draw_idle()
+            except Exception:  # noqa: BLE001
+                pass
+
     def add_ref_lines(self, lines, color):
         """Add Nuclear Database reference lines (each (energy, label)) in color."""
         existing = {(round(e, 3), lbl) for e, lbl, _ in self._ref_lines}
@@ -215,7 +259,8 @@ class SpectrumCanvas(FigureCanvas):
             ax.fill_between(x, y, alpha=0.12, color=T.ACCENT_CYAN, linewidth=0)
             ax.step(x, y, where="mid", color=T.ACCENT_CYAN, linewidth=0.9, alpha=0.95,
                     label=self._active_label)
-        ax.set_yscale("log" if self._log else "linear")
+        # Only switch to log if there is positive data, else matplotlib warns.
+        ax.set_yscale("log" if (self._log and (y > 0).any()) else "linear")
         y_label = self._ylabel or {"Cts": "Counts", "CPS": "Counts/second"}.get(
             self._spect.y_label, self._spect.y_label)
         x_label = self._xlabel or self._spect.x_units
@@ -259,6 +304,13 @@ class SpectrumCanvas(FigureCanvas):
                                       edgecolor="none"))
         if self._snr is not None:
             self._draw_snr_overlay()
+        # The data extent just changed, so clear the toolbar's pan/zoom history;
+        # otherwise Home would restore a stale (pre-update) view.
+        if self.nav_toolbar is not None:
+            self.nav_toolbar.update()
+        # ax.clear() removed the ROI selector's artist — rebuild it if active.
+        if self._roi_active:
+            self._make_span()
         self.draw_idle()
 
     def _draw_snr_overlay(self):
@@ -341,6 +393,19 @@ class PeakFindPanel(QFrame):
         self.btn_clear.setCursor(Qt.PointingHandCursor)
         lay.addWidget(self.btn_clear)
 
+        # ── Hover help ───────────────────────────────────────────────
+        self.snr.setToolTip("Minimum signal-to-noise ratio for a detected peak")
+        self.ref_ch.setToolTip("Reference channel for the resolution (FWHM-vs-energy) model")
+        self.ref_fwhm.setToolTip("FWHM in channels at the reference channel")
+        self.x0.setToolTip("Optional lower x-bound for the search")
+        self.x1.setToolTip("Optional upper x-bound for the search")
+        self.detector.setToolTip("Detector preset — fills the SNR and reference values")
+        self.cb_kernel.setToolTip("Kernel deconvolution method (needs < 9000 channels or an Xrange)")
+        self.cb_snr.setToolTip("Overlay the SNR curve on a second axis")
+        self.cb_peaks.setToolTip("Show or hide the peak markers")
+        self.btn_find.setToolTip("Run the peak search with the settings above")
+        self.btn_clear.setToolTip("Remove all peak markers")
+
 
 class AddSubtractPanel(QFrame):
     """Inline panel under 'Add / Subtract': combine the loaded spectra. The
@@ -360,9 +425,11 @@ class AddSubtractPanel(QFrame):
             "active.livetime / overlay.livetime")
         lay.addWidget(self.cb_scale_lt)
         self.btn_add = QPushButton("Add All"); self.btn_add.setObjectName("primary_btn")
+        self.btn_add.setToolTip("Sum the active spectrum and all overlays into a new spectrum")
         self.btn_add.setCursor(Qt.PointingHandCursor); lay.addWidget(self.btn_add)
         self.btn_sub = QPushButton("Subtract Overlays")
         self.btn_sub.setObjectName("action_btn")
+        self.btn_sub.setToolTip("Subtract the overlays from the active spectrum")
         self.btn_sub.setCursor(Qt.PointingHandCursor); lay.addWidget(self.btn_sub)
 
 
@@ -466,6 +533,22 @@ class SpectrumOptions(QScrollArea):
 
         self.btn_labels = QPushButton("Axis & Legend…"); self.btn_labels.setObjectName("action_btn")
         self.btn_labels.setCursor(Qt.PointingHandCursor); lay.addWidget(self.btn_labels)
+
+        # ── Hover help ───────────────────────────────────────────────
+        self.cb_log.setToolTip("Toggle a logarithmic Y-axis")
+        self.cb_cr.setToolTip("Show count rate (counts ÷ live time); needs a live time in the file")
+        self.btn_find.setToolTip("Show / hide the automatic peak-finder options")
+        self.btn_iso.setToolTip("Browse gamma-ray line databases and isotopic abundances; overlay lines on the spectrum")
+        self.btn_remcal.setToolTip("Drop the energy calibration and show the channel axis (Reset Spectrum restores it)")
+        self.btn_addsub.setToolTip("Add the loaded spectra together, or subtract overlays from the active one")
+        self.cb_smooth.setToolTip("Moving-average smooth, re-applied from the original spectrum")
+        self.smooth_spin.setToolTip("Smoothing window, in channels")
+        self.cb_rebin.setToolTip("Combine adjacent channels by a factor (multiples of two)")
+        self.rebin.setToolTip("Rebin factor — a multiple of two")
+        self.cb_shift.setToolTip("Shift the spectrum along its x-axis (energy if calibrated, else channels)")
+        self.cb_yconst.setToolTip("Multiply the counts by a constant")
+        self.cb_xconst.setToolTip("Multiply the x-axis values by a constant")
+        self.btn_labels.setToolTip("Edit axis labels, legend and description; view the spectrum's metadata")
 
         lay.addStretch(1)
         self.setWidget(inner)

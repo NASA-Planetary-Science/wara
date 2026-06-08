@@ -89,7 +89,14 @@ class _PandasModel(QAbstractTableModel):
     def data(self, index, role=Qt.DisplayRole):
         if role == Qt.DisplayRole and index.isValid():
             val = self._df.iat[index.row(), index.column()]
-            return "" if pd.isna(val) else str(val)
+            if pd.isna(val):
+                return ""
+            # Format floats with significant figures so floating-point noise
+            # (e.g. 6129.88999999999) collapses to a clean value (6129.89),
+            # while real decimals and tiny intensities are preserved.
+            if isinstance(val, float):   # numpy.float64 subclasses float
+                return format(val, ".10g")
+            return str(val)
         return None
 
     def headerData(self, section, orientation, role=Qt.DisplayRole):
@@ -141,6 +148,7 @@ class NuclearDatabaseDialog(QDialog):
         self.setWindowTitle("Nuclear Database")
         self.setStyleSheet(T.STYLESHEET)
         self.setMinimumSize(640, 560)
+        self.resize(780, 580)
         self._df = pd.DataFrame()
         self._color = T.REF_LINE
 
@@ -148,9 +156,15 @@ class NuclearDatabaseDialog(QDialog):
 
         form = QFormLayout()
         self.db_combo = QComboBox(); self.db_combo.addItems(list(DATABASES.keys()))
-        self.ed_element = QLineEdit(); self.ed_element.setPlaceholderText("e.g. Co60, Cs137  (blank = all)")
+        self.db_combo.setCurrentText("TALYS 14 MeV")
+        self.db_combo.setToolTip("Choose a gamma-ray line database")
+        self.ed_element = QLineEdit("56Fe")
+        self.ed_element.setPlaceholderText("e.g. Co60, Cs137  (blank = all)")
+        self.ed_element.setToolTip("Filter by element or isotope (Co60, 60Co, Co-60, or Co); blank = all")
         self.ed_energy = QLineEdit(); self.ed_energy.setPlaceholderText("keV (optional)")
+        self.ed_energy.setToolTip("Keep only lines near this energy (keV)")
         self.ed_range = QLineEdit(); self.ed_range.setPlaceholderText("± keV (default 1)")
+        self.ed_range.setToolTip("Energy window ± keV around the energy above (default 1)")
         form.addRow("Database:", self.db_combo)
         form.addRow("Element / isotope:", self.ed_element)
         form.addRow("Energy:", self.ed_energy)
@@ -158,6 +172,7 @@ class NuclearDatabaseDialog(QDialog):
         lay.addLayout(form)
 
         self.btn_search = QPushButton("Search"); self.btn_search.setObjectName("primary_btn")
+        self.btn_search.setToolTip("Search the selected database with the filters above")
         self.btn_search.setCursor(Qt.PointingHandCursor)
         self.btn_search.clicked.connect(self._search)
         self.lbl_count = QLabel(""); self.lbl_count.setObjectName("stat_key")
@@ -169,14 +184,19 @@ class NuclearDatabaseDialog(QDialog):
         self.table.setAlternatingRowColors(True)
         self.table.setSortingEnabled(True)
         self.table.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self.table.setToolTip("Click a column header to sort; select rows to plot only those")
         lay.addWidget(self.table, stretch=1)
 
         # Satellite-line + label options
         opts = QHBoxLayout()
         self.cb_sep = QCheckBox("Single escape")
+        self.cb_sep.setToolTip("Also mark the single-escape peak (E − 511 keV)")
         self.cb_dep = QCheckBox("Double escape")
+        self.cb_dep.setToolTip("Also mark the double-escape peak (E − 1022 keV)")
         self.cb_ce = QCheckBox("Compton edge")
+        self.cb_ce.setToolTip("Also mark the Compton edge for each line")
         self.cb_labels = QCheckBox("Include labels"); self.cb_labels.setChecked(True)
+        self.cb_labels.setToolTip("Draw the isotope and energy text next to each line")
         for cb in (self.cb_sep, self.cb_dep, self.cb_ce, self.cb_labels):
             opts.addWidget(cb)
         opts.addStretch(1)
@@ -193,7 +213,9 @@ class NuclearDatabaseDialog(QDialog):
         btns.addWidget(self.btn_color)
         btns.addSpacing(12)
         self.btn_plot = QPushButton("Plot Lines"); self.btn_plot.setObjectName("primary_btn")
+        self.btn_plot.setToolTip("Overlay the selected lines (or up to 50 if none are selected)")
         self.btn_clear = QPushButton("Clear Lines"); self.btn_clear.setObjectName("danger_btn")
+        self.btn_clear.setToolTip("Remove all overlaid reference lines from the plot")
         for b in (self.btn_plot, self.btn_clear):
             b.setCursor(Qt.PointingHandCursor)
         self.btn_plot.clicked.connect(lambda: self.plot_requested.emit(self._lines(), self._color))
@@ -207,7 +229,9 @@ class NuclearDatabaseDialog(QDialog):
         ab = QHBoxLayout()
         self.ed_abund = QLineEdit(); self.ed_abund.setMaximumWidth(90)
         self.ed_abund.setPlaceholderText("Fe")
+        self.ed_abund.setToolTip("Element symbol to look up natural isotopic abundances")
         self.btn_abund = QPushButton("Look up"); self.btn_abund.setObjectName("action_btn")
+        self.btn_abund.setToolTip("Show natural isotopic abundances (NIST) for the element")
         self.btn_abund.setCursor(Qt.PointingHandCursor)
         self.btn_abund.clicked.connect(self._lookup_abundance)
         self.ed_abund.returnPressed.connect(self._lookup_abundance)

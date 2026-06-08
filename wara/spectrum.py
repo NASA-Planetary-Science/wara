@@ -649,7 +649,7 @@ class Spectrum:
             file_txt = fileName
         else:
             file_txt = fileName + ".txt"
-        with open(file_txt, "w") as f:
+        with open(file_txt, "w", encoding="utf-8") as f:
             f.write(f"Description: {self.description}\n")
             f.write(f"Label: {self.label}\n")
             f.write(f"Date created: {self.acq_date}\n")

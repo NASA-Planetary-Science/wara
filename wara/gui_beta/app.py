@@ -34,6 +34,7 @@ from .widgets import (
 )
 from .io import load_spectrum_file, OPEN_FILTER
 from .nuclear import NuclearDatabaseDialog
+from .fitting import FitWindow
 
 LOGO_PATH = str(files("wara").joinpath("ui/wara-logo.png"))
 
@@ -112,6 +113,9 @@ class SpectrumPage(QWidget):
         nav.setObjectName("plot_toolbar")
         nav.setIconSize(QSize(22, 22))
         recolor_toolbar_icons(nav, T.TEXT_PRIMARY)
+        # Let the canvas reset the toolbar's view history on each redraw, so the
+        # Home button always returns to the current full view.
+        self.canvas.nav_toolbar = nav
         lay.addWidget(nav)
         lay.addWidget(self.canvas, stretch=1)
 
@@ -140,6 +144,8 @@ class WaraBetaApp(QMainWindow):
         self.spect = None
         self._spect_orig = None
         self.search = None
+        self._fit_window = None
+        self._drag_fit_active = False
         self._remove_cal = False     # strip energy calibration in the recompute
         self._xlabel = None          # axis-label overrides (None = auto)
         self._ylabel = None
@@ -193,6 +199,7 @@ class WaraBetaApp(QMainWindow):
         for idx, (name, color) in enumerate(NAV_SECTIONS):
             btn = QPushButton("   " + name); btn.setObjectName("nav_btn")
             btn.setCheckable(True); btn.setCursor(Qt.PointingHandCursor)
+            btn.setToolTip(f"{name} tab")
             btn.setIcon(dot_icon(color)); btn.setIconSize(QSize(14, 14))
             self.nav_group.addButton(btn, idx); lay.addWidget(btn)
         self.nav_group.idClicked.connect(self._on_nav)
@@ -200,8 +207,11 @@ class WaraBetaApp(QMainWindow):
         lay.addSpacing(4); lay.addWidget(hsep())
         lay.addWidget(header("FILE"))
         self.btn_open = QPushButton("Open Spectrum"); self.btn_open.setObjectName("action_btn")
+        self.btn_open.setToolTip("Open a spectrum file (.csv .cnf .txt .mca .spe)")
         self.btn_save = QPushButton("Save"); self.btn_save.setObjectName("action_btn")
+        self.btn_save.setToolTip("Save the active spectrum (.txt keeps metadata, .csv is plain)")
         self.btn_clear = QPushButton("Clear"); self.btn_clear.setObjectName("action_btn")
+        self.btn_clear.setToolTip("Clear the loaded spectrum and all overlays")
         for b in (self.btn_open, self.btn_save, self.btn_clear):
             b.setCursor(Qt.PointingHandCursor); lay.addWidget(b)
 
@@ -304,7 +314,9 @@ class WaraBetaApp(QMainWindow):
         pf.cb_snr.toggled.connect(self._toggle_snr)
         pf.cb_manual.toggled.connect(self.spectrum_page.canvas.set_manual)
         self.spectrum_page.canvas.point_clicked.connect(self._add_manual_peak)
+        self.spectrum_page.canvas.roi_selected.connect(self._on_roi)
         opts.btn_iso.clicked.connect(self._open_nuclear_db)
+        opts.btn_fit.clicked.connect(self._toggle_drag_fit)
         self._apply_detector_preset(pf.detector.currentText())
 
     def _open_file(self):
@@ -742,6 +754,47 @@ class WaraBetaApp(QMainWindow):
         self.spectrum_page.canvas.set_peaks([])
         self.statusBar().showMessage("  Peaks cleared")
 
+    # ── Drag and Fit ─────────────────────────────────────────────────────────
+    def _toggle_drag_fit(self):
+        if self._drag_fit_active:
+            self._stop_drag_fit()
+            return
+        if self.spect is None:
+            self.statusBar().showMessage("  Load a spectrum first")
+            return
+        if self.search is None:
+            self.statusBar().showMessage("  Find peaks first (Auto-Find Peaks)")
+            return
+        self._drag_fit_active = True
+        self.spectrum_page.canvas.enable_roi()
+        self.statusBar().showMessage("  Drag over peaks on the plot to fit  ·  click Drag and Fit again to stop")
+
+    def _stop_drag_fit(self):
+        self._drag_fit_active = False
+        self.spectrum_page.canvas.disable_roi()
+        self.statusBar().showMessage("  Drag-and-Fit off")
+
+    def _on_roi(self, xmin, xmax):
+        if self.search is None:
+            return
+        if self._fit_window is None:
+            self._fit_window = FitWindow(self, self.search)
+            self._fit_window.finished.connect(self._on_fit_window_closed)
+            self._fit_window.roi_changed.connect(self._on_fit_roi_changed)
+        self._fit_window.set_search(self.search)
+        self._fit_window.set_roi(xmin, xmax)
+        self._fit_window.show()
+        self._fit_window.raise_()
+
+    def _on_fit_roi_changed(self, x0, x1):
+        # ROI edited in the fit window → move the main-plot span to match.
+        self.spectrum_page.canvas.set_span_extents(x0, x1)
+
+    def _on_fit_window_closed(self, *args):
+        self._fit_window = None
+        if self._drag_fit_active:
+            self._stop_drag_fit()
+
     def _open_nuclear_db(self):
         # Reuse one dialog instance so it remembers the last search.
         if getattr(self, "_nuc_dialog", None) is None:
@@ -811,7 +864,7 @@ class WaraBetaApp(QMainWindow):
                 s.rebin(by=by)
             if o.cb_smooth.isChecked():
                 s.smooth(num=o.smooth_spin.value())
-            if o.cb_shift.isChecked():
+            if o.cb_shift.isChecked() and o.shift_box.value() != 0:
                 s.gain_shift(by=o.shift_box.value(), energy=s.energies is not None)
             if o.cb_yconst.isChecked():
                 c = o.yconst.value()

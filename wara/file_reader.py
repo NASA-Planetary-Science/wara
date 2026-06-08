@@ -103,7 +103,7 @@ def read_txt(filename):
     livetime = None
     erg_cal = None
     start_idx = None
-    with open(filename, "r") as myfile:
+    with open(filename, "r", encoding="utf-8") as myfile:
         filelst = myfile.readlines()
         for i, line in enumerate(filelst):
             l = line.split()

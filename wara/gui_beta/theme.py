@@ -211,6 +211,13 @@ QToolBar#plot_toolbar QToolButton:hover {{ background: #16263a; border: 1px soli
 QToolBar#plot_toolbar QToolButton:checked {{ background: #16263a; border: 1px solid {ACCENT_CYAN}; }}
 QToolBar#plot_toolbar QLabel {{ color: {TEXT_DIM}; font-family: {MONO_FAMILY}; }}
 
+QSlider::groove:horizontal {{ height: 4px; background: {BG_INPUT}; border-radius: 2px; }}
+QSlider::handle:horizontal {{
+    background: {ACCENT_CYAN}; width: 14px; margin: -6px 0; border-radius: 7px;
+}}
+QSlider::handle:horizontal:hover {{ background: #66f0ff; }}
+QSlider::sub-page:horizontal {{ background: #16384f; border-radius: 2px; }}
+
 QTabWidget::pane {{ border: 1px solid {BORDER}; border-radius: 6px; top: -1px; }}
 QTabBar::tab {{
     background: {BG_BTN}; color: {TEXT_DIM}; border: 1px solid {BORDER};
