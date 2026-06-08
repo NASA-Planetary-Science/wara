@@ -37,7 +37,7 @@ dependencies = [
 Homepage = "https://github.com/mauricioAyllon/wara"
 
 [project.scripts]
-wara = "wara.gui:main"
+wara = "wara.cli:main"
 
 [tool.setuptools.packages.find]
 where = ["."]
