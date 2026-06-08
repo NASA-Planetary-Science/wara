@@ -926,7 +926,12 @@ def main():
             break
 
     T.apply_mpl_theme()
+    QApplication.setAttribute(Qt.AA_EnableHighDpiScaling)
+    QApplication.setAttribute(Qt.AA_UseHighDpiPixmaps)
     QApplication.setAttribute(Qt.AA_ShareOpenGLContexts)
+    QApplication.setHighDpiScaleFactorRoundingPolicy(
+        Qt.HighDpiScaleFactorRoundingPolicy.PassThrough
+    )
     app = QApplication([])
     app.setApplicationName("WARA")
     app.setStyleSheet(STYLESHEET)

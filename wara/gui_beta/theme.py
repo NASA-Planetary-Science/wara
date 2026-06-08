@@ -72,11 +72,13 @@ def dot_icon(color, size=14):
 
 def recolor_toolbar_icons(toolbar, color):
     """matplotlib ships dark icons; tint them light for contrast on dark bg."""
+    dpr = toolbar.devicePixelRatioF() or 1.0
+    phys = int(22 * dpr)
     for action in toolbar.actions():
         ic = action.icon()
         if ic.isNull():
             continue
-        pm = ic.pixmap(QSize(22, 22))
+        pm = ic.pixmap(QSize(phys, phys))
         if pm.isNull():
             continue
         tinted = QPixmap(pm.size()); tinted.fill(Qt.transparent)
@@ -85,6 +87,7 @@ def recolor_toolbar_icons(toolbar, color):
         p.setCompositionMode(QPainter.CompositionMode_SourceIn)
         p.fillRect(tinted.rect(), QColor(color))
         p.end()
+        tinted.setDevicePixelRatio(dpr)
         action.setIcon(QIcon(tinted))
 
 
