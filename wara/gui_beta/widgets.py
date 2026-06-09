@@ -164,7 +164,11 @@ class SpectrumCanvas(FigureCanvas):
 
     def add_peak(self, x, y, label):
         self._peaks.append((x, y, label))
+        xlim, ylim = self.ax.get_xlim(), self.ax.get_ylim()
         self._redraw()
+        self.ax.set_xlim(xlim)
+        self.ax.set_ylim(ylim)
+        self.draw_idle()
 
     def set_show_peaks(self, show):
         self._show_peaks = show
@@ -479,6 +483,7 @@ class SpectrumOptions(QScrollArea):
         # Peaks & fitting (used most often, kept high up)
         lay.addWidget(hsep()); lay.addWidget(header("PEAKS & FITTING"))
         self.btn_fit = QPushButton("Drag and Fit"); self.btn_fit.setObjectName("fit_btn")
+        self.btn_fit.setCheckable(True)
         self.btn_fit.setToolTip("Open the combined fitting window (peakfit + advanced fit)")
         self.btn_fit.setCursor(Qt.PointingHandCursor); lay.addWidget(self.btn_fit)
 

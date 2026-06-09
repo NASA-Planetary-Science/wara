@@ -121,7 +121,7 @@ class SpectrumPage(QWidget):
 
 
 class WaraBetaApp(QMainWindow):
-    OPT_W = 390
+    OPT_W = 340
 
     def __init__(self, file_name=None):
         super().__init__()
@@ -180,7 +180,7 @@ class WaraBetaApp(QMainWindow):
     # ── Column 1: navigation ─────────────────────────────────────────────────
     def _build_nav(self):
         panel = QWidget(); panel.setObjectName("nav_panel")
-        panel.setAttribute(Qt.WA_StyledBackground, True); panel.setFixedWidth(230)
+        panel.setAttribute(Qt.WA_StyledBackground, True); panel.setFixedWidth(200)
         lay = QVBoxLayout(panel)
         lay.setContentsMargins(14, 16, 14, 16); lay.setSpacing(8)
 
@@ -746,7 +746,37 @@ class WaraBetaApp(QMainWindow):
         py = float(self.spect.counts[idx])
         self.spectrum_opts.pf_panel.cb_peaks.setChecked(True)
         self.spectrum_page.canvas.add_peak(px, py, f"{px:.1f}")
+        self._inject_manual_peak(idx)
         self.statusBar().showMessage(f"  Added peak at {px:.1f}")
+
+    def _ensure_search(self):
+        """Create a dummy PeakSearch (no auto-found peaks) if one doesn't
+        exist yet, using the detector preset / panel ref values."""
+        if self.search is not None:
+            return
+        pf = self.spectrum_opts.pf_panel
+        preset = self.DETECTOR_PRESETS.get(pf.detector.currentText())
+        try:
+            ref_x = float(pf.ref_ch.text())
+            ref_fwhm = float(pf.ref_fwhm.text())
+        except ValueError:
+            ref_x = float(preset[1]) if preset else 420.0
+            ref_fwhm = float(preset[2]) if preset else 3.0
+        self.search = ps.PeakSearch(
+            self.spect, ref_x, ref_fwhm, fwhm_at_0=1.0,
+            min_snr=1e6, method="fast")
+
+    def _inject_manual_peak(self, idx):
+        """Register a manually placed peak in the PeakSearch object so that
+        Drag-and-Fit can see it.  Mirrors the legacy GUI's onclick() logic."""
+        self._ensure_search()
+        search = self.search
+        insert_at = np.searchsorted(search.peaks_idx, idx)
+        if insert_at < len(search.peaks_idx) and search.peaks_idx[insert_at] == idx:
+            return
+        search.peaks_idx = np.insert(search.peaks_idx, insert_at, idx)
+        search.fwhm_guess = np.insert(
+            search.fwhm_guess, insert_at, search.fwhm(idx))
 
     def _clear_peaks(self):
         self.search = None
@@ -756,27 +786,35 @@ class WaraBetaApp(QMainWindow):
 
     # ── Drag and Fit ─────────────────────────────────────────────────────────
     def _toggle_drag_fit(self):
+        self.spectrum_opts.pf_panel.cb_manual.setChecked(False)
+        self.spectrum_page.canvas.set_manual(False)
         if self._drag_fit_active:
             self._stop_drag_fit()
             return
         if self.spect is None:
+            self.spectrum_opts.btn_fit.setChecked(False)
             self.statusBar().showMessage("  Load a spectrum first")
             return
-        if self.search is None:
-            self.statusBar().showMessage("  Find peaks first (Auto-Find Peaks)")
-            return
         self._drag_fit_active = True
+        self.spectrum_opts.btn_fit.setChecked(True)
+        nav = self.spectrum_page.canvas.nav_toolbar
+        if nav is not None and nav.mode != "":
+            if "zoom" in nav.mode.lower():
+                nav.zoom()
+            elif "pan" in nav.mode.lower():
+                nav.pan()
         self.spectrum_page.canvas.enable_roi()
         self.statusBar().showMessage("  Drag over peaks on the plot to fit  ·  click Drag and Fit again to stop")
 
     def _stop_drag_fit(self):
         self._drag_fit_active = False
+        self.spectrum_opts.btn_fit.setChecked(False)
         self.spectrum_page.canvas.disable_roi()
         self.statusBar().showMessage("  Drag-and-Fit off")
 
     def _on_roi(self, xmin, xmax):
         if self.search is None:
-            return
+            self._ensure_search()
         if self._fit_window is None:
             self._fit_window = FitWindow(self, self.search)
             self._fit_window.finished.connect(self._on_fit_window_closed)

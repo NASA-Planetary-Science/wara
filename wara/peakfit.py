@@ -13,7 +13,7 @@ import numpy as np
 import pandas as pd
 
 from . import peaksearch as ps
-from .matplotlib_theme import apply_theme
+from .matplotlib_theme import apply_theme, get_theme, DARK
 
 
 class PeakFit:
@@ -492,6 +492,7 @@ class PeakFit:
         fig=None,
         ax_res=None,
         ax_fit=None,
+        context_data=None,
     ):
         """
         Plot the data points, best fit, fit components, residual,
@@ -507,6 +508,9 @@ class PeakFit:
             axis for residual plot. The default is None.
         ax_fit : axis object, optional
             axis for the best-fit plot. The default is None.
+        context_data : tuple of (x_array, y_array), optional
+            Extra data points to show dimmed behind the fit (e.g. the
+            full ROI when the fit range has been trimmed).
 
         Returns
         -------
@@ -525,13 +529,27 @@ class PeakFit:
             redchi_display = res.redchi
 
         apply_theme()
+
+        if get_theme() == DARK:
+            c_data = "#00e5ff"
+            c_fit  = "#ff5577"
+            c_bkg  = "#39ff14"
+            c_comp = "#b388ff"
+            c_band = "#ffffff"
+            c_res  = "#ffb300"
+            a_band = 0.12
+        else:
+            c_data = "b"
+            c_fit  = "r"
+            c_bkg  = "g"
+            c_comp = "k"
+            c_band = "#ABABAB"
+            c_res  = None
+            a_band = 0.4
+
         with plt.rc_context({"font.size": 12}):
             if fig is None:
                 fig = plt.figure(constrained_layout=True, figsize=(8, 6))
-            # Build a 2-row gridspec on demand whenever we need to create
-            # an axis. Without this, passing `fig` but leaving
-            # `ax_res`/`ax_fit` as None used to raise NameError because
-            # `gs` was only defined in the `fig is None` branch.
             if ax_res is None or ax_fit is None:
                 gs = fig.add_gridspec(2, 1, height_ratios=[1, 4])
             if ax_res is None:
@@ -540,25 +558,29 @@ class PeakFit:
                 ax_fit = fig.add_subplot(gs[1, 0])
             fig.patch.set_alpha(0.3)
 
-            ax_res.plot(x, res.residual, ".", ms=10, alpha=0.5)
+            ax_res.plot(x, res.residual, ".", ms=10, alpha=0.5, color=c_res)
             ax_res.hlines(y=0, xmin=x.min(), xmax=x.max(), lw=3)
             ax_res.set_ylabel("Residual")
             ax_res.set_xlim([x.min(), x.max()])
             ax_res.set_xticks([])
 
             ax_fit.set_title(rf"Reduced $\chi^2$ = {redchi_display:.4f}")
-            ax_fit.plot(x, y, "bo", alpha=0.5, label="data")
-            ax_fit.plot(x_pred, y_pred, "r", lw=3, alpha=0.5, label="Best fit")
+            if context_data is not None:
+                cx, cy = context_data
+                ax_fit.plot(cx, cy, "o", color=c_data, alpha=0.15, ms=5)
+            ax_fit.plot(x, y, "o", color=c_data, alpha=0.5)
+            ax_fit.plot(x_pred, y_pred, color=c_fit, lw=3, alpha=0.5, label="Fit")
             ax_fit.plot(
-                x, comps[self.bkg_key], "g--", lw=3, label=f"bkg: {self.bkg}"
+                x, comps[self.bkg_key], "--", color=c_bkg, lw=3, label=f"Bkg: {self.bkg}"
             )
             n_gauss = len(comps) - 1
             for cp in range(n_gauss):
-                label = "Components" if cp == 0 else None
+                label = "Comp." if cp == 0 else None
                 ax_fit.plot(
                     x,
                     comps[self.bkg_key] + comps[f"g{cp+1}_"],
-                    "k--",
+                    "--",
+                    color=c_comp,
                     lw=2,
                     label=label,
                 )
@@ -568,12 +590,16 @@ class PeakFit:
                 x_pred,
                 y_pred - dely,
                 y_pred + dely,
-                color="#ABABAB",
-                label=r"3-$\sigma$ uncertainty band",
+                color=c_band,
+                alpha=a_band,
+                label=r"3-$\sigma$",
             )
             ax_fit.set_xlabel(self.x_units)
             if legend == "on":
-                ax_fit.legend(loc="upper left", ncol=2)
+                ax_fit.legend(
+                    loc="upper right",
+                    ncol=2, frameon=False, fontsize=10,
+                )
 
     def optimize_xrange(
         self, max_extend=2.0, n_steps=10, symmetric=False, verbose=False

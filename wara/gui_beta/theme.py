@@ -147,6 +147,9 @@ QPushButton#fit_btn {{
     border-radius: 5px; padding: 10px 14px; font-size: 15px; font-weight: 800; letter-spacing: 1px;
 }}
 QPushButton#fit_btn:hover {{ background-color: #266026; }}
+QPushButton#fit_btn:checked {{
+    background-color: #266026; color: {ACCENT_GREEN}; border: 2px solid {ACCENT_GREEN};
+}}
 QPushButton#mini_btn {{
     background-color: {BG_BTN}; color: {TEXT_PRIMARY}; border: 1px solid {BORDER_BTN};
     border-radius: 4px; padding: 4px 7px; font-size: 13px; font-weight: 600;
@@ -162,7 +165,7 @@ QDialogButtonBox QPushButton:default {{ border: 1px solid {ACCENT_CYAN}; color: 
 
 QCheckBox {{ color: {TEXT_PRIMARY}; spacing: 9px; font-size: 15px; padding: 3px 0; }}
 QCheckBox::indicator {{
-    width: 16px; height: 16px; border: 1px solid {BORDER}; border-radius: 4px; background: {BG_INPUT};
+    width: 16px; height: 16px; border: 2px solid #5a5a8c; border-radius: 4px; background: {BG_INPUT};
 }}
 QCheckBox::indicator:checked {{ background: {ACCENT_CYAN}; border-color: {ACCENT_CYAN}; }}
 /* Spectra-list visibility toggles use a neutral color (cyan means "active"). */
@@ -214,6 +217,7 @@ QToolBar#plot_toolbar QToolButton:hover {{ background: #16263a; border: 1px soli
 QToolBar#plot_toolbar QToolButton:checked {{ background: #16263a; border: 1px solid {ACCENT_CYAN}; }}
 QToolBar#plot_toolbar QLabel {{ color: {TEXT_DIM}; font-family: {MONO_FAMILY}; }}
 
+QSlider {{ min-height: 22px; }}
 QSlider::groove:horizontal {{ height: 4px; background: {BG_INPUT}; border-radius: 2px; }}
 QSlider::handle:horizontal {{
     background: {ACCENT_CYAN}; width: 14px; margin: -6px 0; border-radius: 7px;

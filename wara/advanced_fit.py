@@ -10,6 +10,52 @@ from wara.matplotlib_theme import apply_theme
 from wara.peakfit import PeakFit
 
 
+class BkgFitResult:
+    """Result of a background-only polynomial fit over an ROI."""
+    __slots__ = ("coeffs", "poly", "x", "y", "degree",
+                 "area_fit", "area_fit_err", "area_raw", "area_raw_err")
+
+    def __init__(self, x, y, degree=1):
+        self.x = np.asarray(x, dtype=float)
+        self.y = np.asarray(y, dtype=float)
+        self.degree = int(degree)
+
+        self.coeffs = np.polyfit(self.x, self.y, self.degree)
+        self.poly = np.poly1d(self.coeffs)
+
+        y_fit = self.poly(self.x)
+        self.area_fit = float(np.trapz(y_fit, self.x))
+        self.area_fit_err = float(np.sqrt(np.abs(self.area_fit)))
+
+        self.area_raw = float(np.sum(self.y))
+        self.area_raw_err = float(np.sqrt(self.area_raw))
+
+
+def fit_bkg(spectrum, xrange, degree=1):
+    """Fit a pure polynomial background (no peaks) over *xrange*.
+
+    Parameters
+    ----------
+    spectrum : Spectrum
+        A wara Spectrum object.
+    xrange : list
+        ``[lo, hi]`` bounds in the spectrum's x-axis units.
+    degree : int
+        Polynomial degree (1 = linear).
+
+    Returns
+    -------
+    BkgFitResult
+    """
+    xs = spectrum.energies if spectrum.energies is not None else spectrum.channels
+    ys = spectrum.counts
+    mask = (xs >= xrange[0]) & (xs <= xrange[1])
+    x, y = xs[mask], ys[mask]
+    if len(x) < 2:
+        raise ValueError("Not enough data points in range for background fit")
+    return BkgFitResult(x, y, degree=degree)
+
+
 class PeakAreaLinearBkg:
     def __init__(self, spectrum, x1, x2):
         if not isinstance(spectrum, sp.Spectrum):

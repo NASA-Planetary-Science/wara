@@ -18,12 +18,13 @@ from PyQt5.QtWidgets import (
 from PyQt5.QtCore import Qt, pyqtSignal
 
 from wara import peakfit
+from wara.advanced_fit import fit_bkg
 from wara.matplotlib_theme import set_theme, DARK
 from . import theme as T
 
 # Display name → bkg argument for peakfit. Polynomial uses the degree spinner
 # (degree 1 == a linear background).
-BKG_ARGS = {"Polynomial": None, "Quadratic": "quadratic", "Exponential": "exponential"}
+BKG_ARGS = {"Polynomial": None, "Exponential": "exponential"}
 
 # Slightly lighter than the main plot (#07070f) for better contrast in the popup.
 FIT_PLOT_BG = "#161622"
@@ -55,12 +56,12 @@ class FitWindow(QDialog):
         self.setWindowFlags(Qt.Window | Qt.WindowStaysOnTopHint)
         self.setWindowTitle("Drag and Fit")
         self.setStyleSheet(T.STYLESHEET)
-        self.resize(720, 680)
+        self.resize(960, 780)
         set_theme(DARK)               # PeakFit.plot() uses wara's active theme
         self._search = search
         self._xrange = None
-        self._xmin, self._xmax = 0.0, 1.0   # spectrum x-range (slider mapping)
-        self.N = 1000                        # slider resolution
+        self._roi_lo, self._roi_hi = 0.0, 1.0   # initial ROI (slider bounds)
+        self.N = 1000                             # slider resolution
 
         outer = QVBoxLayout(self)
 
@@ -72,8 +73,8 @@ class FitWindow(QDialog):
         self.bkg.setToolTip("Continuum model under the peaks")
         self.degree = QSpinBox(); self.degree.setRange(0, 7); self.degree.setValue(1)
         self.degree.setToolTip("Polynomial degree (degree 1 = linear background)")
-        self.cb_shared = QCheckBox("Shared FWHM(E)")
-        self.cb_shared.setToolTip("Link every peak's width through one resolution curve  fwhm = a + b·√E")
+        self.cb_shared = QCheckBox("FWHM ∝ √E")
+        self.cb_shared.setToolTip("Constrain peak widths to follow the resolution curve  fwhm = a + b·√E")
         row1.addWidget(QLabel("Shape:")); row1.addWidget(self.shape)
         row1.addWidget(QLabel("Background:")); row1.addWidget(self.bkg)
         row1.addWidget(QLabel("Degree:")); row1.addWidget(self.degree)
@@ -88,10 +89,10 @@ class FitWindow(QDialog):
             s.setMinimumWidth(96)
         for sl in (self.slider_lo, self.slider_hi):
             sl.setRange(0, self.N)
-        self.slider_lo.setToolTip("ROI lower bound (drag; syncs with the main-plot span)")
-        self.slider_hi.setToolTip("ROI upper bound (drag; syncs with the main-plot span)")
-        for label, slider, spin in (("ROI low ", self.slider_lo, self.roi_lo),
-                                    ("ROI high", self.slider_hi, self.roi_hi)):
+        self.slider_lo.setToolTip("Trim the lower bound of the fit range within the selected ROI")
+        self.slider_hi.setToolTip("Trim the upper bound of the fit range within the selected ROI")
+        for label, slider, spin in (("Fit low ", self.slider_lo, self.roi_lo),
+                                    ("Fit high", self.slider_hi, self.roi_hi)):
             r = QHBoxLayout()
             r.addWidget(QLabel(label)); r.addWidget(slider, stretch=1); r.addWidget(spin)
             outer.addLayout(r)
@@ -135,28 +136,25 @@ class FitWindow(QDialog):
 
     def set_roi(self, xmin, xmax):
         """Set the ROI from the main-plot span (no echo back to the span)."""
-        self._xrange = [float(xmin), float(xmax)]
-        self._set_roi_bounds()
-        self._set_roi_controls(float(xmin), float(xmax))
+        self._roi_lo, self._roi_hi = float(xmin), float(xmax)
+        self._xrange = [self._roi_lo, self._roi_hi]
+        for spin in (self.roi_lo, self.roi_hi):
+            spin.blockSignals(True)
+            spin.setRange(self._roi_lo, self._roi_hi)
+            spin.blockSignals(False)
+        self._set_roi_controls(self._roi_lo, self._roi_hi)
         self._refit()
 
     # ── ROI control plumbing ─────────────────────────────────────────────────
-    def _set_roi_bounds(self):
-        if self._search is None:
-            return
-        xs = self._search.spectrum.x
-        self._xmin, self._xmax = float(np.min(xs)), float(np.max(xs))
-        for spin in (self.roi_lo, self.roi_hi):
-            spin.blockSignals(True); spin.setRange(self._xmin, self._xmax); spin.blockSignals(False)
-
     def _val_to_slider(self, v):
-        if self._xmax <= self._xmin:
+        span = self._roi_hi - self._roi_lo
+        if span <= 0:
             return 0
-        frac = (v - self._xmin) / (self._xmax - self._xmin)
+        frac = (v - self._roi_lo) / span
         return int(round(min(1.0, max(0.0, frac)) * self.N))
 
     def _slider_to_val(self, pos):
-        return self._xmin + (pos / self.N) * (self._xmax - self._xmin)
+        return self._roi_lo + (pos / self.N) * (self._roi_hi - self._roi_lo)
 
     def _set_roi_controls(self, lo, hi):
         """Set both sliders and both spin boxes without firing handlers."""
@@ -191,7 +189,6 @@ class FitWindow(QDialog):
             return
         self._xrange = [lo, hi]
         self._refit()
-        self.roi_changed.emit(lo, hi)      # move the main-plot span to match
 
     def _bkg_arg(self):
         return BKG_ARGS[self.bkg.currentText()] or f"poly{self.degree.value()}"
@@ -204,6 +201,16 @@ class FitWindow(QDialog):
         if self.bkg.currentText() == "Polynomial":
             self._refit()
 
+    def _context_data(self):
+        """Return (x, y) arrays for the full initial ROI (for dimmed context)."""
+        if self._search is None:
+            return None
+        spec = self._search.spectrum
+        xs = spec.energies if spec.energies is not None else spec.channels
+        ys = spec.counts
+        mask = (xs >= self._roi_lo) & (xs <= self._roi_hi)
+        return xs[mask], ys[mask]
+
     def _refit(self):
         if self._xrange is None or self._search is None:
             return
@@ -212,19 +219,21 @@ class FitWindow(QDialog):
                 self._search, list(self._xrange), bkg=self._bkg_arg(),
                 skew=(self.shape.currentText() == "Skewed Gaussian"),
                 shared_sigma=self.cb_shared.isChecked())
-        except Exception as exc:  # noqa: BLE001 — no peaks in range, fit failure …
+        except ValueError:
+            self._fit_bkg_only()
+            return
+        except Exception as exc:  # noqa: BLE001
             self.lbl_status.setText(f"Fit failed: {exc}")
             self.table.setRowCount(0)
             self.canvas.figure.clf(); self.canvas.draw_idle()
             return
 
-        # Reuse wara's rich fit plot, isolating its global rcParams changes.
+        ctx = self._context_data()
         fig = self.canvas.figure
         fig.clf()
         try:
             with plt.rc_context():
-                fit.plot(fig=fig)
-            # Lighten the plot background and brighten the grid for contrast.
+                fit.plot(fig=fig, context_data=ctx)
             fig.patch.set_alpha(1.0); fig.set_facecolor(FIT_PLOT_BG)
             for ax in fig.axes:
                 ax.set_facecolor(FIT_PLOT_BG)
@@ -233,6 +242,55 @@ class FitWindow(QDialog):
             self.lbl_status.setText(f"Plot error: {exc}")
         self.canvas.draw_idle()
         self._fill_table(fit)
+
+    def _fit_bkg_only(self):
+        """Fit a pure background (no peaks) and display the area."""
+        spec = self._search.spectrum
+        bkg_name = self._bkg_arg()
+        deg = int(bkg_name.replace("poly", "")) if bkg_name.startswith("poly") else 1
+        try:
+            result = fit_bkg(spec, list(self._xrange), degree=deg)
+        except ValueError as exc:
+            self.lbl_status.setText(str(exc))
+            self.table.setRowCount(0)
+            self.canvas.figure.clf(); self.canvas.draw_idle()
+            return
+
+        x_fine = np.linspace(result.x[0], result.x[-1], 500)
+        y_fine = result.poly(x_fine)
+
+        ctx = self._context_data()
+        fig = self.canvas.figure
+        fig.clf()
+        with plt.rc_context({"font.size": 12}):
+            ax = fig.add_subplot(111)
+            if ctx is not None:
+                ax.plot(ctx[0], ctx[1], "o", color="#00e5ff", alpha=0.15, ms=5)
+            ax.plot(result.x, result.y, "o", color="#00e5ff", alpha=0.5)
+            ax.plot(x_fine, y_fine, color="#39ff14", lw=3,
+                    label=f"Bkg: {bkg_name}")
+            ax.fill_between(x_fine, 0, y_fine, color="#39ff14", alpha=0.08)
+            ax.legend(loc="upper right", ncol=1, frameon=False, fontsize=10)
+            ax.set_title("Background only (no peaks in range)")
+            ax.set_xlabel(spec.x_units)
+            fig.patch.set_alpha(1.0); fig.set_facecolor(FIT_PLOT_BG)
+            ax.set_facecolor(FIT_PLOT_BG)
+            ax.grid(True, color="#3c3c66", linewidth=0.7, alpha=0.8)
+        self.canvas.draw_idle()
+
+        self.lbl_status.setText("No peaks in range — background fit only")
+        self.table.setHorizontalHeaderLabels(["", "Area", ""])
+        self.table.setRowCount(2)
+        rows = [
+            ("Raw sum", f"{result.area_raw:.2f} ± {result.area_raw_err:.2f}"),
+            ("Fit",     f"{result.area_fit:.2f} ± {result.area_fit_err:.2f}"),
+        ]
+        for i, (lbl, val) in enumerate(rows):
+            for c, text in enumerate([lbl, val, ""]):
+                item = QTableWidgetItem(text)
+                item.setFlags(Qt.ItemIsEnabled | Qt.ItemIsSelectable)
+                item.setTextAlignment(Qt.AlignCenter)
+                self.table.setItem(i, c, item)
 
     def _fill_table(self, fit):
         df = fit.summary()
