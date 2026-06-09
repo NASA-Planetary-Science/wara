@@ -22,7 +22,7 @@ from PyQt5.QtWidgets import (
     QFileDialog, QMessageBox, QCheckBox, QDialog, QFormLayout, QLineEdit,
     QDialogButtonBox, QFrame,
 )
-from PyQt5.QtCore import Qt, QSize
+from PyQt5.QtCore import Qt, QSize, pyqtSignal
 from PyQt5.QtGui import QColor, QPalette, QPixmap, QIcon
 from matplotlib.backends.backend_qt5agg import NavigationToolbar2QT as NavToolbar
 
@@ -100,6 +100,25 @@ class AxisLegendDialog(QDialog):
                 self.ed_ylabel.text().strip(), self.ed_desc.text().strip())
 
 
+class SpectrumNavToolbar(NavToolbar):
+    """Navigation toolbar that announces when the user enters zoom/pan mode.
+
+    Zoom and pan take over left-clicks on the canvas, which conflicts with the
+    "Add peaks manually" click mode. The main window listens for this so it can
+    drop the manual mode when the user reaches for the toolbar.
+    """
+
+    mode_activated = pyqtSignal()
+
+    def zoom(self, *args):
+        super().zoom(*args)
+        self.mode_activated.emit()
+
+    def pan(self, *args):
+        super().pan(*args)
+        self.mode_activated.emit()
+
+
 class SpectrumPage(QWidget):
     """Plot column for the Spectrum tab: toolbar on top + canvas."""
 
@@ -109,7 +128,7 @@ class SpectrumPage(QWidget):
         lay = QVBoxLayout(self)
         lay.setContentsMargins(12, 12, 12, 12); lay.setSpacing(8)
         self.canvas = SpectrumCanvas()
-        nav = NavToolbar(self.canvas, self)
+        nav = SpectrumNavToolbar(self.canvas, self)
         nav.setObjectName("plot_toolbar")
         nav.setIconSize(QSize(22, 22))
         recolor_toolbar_icons(nav, T.TEXT_PRIMARY)
@@ -216,7 +235,7 @@ class WaraBetaApp(QMainWindow):
             b.setCursor(Qt.PointingHandCursor); lay.addWidget(b)
 
         lay.addItem(QSpacerItem(20, 12, QSizePolicy.Minimum, QSizePolicy.Expanding))
-        ver = QLabel("v1.0"); ver.setObjectName("version")
+        ver = QLabel("v2.0"); ver.setObjectName("version")
         ver.setAlignment(Qt.AlignHCenter); lay.addWidget(ver)
         return panel
 
@@ -312,7 +331,9 @@ class WaraBetaApp(QMainWindow):
         pf.detector.currentTextChanged.connect(self._apply_detector_preset)
         pf.cb_peaks.toggled.connect(self.spectrum_page.canvas.set_show_peaks)
         pf.cb_snr.toggled.connect(self._toggle_snr)
-        pf.cb_manual.toggled.connect(self.spectrum_page.canvas.set_manual)
+        pf.cb_manual.toggled.connect(self._toggle_manual)
+        # Entering zoom/pan takes over canvas clicks — drop manual peak mode.
+        self.spectrum_page.canvas.nav_toolbar.mode_activated.connect(self._on_nav_mode)
         self.spectrum_page.canvas.point_clicked.connect(self._add_manual_peak)
         self.spectrum_page.canvas.roi_selected.connect(self._on_roi)
         opts.btn_iso.clicked.connect(self._open_nuclear_db)
@@ -737,6 +758,18 @@ class WaraBetaApp(QMainWindow):
             self.statusBar().showMessage("  SNR curve not available for this method")
             return
         self.spectrum_page.canvas.set_snr(xs, snr, threshold=s.min_snr)
+
+    def _toggle_manual(self, checked):
+        # Manual peak selection and Drag-and-Fit are mutually exclusive.
+        if checked and self._drag_fit_active:
+            self._stop_drag_fit()
+        self.spectrum_page.canvas.set_manual(checked)
+
+    def _on_nav_mode(self):
+        # Zoom/pan hijacks canvas clicks; turn off manual peak mode if active.
+        cb = self.spectrum_opts.pf_panel.cb_manual
+        if cb.isChecked():
+            cb.setChecked(False)
 
     def _add_manual_peak(self, x, y):
         if self.spect is None:

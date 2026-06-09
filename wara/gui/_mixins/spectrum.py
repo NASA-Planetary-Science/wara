@@ -432,6 +432,12 @@ class SpectrumMixin:
             "+/- Area",
             "+/- Area (%)",
         ]
+        # PeakFit reports the area as a rate (counts/sec) when the spectrum is
+        # raw counts with a livetime. The plotted counts and the net-area method
+        # both work in raw counts, so undo that here to keep "Peak area"
+        # consistent (factor is 1 for a cps / no-livetime spectrum).
+        rate_factor = (self.spect.livetime
+                       if (not self.spect.cps and self.spect.livetime) else 1.0)
         mean = []
         area = []
         fwhm = []
@@ -442,10 +448,10 @@ class SpectrumMixin:
             ls = list(i.values())
             lse = list(e.values())
             mean.append(ls[0])
-            area.append(ls[1])
+            area.append(ls[1] * rate_factor)
             fwhm.append(ls[2])
             fwhm_p.append(ls[2] / ls[0] * 100)
-            std_A.append(lse[1])
+            std_A.append(lse[1] * rate_factor)
             std_A_p.append(lse[1] / ls[1] * 100)
 
         rs = np.array([mean, area, fwhm, fwhm_p, std_A, std_A_p]).T

@@ -13,12 +13,12 @@ from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
 from PyQt5.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QLabel, QComboBox, QCheckBox, QSpinBox,
     QDoubleSpinBox, QPushButton, QTableWidget, QTableWidgetItem, QHeaderView,
-    QSizePolicy, QSlider,
+    QSizePolicy, QSlider, QWidget,
 )
 from PyQt5.QtCore import Qt, pyqtSignal
 
 from wara import peakfit
-from wara.advanced_fit import fit_bkg
+from wara.advanced_fit import fit_bkg, PeakAreaLinearBkg
 from wara.matplotlib_theme import set_theme, DARK
 from . import theme as T
 
@@ -56,7 +56,7 @@ class FitWindow(QDialog):
         self.setWindowFlags(Qt.Window | Qt.WindowStaysOnTopHint)
         self.setWindowTitle("Drag and Fit")
         self.setStyleSheet(T.STYLESHEET)
-        self.resize(960, 780)
+        self.resize(960, 840)
         set_theme(DARK)               # PeakFit.plot() uses wara's active theme
         self._search = search
         self._xrange = None
@@ -65,8 +65,23 @@ class FitWindow(QDialog):
 
         outer = QVBoxLayout(self)
 
-        # ── Model controls ───────────────────────────────────────
-        row1 = QHBoxLayout()
+        # ── Method selector ──────────────────────────────────────
+        row0 = QHBoxLayout()
+        self.method = QComboBox()
+        self.method.addItems(["Peak fit", "Net area − linear bkg"])
+        self.method.setToolTip(
+            "Peak fit: model every peak in the ROI with lmfit.\n"
+            "Net area − linear bkg: integrate the counts above a straight "
+            "background drawn under the peak region (wara.advanced_fit)."
+        )
+        row0.addWidget(QLabel("Method:")); row0.addWidget(self.method)
+        row0.addStretch(1)
+        outer.addLayout(row0)
+
+        # ── Model controls (peak-fit only) ───────────────────────
+        self.peakfit_controls = QWidget()
+        row1 = QHBoxLayout(self.peakfit_controls)
+        row1.setContentsMargins(0, 0, 0, 0)
         self.shape = QComboBox(); self.shape.addItems(["Gaussian", "Skewed Gaussian"])
         self.shape.setToolTip("Peak shape used for every peak in the ROI")
         self.bkg = QComboBox(); self.bkg.addItems(list(BKG_ARGS.keys()))
@@ -79,7 +94,7 @@ class FitWindow(QDialog):
         row1.addWidget(QLabel("Background:")); row1.addWidget(self.bkg)
         row1.addWidget(QLabel("Degree:")); row1.addWidget(self.degree)
         row1.addWidget(self.cb_shared); row1.addStretch(1)
-        outer.addLayout(row1)
+        outer.addWidget(self.peakfit_controls)
 
         # ── ROI controls: slider + spin box per bound (synced w/ main span) ──
         self.roi_lo = QDoubleSpinBox(); self.roi_hi = QDoubleSpinBox()
@@ -91,10 +106,13 @@ class FitWindow(QDialog):
             sl.setRange(0, self.N)
         self.slider_lo.setToolTip("Trim the lower bound of the fit range within the selected ROI")
         self.slider_hi.setToolTip("Trim the upper bound of the fit range within the selected ROI")
-        for label, slider, spin in (("Fit low ", self.slider_lo, self.roi_lo),
-                                    ("Fit high", self.slider_hi, self.roi_hi)):
+        self._slider_labels = {}
+        for key, label, slider, spin in (
+                ("lo", "Fit low ", self.slider_lo, self.roi_lo),
+                ("hi", "Fit high", self.slider_hi, self.roi_hi)):
             r = QHBoxLayout()
-            r.addWidget(QLabel(label)); r.addWidget(slider, stretch=1); r.addWidget(spin)
+            lbl = QLabel(label); self._slider_labels[key] = lbl
+            r.addWidget(lbl); r.addWidget(slider, stretch=1); r.addWidget(spin)
             outer.addLayout(r)
 
         # ── Fit plot (residual + components + 3-σ band) ──────────
@@ -121,6 +139,7 @@ class FitWindow(QDialog):
         outer.addLayout(crow)
 
         # Live refit on any setting / ROI change
+        self.method.currentTextChanged.connect(self._on_method_changed)
         self.shape.currentTextChanged.connect(self._refit)
         self.bkg.currentTextChanged.connect(self._on_bkg_changed)
         self.degree.valueChanged.connect(self._refit_if_poly)
@@ -211,7 +230,34 @@ class FitWindow(QDialog):
         mask = (xs >= self._roi_lo) & (xs <= self._roi_hi)
         return xs[mask], ys[mask]
 
+    # ── Method dispatch ──────────────────────────────────────────────────────
+    def _is_area_method(self):
+        return self.method.currentIndex() == 1
+
+    def _on_method_changed(self):
+        area = self._is_area_method()
+        self.peakfit_controls.setVisible(not area)
+        if area:
+            self._slider_labels["lo"].setText("Peak start")
+            self._slider_labels["hi"].setText("Peak end ")
+            self.slider_lo.setToolTip("Left edge of the peak — counts to its left are background")
+            self.slider_hi.setToolTip("Right edge of the peak — counts to its right are background")
+            self.table.setHorizontalHeaderLabels(["Region", "Area", ""])
+        else:
+            self._slider_labels["lo"].setText("Fit low ")
+            self._slider_labels["hi"].setText("Fit high")
+            self.slider_lo.setToolTip("Trim the lower bound of the fit range within the selected ROI")
+            self.slider_hi.setToolTip("Trim the upper bound of the fit range within the selected ROI")
+            self.table.setHorizontalHeaderLabels(["Centroid", "Area", "FWHM"])
+        self._refit()
+
     def _refit(self):
+        if self._is_area_method():
+            self._refit_area()
+        else:
+            self._refit_peakfit()
+
+    def _refit_peakfit(self):
         if self._xrange is None or self._search is None:
             return
         try:
@@ -292,12 +338,125 @@ class FitWindow(QDialog):
                 item.setTextAlignment(Qt.AlignCenter)
                 self.table.setItem(i, c, item)
 
+    # ── Net area − linear background (wara.advanced_fit.PeakAreaLinearBkg) ─────
+    def _refit_area(self):
+        if self._search is None or self._xrange is None:
+            return
+        spect = self._search.spectrum
+        outer_l, outer_r = self._roi_lo, self._roi_hi
+        inner_l, inner_r = self.roi_lo.value(), self.roi_hi.value()
+        # The two sliders carve the peak region out of the dragged ROI; the
+        # flanks (outer→inner on each side) become the background ranges.
+        # The spin boxes round to 2 decimals, so an inner edge resting on an ROI
+        # boundary can land a hair outside the full-precision outer bound. Clamp
+        # the peak edges back into the ROI before validating.
+        inner_l = min(max(inner_l, outer_l), outer_r)
+        inner_r = min(max(inner_r, outer_l), outer_r)
+        if inner_l >= inner_r:
+            self.lbl_status.setText("Set the peak start below the peak end, inside the ROI.")
+            return
+        # Wrap the whole path (calc + draw + table): any failure must surface in
+        # the status bar rather than die silently to the terminal and leave the
+        # previous (peak-fit) plot on screen.
+        try:
+            alb = PeakAreaLinearBkg(spect, x1=outer_l, x2=outer_r)
+            alb.calculate_peak_area(x1=[outer_l, inner_l], x2=[inner_r, outer_r])
+            self._draw_area(alb, spect)
+            self._fill_area_table(alb)
+        except Exception as exc:  # noqa: BLE001
+            self.lbl_status.setText(f"Net-area fit failed: {exc}")
+            self.table.setRowCount(0)
+            self.canvas.figure.clf(); self.canvas.draw_idle()
+            return
+        self.lbl_status.setText(
+            f"Net area A = {alb.A:.1f} ± {alb.sigA:.1f}    ·    "
+            f"Bkg B = {alb.B:.1f} ± {alb.sigB:.1f}"
+        )
+
+    def _draw_area(self, alb, spect):
+        ch_l, ch_r = alb._ch_outer_l, alb._ch_outer_r
+        if spect.energies is None:
+            x_full = spect.channels[ch_l:ch_r + 1].astype(float)
+        else:
+            x_full = spect.energies[ch_l:ch_r + 1]
+        y_full = spect.counts[ch_l:ch_r + 1]
+
+        fig = self.canvas.figure
+        fig.clf()
+        with plt.rc_context({"font.size": 12}):
+            ax = fig.add_subplot(111)
+            ax.plot(x_full, y_full, drawstyle="steps-mid", color="#00e5ff", lw=1.2,
+                    label="data")
+            ax.plot(alb._x_full_range, alb.y_eqn, color="#ff5d5d", lw=2,
+                    label="linear background")
+            # Flanks outside the dashed lines are only the background-sampling
+            # regions — they are NOT part of B, so colour them neutrally.
+            xf = alb._x_full_range
+            flank = (xf <= alb._x_inner_l) | (xf >= alb._x_inner_r)
+            # Fills use step="mid" to line up with the steps-mid data line above;
+            # step="pre" would shift them half a bin left (visible on narrow peaks).
+            ax.fill_between(xf, 0, alb.y_eqn, where=flank, step="mid",
+                            color="#8a8fa3", alpha=0.18, label="background regions")
+            # B is the background area under the peak region (between the lines).
+            ax.fill_between(alb.xr, 0, alb.y_eqn_peak, step="mid",
+                            color="#ff5d5d", alpha=0.15, label=f"B = {alb.B:.1f}")
+            ax.fill_between(alb.xr, alb.y_eqn_peak, alb.yr, step="mid",
+                            color="#39ff14", alpha=0.18, label=f"A = {alb.A:.1f}")
+            # inner-edge guides, drawn up to the background line height
+            y_il = alb._slope * alb._x_inner_l + alb._intercept
+            y_ir = alb._slope * alb._x_inner_r + alb._intercept
+            ax.vlines([alb._x_inner_l, alb._x_inner_r], 0, [y_il, y_ir],
+                      linestyle=(0, (2, 1.5)), color="#ffd24a", lw=2.4, alpha=0.95)
+            ax.legend(loc="upper right", frameon=False, fontsize=10)
+            ax.set_xlabel(spect.x_units)
+            ax.set_ylabel("Counts")
+            ax.set_ylim(bottom=0)
+            fig.patch.set_alpha(1.0); fig.set_facecolor(FIT_PLOT_BG)
+            ax.set_facecolor(FIT_PLOT_BG)
+            ax.grid(True, color="#3c3c66", linewidth=0.7, alpha=0.8)
+            ax.tick_params(colors="#c8cbe0", which="both", length=3)
+            for sp in ax.spines.values():
+                sp.set_color("#3c3c66")
+            ax.xaxis.label.set_color("#c8cbe0")
+            ax.yaxis.label.set_color("#c8cbe0")
+        self.canvas.draw_idle()
+
+    def _fill_area_table(self, alb):
+        self.table.setHorizontalHeaderLabels(["Region", "Area", ""])
+        rows = [
+            ("Net (A)", f"{alb.A:.2f} ± {alb.sigA:.2f}"),
+            ("Bkg (B)", f"{alb.B:.2f} ± {alb.sigB:.2f}"),
+        ]
+        self.table.setRowCount(len(rows))
+        for i, (lbl, val) in enumerate(rows):
+            for c, text in enumerate([lbl, val, ""]):
+                item = QTableWidgetItem(text)
+                item.setFlags(Qt.ItemIsEnabled | Qt.ItemIsSelectable)
+                item.setTextAlignment(Qt.AlignCenter)
+                self.table.setItem(i, c, item)
+
+    def _x_unit_label(self):
+        """Short x-axis unit for table headers: 'keV'/'MeV'/… or 'ch'."""
+        xu = self._search.spectrum.x_units    # "Channels" or "Energy (keV)"
+        if "(" in xu and ")" in xu:
+            return xu[xu.index("(") + 1:xu.index(")")]
+        return "ch"
+
     def _fill_table(self, fit):
         df = fit.summary()
+        # PeakFit reports the area as a rate (counts/sec) when the spectrum is
+        # raw counts with a livetime. The plotted counts and the net-area method
+        # both work in raw counts, so undo that here to keep the Area column
+        # consistent and comparable (factor is 1 for a cps / no-livetime file).
+        spec = self._search.spectrum
+        rate_factor = spec.livetime if (not spec.cps and spec.livetime) else 1.0
+        unit = self._x_unit_label()
+        self.table.setHorizontalHeaderLabels(
+            [f"Centroid ({unit})", "Area", f"FWHM ({unit})"])
         self.table.setRowCount(len(df))
         for i, row in df.iterrows():
             cells = [_fmt(row["mean"], row["mean_err"]),
-                     _fmt(row["area"], row["area_err"]),
+                     _fmt(row["area"] * rate_factor, row["area_err"] * rate_factor),
                      _fmt(row["fwhm"], row["fwhm_err"])]
             for c, text in enumerate(cells):
                 item = QTableWidgetItem(text)
