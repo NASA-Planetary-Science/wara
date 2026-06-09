@@ -127,6 +127,12 @@ QPushButton#action_btn {{
 QPushButton#action_btn:hover {{ background-color: #16384f; border: 1px solid {ACCENT_CYAN}; color: {ACCENT_CYAN}; }}
 QPushButton:disabled {{ color: #5a5a7a; border-color: #2e2e48; background-color: #1a1a28; }}
 
+QPushButton#open_btn {{
+    background-color: #2a1f5e; color: #d4b8ff; border: 1px solid #a07cff;
+    border-radius: 5px; padding: 9px 14px; font-size: 14px; font-weight: 700;
+}}
+QPushButton#open_btn:hover {{ background-color: #3a2d78; border: 1px solid #c4a8ff; color: #e8d8ff; }}
+
 QPushButton#primary_btn {{
     background-color: #11405e; color: #aef3ff; border: 1px solid {ACCENT_CYAN};
     border-radius: 5px; padding: 9px 14px; font-size: 14px; font-weight: 700;

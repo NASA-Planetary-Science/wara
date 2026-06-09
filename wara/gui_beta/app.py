@@ -140,9 +140,9 @@ class SpectrumPage(QWidget):
 
 
 class WaraBetaApp(QMainWindow):
-    OPT_W = 340
+    OPT_W = 300
 
-    def __init__(self, file_name=None):
+    def __init__(self, file_name=None, cli_opts=None):
         super().__init__()
         self.setWindowTitle("WARA  ·  Spectrum Analysis  (beta)")
         self.setMinimumSize(1480, 760)
@@ -195,6 +195,7 @@ class WaraBetaApp(QMainWindow):
 
         if file_name:
             self._load_path(file_name)
+            self._apply_cli_opts(cli_opts)
 
     # ── Column 1: navigation ─────────────────────────────────────────────────
     def _build_nav(self):
@@ -225,7 +226,7 @@ class WaraBetaApp(QMainWindow):
 
         lay.addSpacing(4); lay.addWidget(hsep())
         lay.addWidget(header("FILE"))
-        self.btn_open = QPushButton("Open Spectrum"); self.btn_open.setObjectName("action_btn")
+        self.btn_open = QPushButton("Open Spectrum"); self.btn_open.setObjectName("open_btn")
         self.btn_open.setToolTip("Open a spectrum file (.csv .cnf .txt .mca .spe)")
         self.btn_save = QPushButton("Save"); self.btn_save.setObjectName("action_btn")
         self.btn_save.setToolTip("Save the active spectrum (.txt keeps metadata, .csv is plain)")
@@ -423,6 +424,25 @@ class WaraBetaApp(QMainWindow):
         extra = f"  ·  {n_over} overlaid" if n_over else ""
         self.statusBar().showMessage(
             f"  Loaded  ·  {len(c):,} channels  ·  {int(c.sum()):,} total counts{extra}")
+
+    def _apply_cli_opts(self, opts):
+        """Apply CLI options (--labr, --hpge, --min_snr, etc.) after loading."""
+        if not opts or self.spect is None:
+            return
+        pf = self.spectrum_opts.pf_panel
+        detector = opts.get("detector")
+        if detector:
+            idx = pf.detector.findText(detector)
+            if idx >= 0:
+                pf.detector.setCurrentIndex(idx)
+        if opts.get("min_snr"):
+            pf.snr.setText(opts["min_snr"])
+        if opts.get("ref_x"):
+            pf.ref_ch.setText(opts["ref_x"])
+        if opts.get("ref_fwhm"):
+            pf.ref_fwhm.setText(opts["ref_fwhm"])
+        if detector or opts.get("ref_x"):
+            self._find_peaks()
 
     @staticmethod
     def _display_name(spect, filename):
@@ -988,13 +1008,37 @@ class WaraBetaApp(QMainWindow):
         self.statusBar().showMessage("  Spectrum reset to originally loaded state")
 
 
+def _parse_argv():
+    """Parse CLI options matching the legacy docopt interface."""
+    argv = sys.argv[1:]
+    opts = {"file_name": None, "detector": None, "min_snr": None,
+            "ref_x": None, "ref_fwhm": None, "fwhm_at_0": None}
+    positional = []
+    i = 0
+    while i < len(argv):
+        a = argv[i]
+        if a in ("--labr", "--cebr"):
+            opts["detector"] = "LaBr/CeBr"
+        elif a == "--hpge":
+            opts["detector"] = "HPGe"
+        elif a.startswith("--min_snr="):
+            opts["min_snr"] = a.split("=", 1)[1]
+        elif a.startswith("--ref_x="):
+            opts["ref_x"] = a.split("=", 1)[1]
+        elif a.startswith("--ref_fwhm="):
+            opts["ref_fwhm"] = a.split("=", 1)[1]
+        elif a.startswith("--fwhm_at_0="):
+            opts["fwhm_at_0"] = a.split("=", 1)[1]
+        elif not a.startswith("-"):
+            positional.append(a)
+        i += 1
+    if positional:
+        opts["file_name"] = positional[0]
+    return opts
+
+
 def main():
-    # First positional arg (if any) is treated as a spectrum file to open.
-    file_name = None
-    for a in sys.argv[1:]:
-        if not a.startswith("-"):
-            file_name = a
-            break
+    opts = _parse_argv()
 
     T.apply_mpl_theme()
     QApplication.setAttribute(Qt.AA_EnableHighDpiScaling)
@@ -1006,7 +1050,7 @@ def main():
     app = QApplication([])
     app.setApplicationName("WARA")
     app.setStyleSheet(STYLESHEET)
-    win = WaraBetaApp(file_name=file_name)
+    win = WaraBetaApp(file_name=opts["file_name"], cli_opts=opts)
     win.show()
     app.exec_()
 

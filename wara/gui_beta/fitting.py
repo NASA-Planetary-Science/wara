@@ -96,28 +96,27 @@ class FitWindow(QDialog):
         row1.addWidget(self.cb_shared); row1.addStretch(1)
         outer.addWidget(self.peakfit_controls)
 
-        # ── ROI controls: slider + spin box per bound (synced w/ main span) ──
+        # ── Fit plot (residual + components + 3-σ band) ──────────
+        self.canvas = FitCanvas()
+        outer.addWidget(self.canvas, stretch=1)
+
+        # ── ROI controls: single row below the plot (like legacy advanced fit) ──
         self.roi_lo = QDoubleSpinBox(); self.roi_hi = QDoubleSpinBox()
         self.slider_lo = QSlider(Qt.Horizontal); self.slider_hi = QSlider(Qt.Horizontal)
         for s in (self.roi_lo, self.roi_hi):
             s.setDecimals(2); s.setRange(-1e9, 1e9); s.setSingleStep(1.0)
             s.setMinimumWidth(96)
         for sl in (self.slider_lo, self.slider_hi):
-            sl.setRange(0, self.N)
-        self.slider_lo.setToolTip("Trim the lower bound of the fit range within the selected ROI")
-        self.slider_hi.setToolTip("Trim the upper bound of the fit range within the selected ROI")
-        self._slider_labels = {}
-        for key, label, slider, spin in (
-                ("lo", "Fit low ", self.slider_lo, self.roi_lo),
-                ("hi", "Fit high", self.slider_hi, self.roi_hi)):
-            r = QHBoxLayout()
-            lbl = QLabel(label); self._slider_labels[key] = lbl
-            r.addWidget(lbl); r.addWidget(slider, stretch=1); r.addWidget(spin)
-            outer.addLayout(r)
-
-        # ── Fit plot (residual + components + 3-σ band) ──────────
-        self.canvas = FitCanvas()
-        outer.addWidget(self.canvas, stretch=1)
+            sl.setRange(0, self.N // 2)
+        self.slider_lo.setToolTip("Trim the lower bound of the fit range")
+        self.slider_hi.setToolTip("Trim the upper bound of the fit range")
+        self.slider_hi.setLayoutDirection(Qt.RightToLeft)
+        roi_row = QHBoxLayout()
+        roi_row.addWidget(self.roi_lo)
+        roi_row.addWidget(self.slider_lo, stretch=1)
+        roi_row.addWidget(self.slider_hi, stretch=1)
+        roi_row.addWidget(self.roi_hi)
+        outer.addLayout(roi_row)
 
         # ── Results ──────────────────────────────────────────────
         self.lbl_status = QLabel("Drag over peaks on the main plot to fit.")
@@ -182,7 +181,7 @@ class FitWindow(QDialog):
             wdg.blockSignals(True)
         self.roi_lo.setValue(lo); self.roi_hi.setValue(hi)
         self.slider_lo.setValue(self._val_to_slider(lo))
-        self.slider_hi.setValue(self._val_to_slider(hi))
+        self.slider_hi.setValue(self.N - self._val_to_slider(hi))
         for wdg in widgets:
             wdg.blockSignals(False)
 
@@ -191,7 +190,7 @@ class FitWindow(QDialog):
         self._roi_edited()
 
     def _on_hi_slider(self, pos):
-        self.roi_hi.blockSignals(True); self.roi_hi.setValue(self._slider_to_val(pos)); self.roi_hi.blockSignals(False)
+        self.roi_hi.blockSignals(True); self.roi_hi.setValue(self._slider_to_val(self.N - pos)); self.roi_hi.blockSignals(False)
         self._roi_edited()
 
     def _on_lo_spin(self, val):
@@ -199,7 +198,7 @@ class FitWindow(QDialog):
         self._roi_edited()
 
     def _on_hi_spin(self, val):
-        self.slider_hi.blockSignals(True); self.slider_hi.setValue(self._val_to_slider(val)); self.slider_hi.blockSignals(False)
+        self.slider_hi.blockSignals(True); self.slider_hi.setValue(self.N - self._val_to_slider(val)); self.slider_hi.blockSignals(False)
         self._roi_edited()
 
     def _roi_edited(self):
@@ -238,16 +237,12 @@ class FitWindow(QDialog):
         area = self._is_area_method()
         self.peakfit_controls.setVisible(not area)
         if area:
-            self._slider_labels["lo"].setText("Peak start")
-            self._slider_labels["hi"].setText("Peak end ")
             self.slider_lo.setToolTip("Left edge of the peak — counts to its left are background")
             self.slider_hi.setToolTip("Right edge of the peak — counts to its right are background")
             self.table.setHorizontalHeaderLabels(["Region", "Area", ""])
         else:
-            self._slider_labels["lo"].setText("Fit low ")
-            self._slider_labels["hi"].setText("Fit high")
-            self.slider_lo.setToolTip("Trim the lower bound of the fit range within the selected ROI")
-            self.slider_hi.setToolTip("Trim the upper bound of the fit range within the selected ROI")
+            self.slider_lo.setToolTip("Trim the lower bound of the fit range")
+            self.slider_hi.setToolTip("Trim the upper bound of the fit range")
             self.table.setHorizontalHeaderLabels(["Centroid", "Area", "FWHM"])
         self._refit()
 

@@ -64,6 +64,7 @@ def header(text):
     return h
 
 
+
 def stat_row(key, accent=None):
     """Return (row_widget, value_label) so callers can update the value."""
     accent = accent or T.TEXT_PRIMARY
@@ -147,7 +148,7 @@ class SpectrumCanvas(FigureCanvas):
         self._active_label = label
         self._xlabel = xlabel
         self._ylabel = ylabel
-        self._redraw()
+        self._redraw(keep_zoom=False)
 
     def set_overlays(self, items):
         """items: list of (x, y, label, color) for kept/overlaid spectra."""
@@ -164,11 +165,7 @@ class SpectrumCanvas(FigureCanvas):
 
     def add_peak(self, x, y, label):
         self._peaks.append((x, y, label))
-        xlim, ylim = self.ax.get_xlim(), self.ax.get_ylim()
         self._redraw()
-        self.ax.set_xlim(xlim)
-        self.ax.set_ylim(ylim)
-        self.draw_idle()
 
     def set_show_peaks(self, show):
         self._show_peaks = show
@@ -242,11 +239,12 @@ class SpectrumCanvas(FigureCanvas):
             self.ax2.relim(); self.ax2.autoscale(axis="y"); self.ax2.set_ylim(bottom=0)
         self.draw_idle()
 
-    def _redraw(self):
+    def _redraw(self, keep_zoom=True):
         if self._spect is None:
             self.draw_empty()
             return
         ax = self.ax
+        xlim, ylim = (ax.get_xlim(), ax.get_ylim()) if keep_zoom else (None, None)
         ax.clear()
         ax.set_facecolor(T.BG_PLOT)
         ax.patch.set_visible(True)
@@ -308,11 +306,12 @@ class SpectrumCanvas(FigureCanvas):
                                       edgecolor="none"))
         if self._snr is not None:
             self._draw_snr_overlay()
-        # The data extent just changed, so clear the toolbar's pan/zoom history;
-        # otherwise Home would restore a stale (pre-update) view.
         if self.nav_toolbar is not None:
             self.nav_toolbar.update()
-        # ax.clear() removed the ROI selector's artist — rebuild it if active.
+            self.nav_toolbar.push_current()
+        if xlim is not None:
+            ax.set_xlim(xlim)
+            ax.set_ylim(ylim)
         if self._roi_active:
             self._make_span()
         self.draw_idle()
@@ -365,7 +364,9 @@ class PeakFindPanel(QFrame):
 
         self.snr = field("SNR >", "3")
         self.ref_ch = field("Ref. channel")
+        self.ref_ch.setPlaceholderText("e.g. 420")
         self.ref_fwhm = field("Ref. FWHM")
+        self.ref_fwhm.setPlaceholderText("e.g. 12")
 
         xr = QWidget(); xl = QHBoxLayout(xr); xl.setContentsMargins(0, 0, 0, 0); xl.setSpacing(5)
         xl.addWidget(QLabel("Xrange")); xl.addStretch(1)
@@ -398,17 +399,25 @@ class PeakFindPanel(QFrame):
         lay.addWidget(self.btn_clear)
 
         # ── Hover help ───────────────────────────────────────────────
-        self.snr.setToolTip("Minimum signal-to-noise ratio for a detected peak")
-        self.ref_ch.setToolTip("Reference channel for the resolution (FWHM-vs-energy) model")
-        self.ref_fwhm.setToolTip("FWHM in channels at the reference channel")
-        self.x0.setToolTip("Optional lower x-bound for the search")
-        self.x1.setToolTip("Optional upper x-bound for the search")
-        self.detector.setToolTip("Detector preset — fills the SNR and reference values")
-        self.cb_kernel.setToolTip("Kernel deconvolution method (needs < 9000 channels or an Xrange)")
+        self.snr.setToolTip("Minimum signal-to-noise ratio — lower values find weaker peaks")
+        self.ref_ch.setToolTip(
+            "Channel or energy where the detector resolution is known.\n"
+            "Used to estimate peak widths across the spectrum.")
+        self.ref_fwhm.setToolTip(
+            "FWHM (in channels or energy units) at the reference point.\n"
+            "Approximate values are fine — the algorithm is forgiving.")
+        self.x0.setToolTip("Optional lower bound to limit the search range")
+        self.x1.setToolTip("Optional upper bound to limit the search range")
+        self.detector.setToolTip(
+            "Preset detector parameters — fills SNR, Ref. channel, and Ref. FWHM.\n"
+            "Adjust values as needed for your specific setup.")
+        self.cb_kernel.setToolTip(
+            "Derivative-based peak detection — more robust but slower.\n"
+            "Needs < 9000 channels, or set an Xrange to limit the region.")
         self.cb_snr.setToolTip("Overlay the SNR curve on a second axis")
-        self.cb_peaks.setToolTip("Show or hide the peak markers")
+        self.cb_peaks.setToolTip("Show or hide the peak markers on the plot")
         self.btn_find.setToolTip("Run the peak search with the settings above")
-        self.btn_clear.setToolTip("Remove all peak markers")
+        self.btn_clear.setToolTip("Remove all peak markers from the plot")
 
 
 class AddSubtractPanel(QFrame):
@@ -484,16 +493,20 @@ class SpectrumOptions(QScrollArea):
         lay.addWidget(hsep()); lay.addWidget(header("PEAKS & FITTING"))
         self.btn_fit = QPushButton("Drag and Fit"); self.btn_fit.setObjectName("fit_btn")
         self.btn_fit.setCheckable(True)
-        self.btn_fit.setToolTip("Open the combined fitting window (peakfit + advanced fit)")
+        self.btn_fit.setToolTip(
+            "Click-drag over a region on the plot to fit peaks.\n"
+            "Peaks must be found first (auto-find or manual).")
         self.btn_fit.setCursor(Qt.PointingHandCursor); lay.addWidget(self.btn_fit)
 
         self.btn_find = QPushButton("Auto-Find Peaks  ▾"); self.btn_find.setObjectName("primary_btn")
+        self.btn_find.setToolTip("Expand to configure detector parameters and run automatic peak search")
         self.btn_find.setCursor(Qt.PointingHandCursor); lay.addWidget(self.btn_find)
         self.pf_panel = PeakFindPanel(); self.pf_panel.setVisible(False)
         lay.addWidget(self.pf_panel)
         self.btn_find.clicked.connect(self._toggle_pf)
 
         self.btn_iso = QPushButton("Nuclear Database"); self.btn_iso.setObjectName("yellow_btn")
+        self.btn_iso.setToolTip("Look up gamma-ray energies by isotope to identify peaks")
         self.btn_iso.setCursor(Qt.PointingHandCursor); lay.addWidget(self.btn_iso)
 
         # Spectrum actions
@@ -501,7 +514,9 @@ class SpectrumOptions(QScrollArea):
         self.btn_reset = QPushButton("Reset Spectrum"); self.btn_reset.setObjectName("action_btn")
         self.btn_reset.setToolTip("Undo all customize edits and restore the originally loaded spectrum")
         self.btn_remcal = QPushButton("Remove Calibration"); self.btn_remcal.setObjectName("action_btn")
+        self.btn_remcal.setToolTip("Strip the energy axis and revert to channel numbers")
         self.btn_addsub = QPushButton("Add / Subtract  ▾"); self.btn_addsub.setObjectName("action_btn")
+        self.btn_addsub.setToolTip("Combine the active spectrum with overlays (e.g. background subtraction)")
         for b in (self.btn_reset, self.btn_remcal, self.btn_addsub):
             b.setCursor(Qt.PointingHandCursor); lay.addWidget(b)
         self.addsub_panel = AddSubtractPanel(); self.addsub_panel.setVisible(False)
@@ -511,32 +526,43 @@ class SpectrumOptions(QScrollArea):
         # Customize — each option applies live while its checkbox is ticked
         lay.addWidget(hsep()); lay.addWidget(header("CUSTOMIZE"))
         self.cb_smooth = QCheckBox("Smooth")
+        self.cb_smooth.setToolTip("Moving-average filter — adjust the window size to the right")
         self.smooth_spin = SpinBox(); self.smooth_spin.setRange(1, 99999)
         self.smooth_spin.setSingleStep(1); self.smooth_spin.setValue(4)
         self.smooth_spin.setFixedWidth(84)
+        self.smooth_spin.setToolTip("Smoothing window size (number of channels)")
         lay.addWidget(check_row(self.cb_smooth, self.smooth_spin))
 
         self.cb_rebin = QCheckBox("Rebin ×2")
+        self.cb_rebin.setToolTip("Combine adjacent channels to reduce noise")
         self.rebin = SpinBox(); self.rebin.setRange(2, 1024); self.rebin.setSingleStep(2)
         self.rebin.setValue(2); self.rebin.setFixedWidth(84)
+        self.rebin.setToolTip("Number of channels to merge")
         lay.addWidget(check_row(self.cb_rebin, self.rebin))
 
         self.cb_shift = QCheckBox("Shift")
+        self.cb_shift.setToolTip("Translate the spectrum along the x-axis")
         self.shift_box = DoubleSpinBox(); self.shift_box.setRange(-1e6, 1e6)
         self.shift_box.setDecimals(2); self.shift_box.setFixedWidth(84)
+        self.shift_box.setToolTip("Shift amount in channels or energy units")
         lay.addWidget(check_row(self.cb_shift, self.shift_box))
 
         self.cb_yconst = QCheckBox("y × const")
+        self.cb_yconst.setToolTip("Scale all counts by a constant factor")
         self.yconst = DoubleSpinBox(); self.yconst.setRange(-1e9, 1e9)
         self.yconst.setDecimals(3); self.yconst.setValue(1.0); self.yconst.setFixedWidth(84)
+        self.yconst.setToolTip("Multiplicative factor for counts")
         lay.addWidget(check_row(self.cb_yconst, self.yconst))
 
         self.cb_xconst = QCheckBox("x × const")
+        self.cb_xconst.setToolTip("Scale the x-axis by a constant factor")
         self.xconst = DoubleSpinBox(); self.xconst.setRange(-1e9, 1e9)
         self.xconst.setDecimals(3); self.xconst.setValue(1.0); self.xconst.setFixedWidth(84)
+        self.xconst.setToolTip("Multiplicative factor for the x-axis")
         lay.addWidget(check_row(self.cb_xconst, self.xconst))
 
         self.btn_labels = QPushButton("Axis & Legend…"); self.btn_labels.setObjectName("action_btn")
+        self.btn_labels.setToolTip("Set custom axis labels and legend text")
         self.btn_labels.setCursor(Qt.PointingHandCursor); lay.addWidget(self.btn_labels)
 
         # ── Hover help ───────────────────────────────────────────────
