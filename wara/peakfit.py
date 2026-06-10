@@ -121,6 +121,22 @@ class PeakFit:
         if self.skew:
             pars[f"{prefix}gamma"].set(value=-1)
 
+    # -- Hooks for plotting ------------------------------------------------
+    def _component_curve(self, comps, cp):
+        """
+        y-values drawn for peak component ``cp`` in :meth:`plot`.
+
+        Default: the peak sitting on its background (``bkg + gaussian``),
+        which reads naturally for smooth continua. Subclasses with a
+        discontinuous background (e.g. a step) override this so the step
+        doesn't carve a notch into the otherwise-smooth peak.
+        """
+        return comps[self.bkg_key] + comps[f"g{cp+1}_"]
+
+    def _bkg_drawstyle(self):
+        """matplotlib ``drawstyle`` for the background line in :meth:`plot`."""
+        return "default"
+
     def find_peaks_range(self):
         """
         Find data points within xrange where peaks were found
@@ -341,25 +357,22 @@ class PeakFit:
         self.continuum = components[self.bkg_key].sum()
         epar = fit0.params
 
-        # Correction factor: A = (counts/ch) * keV → multiply by ch/keV.
-        # Rate factor converts area into cps when the spectrum has a
-        # livetime and is stored as raw counts; if the spectrum is already
-        # in cps, the amplitude is already a rate and no division is
-        # needed. Without livetime, leave as raw counts.
+        # Correction factor: lmfit's amplitude is the integral in
+        # (counts * x-units); divide by the mean bin width (x-units per bin)
+        # to recover the net peak area in the spectrum's native y-units —
+        # raw counts, or counts/sec for a spectrum already stored as cps.
+        # NOTE: "area" is the net counts, NOT a rate; we do not divide by
+        # livetime. Divide by spectrum.livetime yourself if you want cps.
         spect = self.search.spectrum
         if spect.energies is None:
             correct_f = 1.0
         else:
             che = self.chan[maskx]
             correct_f = float(np.diff(spect.energies[che]).mean())
-        if spect.cps or spect.livetime is None:
-            rate_factor = 1.0
-        else:
-            rate_factor = spect.livetime
 
         for i in range(npeaks):
             mean0 = fit0.best_values[f"g{i+1}_center"]
-            area0 = fit0.best_values[f"g{i+1}_amplitude"] / correct_f / rate_factor
+            area0 = fit0.best_values[f"g{i+1}_amplitude"] / correct_f
             fwhm0 = fit0.best_values[f"g{i+1}_sigma"] * 2.355
             dict_peak_info = {
                 "mean": mean0,
@@ -374,7 +387,7 @@ class PeakFit:
 
             amp_err = epar[f"g{i+1}_amplitude"].stderr
             amp_err = amp_err if amp_err is not None else np.nan
-            area_err = amp_err / correct_f / rate_factor
+            area_err = amp_err / correct_f
 
             sig_err = epar[f"g{i+1}_sigma"].stderr
             sig_err = sig_err if sig_err is not None else np.nan
@@ -571,14 +584,15 @@ class PeakFit:
             ax_fit.plot(x, y, "o", color=c_data, alpha=0.5)
             ax_fit.plot(x_pred, y_pred, color=c_fit, lw=3, alpha=0.5, label="Fit")
             ax_fit.plot(
-                x, comps[self.bkg_key], "--", color=c_bkg, lw=3, label=f"Bkg: {self.bkg}"
+                x, comps[self.bkg_key], "--", color=c_bkg, lw=3,
+                label=f"Bkg: {self.bkg}", drawstyle=self._bkg_drawstyle(),
             )
             n_gauss = len(comps) - 1
             for cp in range(n_gauss):
                 label = "Comp." if cp == 0 else None
                 ax_fit.plot(
                     x,
-                    comps[self.bkg_key] + comps[f"g{cp+1}_"],
+                    self._component_curve(comps, cp),
                     "--",
                     color=c_comp,
                     lw=2,

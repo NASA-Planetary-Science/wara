@@ -4,7 +4,9 @@ Advanced fitting classes and functions
 import lmfit
 import matplotlib.pyplot as plt
 import numpy as np
+import pandas as pd
 import mplcursors
+from scipy.special import erfc, erfcx
 from wara import spectrum as sp
 from wara.matplotlib_theme import apply_theme
 from wara.peakfit import PeakFit
@@ -390,12 +392,19 @@ class PeakAreaLinearBkg:
 # Extra peak-profile families on top of the basic PeakFit Gaussian model.
 # ---------------------------------------------------------------------------
 
+# Each value is a factory ``f(prefix) -> lmfit model``. lmfit's built-in
+# model classes already satisfy that (``Cls(prefix=...)``); the "emg" entry
+# wraps a custom *left*-tailed EMG (``emg_left_peak``, defined below) because
+# lmfit's ExponentialGaussianModel tails toward high energy — the wrong way
+# for the HPGe low-energy tail.
 _PROFILE_MODELS = {
-    "gauss":   lmfit.models.GaussianModel,
-    "voigt":   lmfit.models.VoigtModel,
-    "pvoigt":  lmfit.models.PseudoVoigtModel,
-    "skewed":  lmfit.models.SkewedGaussianModel,
-    "doniach": lmfit.models.DoniachModel,
+    "gauss":       lmfit.models.GaussianModel,
+    "voigt":       lmfit.models.VoigtModel,
+    "pvoigt":      lmfit.models.PseudoVoigtModel,
+    "skewed":      lmfit.models.SkewedGaussianModel,
+    "skewedvoigt": lmfit.models.SkewedVoigtModel,
+    "emg":         lambda prefix: lmfit.Model(emg_left_peak, prefix=prefix),
+    "doniach":     lmfit.models.DoniachModel,
 }
 
 
@@ -403,11 +412,18 @@ class MultiProfilePeakFit(PeakFit):
     """
     PeakFit variant supporting additional line shapes:
 
-    * ``"gauss"``   — plain Gaussian (same as :class:`PeakFit`).
-    * ``"voigt"``   — Voigt (Gaussian * Lorentzian).
-    * ``"pvoigt"``  — Pseudo-Voigt (weighted G+L sum).
-    * ``"skewed"``  — SkewedGaussian (low-energy tailing).
-    * ``"doniach"`` — Doniach-Sunjic (photoemission asymmetry).
+    * ``"gauss"``       — plain Gaussian (same as :class:`PeakFit`).
+    * ``"voigt"``       — Voigt (Gaussian * Lorentzian).
+    * ``"pvoigt"``      — Pseudo-Voigt (weighted G+L sum).
+    * ``"skewed"``      — SkewedGaussian (low-energy tailing).
+    * ``"skewedvoigt"`` — SkewedVoigt (asymmetric Voigt; tailing + Lorentzian
+      wings).
+    * ``"emg"``         — Exponentially-Modified Gaussian: a Gaussian
+      convolved with a one-sided exponential. A principled, area-normalised
+      model for the low-energy tail of HPGe full-energy peaks — usually the
+      best single-component choice when a plain Gaussian leaves structured
+      residuals on the low-energy flank.
+    * ``"doniach"``     — Doniach-Sunjic (photoemission asymmetry).
 
     Parameters
     ----------
@@ -421,10 +437,13 @@ class MultiProfilePeakFit(PeakFit):
     Notes
     -----
     ``shared_sigma=True`` constrains every peak's *Gaussian* sigma via
-    ``fwhm = a + b*sqrt(E)``. For Voigt / PseudoVoigt the *total* FWHM is
-    a function of both sigma and gamma, so the shared constraint is
-    approximate (it only links the Gaussian component). Override gamma
-    or fraction via ``hints`` if you need finer control.
+    ``fwhm = a + b*sqrt(E)``. For Voigt / PseudoVoigt / SkewedVoigt / EMG the
+    *total* FWHM also depends on gamma (or the tail rate), so the shared
+    constraint is approximate (it only links the Gaussian component).
+    Override the extra parameters via ``hints`` if you need finer control.
+    The reported ``peak_info["fwhm"]`` is the Gaussian-sigma FWHM; use
+    :func:`shape_summary` / :func:`shape_metrics` for the true measured
+    width and tailing of these asymmetric shapes.
     """
 
     def __init__(self, search, xrange, *args, profile="voigt", **kwargs):
@@ -444,6 +463,688 @@ class MultiProfilePeakFit(PeakFit):
 
     def _make_peak_component(self, prefix):
         return _PROFILE_MODELS[self.profile](prefix=prefix)
+
+    def _set_peak_initial_values(self, pars, prefix, center, sigma, amplitude):
+        super()._set_peak_initial_values(pars, prefix, center, sigma, amplitude)
+        # Seed the left-EMG tail length to the peak width (a width-matched
+        # start that scales correctly whether x is channels or keV).
+        if self.profile == "emg":
+            tname = f"{prefix}tau"
+            if tname in pars:
+                pars[tname].set(value=float(max(sigma, 1e-3)), min=1e-3)
+
+
+# ---------------------------------------------------------------------------
+# Gaussian peak on a smoothed-step background.
+# ---------------------------------------------------------------------------
+
+
+def sharp_step_background(x, step_amplitude, step_center, offset):
+    """
+    Sharp (Heaviside) step plus a constant offset.
+
+    Models the classic gamma-ray peak background as a hard discontinuity at
+    the peak centroid: the continuum sits at a higher level on the
+    low-energy side of a peak (from incomplete charge collection /
+    small-angle Compton scattering) and drops abruptly to a lower level on
+    the high-energy side::
+
+        bkg(x) = offset + step_amplitude * H(center - x)
+
+    where ``H`` is the Heaviside step (1 below the centroid, 0 above, 0.5
+    at it). ``step_amplitude`` is the height of the step (high side minus
+    low side) and ``offset`` is the high-energy plateau. This is the
+    default background used by :class:`GaussStepFit`; for a continuous
+    transition tied to the peak width use :func:`step_background`.
+
+    Parameters
+    ----------
+    x : array_like
+        Independent variable (channels or energies).
+    step_amplitude : float
+        Height of the step (non-negative for a normal Compton step).
+    step_center : float
+        Location of the discontinuity. Tied to the Gaussian peak by
+        :class:`GaussStepFit`.
+    offset : float
+        Constant level on the high-energy side of the step.
+    """
+    return offset + step_amplitude * np.heaviside(
+        step_center - np.asarray(x, dtype=float), 0.5
+    )
+
+
+def step_background(x, step_amplitude, step_center, step_sigma, offset):
+    """
+    Smoothed (error-function) step plus a constant offset.
+
+    Like :func:`sharp_step_background`, but the discontinuity is replaced by
+    a continuous transition that follows the integral of the Gaussian peak,
+    so it is centred on the peak and has the same width::
+
+        bkg(x) = offset + step_amplitude * 0.5 * erfc((x - center) / (sqrt(2) * sigma))
+
+    For ``x << center`` the ``erfc`` term -> 2 so the level is
+    ``offset + step_amplitude``; for ``x >> center`` it -> 0 so the level
+    is ``offset``. ``step_amplitude`` is the height of the step (high side
+    minus low side) and ``offset`` is the high-energy plateau. Selected via
+    ``step="smooth"`` on :class:`GaussStepFit`.
+
+    Parameters
+    ----------
+    x : array_like
+        Independent variable (channels or energies).
+    step_amplitude : float
+        Height of the step (non-negative for a normal Compton step).
+    step_center, step_sigma : float
+        Centre and width of the transition. Tied to the Gaussian peak by
+        :class:`GaussStepFit`.
+    offset : float
+        Constant level on the high-energy side of the step.
+    """
+    return offset + step_amplitude * 0.5 * erfc(
+        (x - step_center) / (np.sqrt(2.0) * step_sigma)
+    )
+
+
+# Map the friendly ``step=`` keyword to the canonical bkg string stored on
+# the instance (so save_json/load_json round-trip the choice through the
+# parent's ``bkg`` field) and the model function used to build it.
+_STEP_MODELS = {
+    "sharp": ("step", sharp_step_background),
+    "smooth": ("step-smooth", step_background),
+}
+# Reverse lookup for reconstructing ``step`` from a serialized ``bkg``.
+_BKG_TO_STEP = {bkg: name for name, (bkg, _) in _STEP_MODELS.items()}
+
+
+class GaussStepFit(PeakFit):
+    """
+    Fit Gaussian peak(s) on a step background.
+
+    A drop-in alternative to :class:`wara.peakfit.PeakFit` for the common
+    case where the continuum under a peak is not a straight line but a
+    *step*: higher on the low-energy side, lower on the high-energy side,
+    with the transition happening at the peak. Two step shapes are
+    available:
+
+    * ``step="sharp"`` (default) — a hard Heaviside discontinuity at the
+      peak centroid (:func:`sharp_step_background`). Free background
+      parameters: step height and high-energy offset.
+    * ``step="smooth"`` — a continuous ``erfc`` transition tied to the
+      peak's centre *and* width (:func:`step_background`).
+
+    The public interface mirrors :class:`PeakFit` — ``peak_info``,
+    ``peak_err``, ``summary()``, ``fit_quality()``, ``plot()`` and
+    ``save_json()``/``load_json()`` all work unchanged. When more than one
+    peak falls inside ``xrange`` every peak is fit with its own Gaussian
+    and the single step is anchored to the most prominent one.
+
+    Parameters
+    ----------
+    search : PeakSearch
+        Provides the spectrum and the peak locations/widths (same as
+        :class:`PeakFit`).
+    xrange : list
+        ``[lo, hi]`` window for the fit, in the spectrum's x-axis units
+        (energies if calibrated, otherwise channels).
+    step : {"sharp", "smooth"}, optional
+        Step shape. Default ``"sharp"``.
+    bkg : optional
+        Accepted only so ``save_json``/``load_json`` round-trip (the parent
+        serializes ``bkg``). When given a canonical step string it selects
+        the matching ``step`` shape; otherwise ignored.
+    skew : optional
+        Accepted for interface compatibility with :class:`PeakFit` but
+        ignored — peaks are always plain Gaussians.
+    hints : dict, optional
+        Per-parameter overrides, applied last. See :class:`PeakFit`.
+    """
+
+    def __init__(self, search, xrange, step="sharp", bkg=None, skew=False, *,
+                 shared_sigma=False, hints=None):
+        if shared_sigma:
+            raise NotImplementedError(
+                "shared_sigma is not supported for the step-background fit"
+            )
+        # When reconstructed by load_json the choice arrives via ``bkg``
+        # (the field the parent serializes); translate it back to ``step``.
+        if bkg is not None and bkg in _BKG_TO_STEP:
+            step = _BKG_TO_STEP[bkg]
+        if step not in _STEP_MODELS:
+            raise ValueError(
+                f"Unknown step {step!r}. Choose from {sorted(_STEP_MODELS)}."
+            )
+        self.step = step
+        canonical_bkg, self._step_func = _STEP_MODELS[step]
+        # Force the step background and a plain Gaussian regardless of skew.
+        super().__init__(
+            search, xrange, bkg=canonical_bkg, skew=False,
+            shared_sigma=False, hints=hints,
+        )
+
+    def gaussians_bkg(self, skeweness):
+        """
+        Build and fit (one or more Gaussians) + step background.
+
+        Overrides :meth:`PeakFit.gaussians_bkg`; the data preparation,
+        weighting (``1/counts_err``, ``scale_covar=False``) and the
+        ``peak_info``/``peak_err`` bookkeeping match the parent so the rest
+        of the API behaves identically.
+        """
+        maskx = (self.x > self.xrange[0]) & (self.x < self.xrange[1])
+        _, _, amp, erg, sig = self.init_values()
+        npeaks = len(erg)
+
+        # .copy() so we never mutate spectrum.counts (see PeakFit notes).
+        y0 = self.search.spectrum.counts[maskx].copy()
+        x0 = self.x[maskx]
+
+        err0 = self.search.spectrum.counts_err[maskx].copy()
+        err0[err0 <= 0] = 1.0
+
+        y0_min = np.amin(y0[y0 != 0.0]) if np.any(y0 != 0.0) else 1.0
+        y0[y0 == 0.0] = y0_min * 1e-1
+
+        self.y_data = y0
+        self.x_data = x0
+
+        smooth = self.step == "smooth"
+
+        # --- step + constant background -----------------------------------
+        bkg_mod = lmfit.Model(self._step_func, prefix="bkg_")
+        model = bkg_mod
+        self.bkg_key = "bkg_"
+
+        # Seed the step from the edge levels of the window: the high side
+        # is the low-energy edge, the low side is the high-energy edge.
+        edge = max(1, len(y0) // 10)
+        left_level = float(np.mean(y0[:edge]))
+        right_level = float(np.mean(y0[-edge:]))
+        offset0 = right_level
+        step0 = max(left_level - right_level, 0.0)
+
+        # Anchor the step to the most prominent peak in the window.
+        anchor = int(np.argmax(amp))
+        anchor_prefix = f"g{anchor + 1}_"
+
+        pars = bkg_mod.make_params()
+        pars["bkg_offset"].set(value=offset0)
+        pars["bkg_step_amplitude"].set(value=step0, min=0.0)
+        # center (and, when smooth, sigma) get values now and are pinned to
+        # the peak below.
+        pars["bkg_step_center"].set(value=float(erg[anchor]))
+        if smooth:
+            pars["bkg_step_sigma"].set(
+                value=float(max(sig[anchor], 1e-6)), min=1e-9
+            )
+
+        # --- Gaussian peak component(s) -----------------------------------
+        for i in range(npeaks):
+            prefix = f"g{i+1}_"
+            comp = self._make_peak_component(prefix)
+            pars.update(comp.make_params())
+            self._set_peak_initial_values(pars, prefix, erg[i], sig[i], amp[i])
+            model += comp
+
+        # Tie the step's location (and width, when smooth) to the anchoring
+        # Gaussian so the transition sits exactly under the peak.
+        pars["bkg_step_center"].set(expr=f"{anchor_prefix}center")
+        if smooth:
+            pars["bkg_step_sigma"].set(expr=f"{anchor_prefix}sigma")
+
+        # --- Apply user hints last so they always win ---------------------
+        for pname, attrs in self.hints.items():
+            if pname not in pars:
+                raise KeyError(
+                    f"hints contains {pname!r}, but no such parameter exists. "
+                    f"Available: {sorted(pars.keys())}"
+                )
+            pars[pname].set(**attrs)
+
+        fit0 = model.fit(y0, pars, x=x0, weights=1.0 / err0, scale_covar=False)
+        components = fit0.eval_components()
+        self.fit_result = fit0
+        self.continuum = components[self.bkg_key].sum()
+        epar = fit0.params
+
+        # Area unit corrections — identical to PeakFit.gaussians_bkg. "area"
+        # is the net counts (native y-units); we do not divide by livetime.
+        spect = self.search.spectrum
+        if spect.energies is None:
+            correct_f = 1.0
+        else:
+            che = self.chan[maskx]
+            correct_f = float(np.diff(spect.energies[che]).mean())
+
+        for i in range(npeaks):
+            mean0 = fit0.best_values[f"g{i+1}_center"]
+            area0 = fit0.best_values[f"g{i+1}_amplitude"] / correct_f
+            fwhm0 = fit0.best_values[f"g{i+1}_sigma"] * 2.355
+            self.peak_info.append({"mean": mean0, "area": area0, "fwhm": fwhm0})
+
+            mean_err = epar[f"g{i+1}_center"].stderr
+            mean_err = mean_err if mean_err is not None else np.nan
+
+            amp_err = epar[f"g{i+1}_amplitude"].stderr
+            amp_err = amp_err if amp_err is not None else np.nan
+            area_err = amp_err / correct_f
+
+            sig_err = epar[f"g{i+1}_sigma"].stderr
+            sig_err = sig_err if sig_err is not None else np.nan
+            fwhm_err = sig_err * 2.355
+
+            self.peak_err.append({
+                "mean_err": mean_err,
+                "area_err": area_err,
+                "fwhm_err": fwhm_err,
+            })
+
+    # -- Plotting hooks ----------------------------------------------------
+    def _bkg_drawstyle(self):
+        # Render a sharp Heaviside step as an actual step, not a sloped ramp
+        # between the two channels that straddle the discontinuity.
+        return "steps-mid" if self.step == "sharp" else "default"
+
+    def _component_curve(self, comps, cp):
+        """
+        Draw each peak as a *smooth* Gaussian on a single background level.
+
+        The background is a step, so drawing ``bkg + gaussian`` (the parent
+        default) would carve the step's discontinuity into the peak. Here
+        the Gaussian is instead lifted onto the background level under its
+        own centroid, so it reads as the smooth peak it actually is while
+        still sitting on the continuum. The total ``Fit`` line still shows
+        the genuine step in the background.
+        """
+        prefix = f"g{cp+1}_"
+        center = self.fit_result.best_values[f"{prefix}center"]
+        base = float(
+            self.fit_result.eval_components(x=np.array([center]))[self.bkg_key][0]
+        )
+        return base + comps[prefix]
+
+
+# ---------------------------------------------------------------------------
+# Hypermet peak: Gaussian core + low-energy exponential tail (HPGe).
+# ---------------------------------------------------------------------------
+
+_SQRT2 = np.sqrt(2.0)
+
+
+def _gaussian_unit(x, center, sigma):
+    """Unit-area Gaussian."""
+    return np.exp(-0.5 * ((x - center) / sigma) ** 2) / (sigma * np.sqrt(2.0 * np.pi))
+
+
+def _emg_left_unit(x, center, sigma, tau):
+    """
+    Unit-area Gaussian with a low-energy (left) exponential tail.
+
+    This is a standard exponentially-modified Gaussian reflected about
+    ``center`` so the tail points toward *lower* x — the HPGe charge-
+    collection tail. ``tau`` is the tail length (same units as x). Written
+    with ``erfcx`` (scaled complementary error function) for numerical
+    stability: the naive ``exp(...) * erfc(...)`` overflows for small
+    ``tau``. The identity used is
+
+        exp(A) * erfc(B) = exp(-d^2 / 2 sigma^2) * erfcx(B),
+        d = center - x,  B = sigma/(sqrt2 tau) - d/(sqrt2 sigma),
+
+    so the only large factor left is ``erfcx``, which stays finite. The few
+    deep-tail points where ``erfcx`` still overflows correspond to an
+    amplitude below ~1e-27 and are clamped to zero.
+    """
+    x = np.asarray(x, dtype=float)
+    d = center - x
+    B = sigma / (_SQRT2 * tau) - d / (_SQRT2 * sigma)
+    with np.errstate(over="ignore", invalid="ignore"):
+        val = (1.0 / (2.0 * tau)) * np.exp(-0.5 * (d / sigma) ** 2) * erfcx(B)
+    return np.where(np.isfinite(val), val, 0.0)
+
+
+def emg_left_peak(x, amplitude, center, sigma, tau):
+    """
+    Area-normalised Gaussian with a low-energy exponential tail.
+
+    A plain exponentially-modified Gaussian whose tail points toward *lower*
+    x (unlike :class:`lmfit.models.ExponentialGaussianModel`, whose tail
+    points high). ``amplitude`` is the total area; ``tau`` is the tail
+    length. Backs ``MultiProfilePeakFit(profile="emg")``.
+    """
+    return amplitude * _emg_left_unit(x, center, sigma, tau)
+
+
+def hypermet(x, amplitude, center, sigma, tail_fraction, tail_tau):
+    """
+    Hypermet / GF3-style peak: Gaussian core + smoothly joined left tail.
+
+    The shape is the area-weighted sum of a unit-area Gaussian and a
+    unit-area left-tailed EMG::
+
+        peak(x) = amplitude * [ (1 - tail_fraction) * Gaussian(x)
+                                + tail_fraction      * EMG_left(x) ]
+
+    Because both components are unit-area, ``amplitude`` is the **total peak
+    area** exactly and ``tail_fraction`` is the fraction of that area in the
+    low-energy tail. The tail joins the core smoothly (the EMG is a
+    convolution, hence C-infinity), so there is no junction discontinuity.
+
+    Parameters
+    ----------
+    x : array_like
+        Independent variable (channels or energies).
+    amplitude : float
+        Total peak area (Gaussian core + tail).
+    center, sigma : float
+        Gaussian core centroid and width.
+    tail_fraction : float
+        Fraction of the area in the low-energy tail, in [0, 1).
+    tail_tau : float
+        Tail decay length (same units as x).
+    """
+    core = _gaussian_unit(x, center, sigma)
+    tail = _emg_left_unit(x, center, sigma, tail_tau)
+    return amplitude * ((1.0 - tail_fraction) * core + tail_fraction * tail)
+
+
+class _HypermetPeakMixin:
+    """
+    Mixin supplying a :func:`hypermet` peak component and its seeding.
+
+    Pulls the peak-shape pieces out of :class:`HypermetFit` so they can be
+    reused on top of a different background (see :class:`FullHPGePeakFit`).
+    Hosts must set ``self._tail_fraction0`` and ``self._tail_tau0`` before
+    the fit runs (i.e. before ``PeakFit.__init__``).
+    """
+
+    def _make_peak_component(self, prefix):
+        return lmfit.Model(hypermet, prefix=prefix)
+
+    def _set_peak_initial_values(self, pars, prefix, center, sigma, amplitude):
+        pars[f"{prefix}center"].set(value=center)
+        pars[f"{prefix}sigma"].set(value=sigma, min=1e-6)
+        pars[f"{prefix}amplitude"].set(value=amplitude, min=0.0)
+        pars[f"{prefix}tail_fraction"].set(
+            value=self._tail_fraction0, min=0.0, max=0.95
+        )
+        tau0 = self._tail_tau0 if self._tail_tau0 is not None else max(sigma, 1e-3)
+        pars[f"{prefix}tail_tau"].set(value=tau0, min=1e-3)
+
+
+class HypermetFit(_HypermetPeakMixin, PeakFit):
+    """
+    Fit HPGe peaks with a Hypermet shape (Gaussian core + low-energy tail).
+
+    A :class:`PeakFit` whose peak component is :func:`hypermet` instead of a
+    plain Gaussian. This is the canonical model for high-resolution HPGe
+    full-energy peaks, which carry a low-energy tail from incomplete charge
+    collection that a symmetric Gaussian cannot reproduce (it leaves
+    structured residuals on the low side and biases the area).
+
+    Because the Hypermet is built from unit-area components,
+    ``peak_info["area"]`` is the correct *total* area (core + tail) with no
+    extra bookkeeping. Each peak adds two parameters over a Gaussian:
+    ``g{i}_tail_fraction`` (area fraction in the tail) and ``g{i}_tail_tau``
+    (tail length). As with the other asymmetric profiles, the reported
+    ``fwhm`` is the Gaussian-core value — use :func:`shape_summary` for the
+    true measured FWHM/FWTM and tailing.
+
+    For peaks on a stepped continuum, :class:`FullHPGePeakFit` pairs this
+    tail with the smoothed-step background.
+
+    Parameters
+    ----------
+    search : PeakSearch
+        Spectrum and peak locations/widths (same as :class:`PeakFit`).
+    xrange : list
+        ``[lo, hi]`` fit window in the spectrum's x-axis units.
+    bkg : str, optional
+        Background model, as in :class:`PeakFit`. Default ``"poly1"``.
+    tail_fraction : float, optional
+        Initial tail area fraction. Default 0.1.
+    tail_tau : float or None, optional
+        Initial tail length. Default None → seeded to each peak's sigma.
+    shared_sigma : bool, optional
+        Link peak Gaussian-core sigmas through the resolution curve, as in
+        :class:`PeakFit`.
+    hints : dict, optional
+        Per-parameter overrides, applied last.
+    """
+
+    def __init__(self, search, xrange, bkg="poly1", skew=False, *,
+                 tail_fraction=0.1, tail_tau=None, shared_sigma=False,
+                 hints=None):
+        # ``skew`` is accepted only so PeakFit.save_json's kwargs round-trip
+        # through load_json; the Hypermet supplies its own tail, so a skewed
+        # Gaussian core is never used.
+        # Stored before super().__init__ because the fit (and thus the
+        # per-peak seeding) runs inside the parent constructor.
+        self._tail_fraction0 = float(tail_fraction)
+        self._tail_tau0 = None if tail_tau is None else float(tail_tau)
+        super().__init__(
+            search, xrange, bkg=bkg, skew=False,
+            shared_sigma=shared_sigma, hints=hints,
+        )
+
+
+class FullHPGePeakFit(_HypermetPeakMixin, GaussStepFit):
+    """
+    Full HPGe full-energy-peak model: Hypermet tail on a smoothed step.
+
+    Combines the two HPGe-specific pieces in this module — a :func:`hypermet`
+    peak (Gaussian core + low-energy tail) and the smoothed
+    :func:`step_background` continuum (higher on the low-energy side, lower
+    on the high-energy side, tied to the peak). This is the shape dedicated
+    gamma codes (GF3, FitzPeaks, GammaVision) fit to clean HPGe singlets and
+    is the recommended default for careful HPGe peak-area work.
+
+    Inherits the step background and smooth-peak plotting from
+    :class:`GaussStepFit` and the Hypermet peak component from
+    :class:`HypermetFit`; ``summary()``, ``shape_summary()``,
+    ``fit_quality()``, ``plot()`` and ``save_json()``/``load_json()`` all
+    work as usual. ``peak_info["area"]`` is the total peak area (core +
+    tail).
+
+    Parameters
+    ----------
+    search : PeakSearch
+        Spectrum and peak locations/widths.
+    xrange : list
+        ``[lo, hi]`` fit window in the spectrum's x-axis units.
+    step : {"sharp", "smooth"}, optional
+        Step shape. Default ``"sharp"`` — a Heaviside shelf at the centroid.
+        This is the right companion to the Hypermet tail: the *tail* already
+        models the smooth low-energy excess just below the peak, while the
+        *step* captures the discrete Compton shelf (the continuum being
+        higher on the low-energy side). A ``"smooth"`` step shares the peak's
+        centre *and* width, so it overlaps the tail's own erfc and the two
+        become degenerate — fine when a strong real step is present, but the
+        fit can fail to converge when the true step is near zero. Prefer
+        ``"sharp"`` unless you have a specific reason.
+    tail_fraction : float, optional
+        Initial tail area fraction. Default 0.1.
+    tail_tau : float or None, optional
+        Initial tail length. Default None → seeded to each peak's sigma.
+    hints : dict, optional
+        Per-parameter overrides, applied last.
+
+    Notes
+    -----
+    ``shared_sigma`` is not supported on the step background (inherited from
+    :class:`GaussStepFit`); passing ``shared_sigma=True`` raises.
+    """
+
+    def __init__(self, search, xrange, step="sharp", bkg=None, skew=False, *,
+                 tail_fraction=0.1, tail_tau=None, shared_sigma=False,
+                 hints=None):
+        self._tail_fraction0 = float(tail_fraction)
+        self._tail_tau0 = None if tail_tau is None else float(tail_tau)
+        super().__init__(
+            search, xrange, step=step, bkg=bkg, skew=skew,
+            shared_sigma=shared_sigma, hints=hints,
+        )
+
+
+# ---------------------------------------------------------------------------
+# Peak-shape diagnostics (FWHM / FWTM / tailing) for any fitted profile.
+# ---------------------------------------------------------------------------
+
+# Reference shape ratio for a pure Gaussian (no tailing). A measured
+# FWTM/FWHM noticeably above this signals low-energy tailing.
+GAUSS_FWTM_FWHM = float(np.sqrt(np.log(10.0) / np.log(2.0)))  # 1.82262
+
+
+def _side_crossing(x_side, y_side, thr, rising):
+    """
+    Interpolate the x where a monotonic peak flank crosses level ``thr``.
+
+    ``rising`` is True for the left flank (y increasing towards the apex)
+    and False for the right flank (y decreasing away from it). Returns NaN
+    if the flank never reaches down to ``thr`` within the given window.
+    """
+    if rising:
+        if y_side[0] > thr:
+            return np.nan  # flank starts above the level — no crossing in view
+        return float(np.interp(thr, y_side, x_side))
+    if y_side[-1] > thr:
+        return np.nan
+    # right flank is decreasing; reverse so the xp passed to interp ascends
+    return float(np.interp(thr, y_side[::-1], x_side[::-1]))
+
+
+def peak_shape_metrics(x, y):
+    """
+    Width and tailing metrics measured directly from a peak's profile.
+
+    Operates on the sampled peak component (background already removed), so
+    it is valid for *any* line shape — Gaussian, Voigt, skewed, EMG,
+    Hypermet — unlike the ``sigma * 2.3548`` FWHM, which only holds for a
+    pure Gaussian. Widths are found by linear interpolation of the flanks at
+    50% and 10% of the peak maximum.
+
+    Parameters
+    ----------
+    x : array_like
+        Sample positions (channels or energies), sorted ascending. Use a
+        fine grid for accurate crossings.
+    y : array_like
+        Peak amplitude at each ``x`` (continuum subtracted).
+
+    Returns
+    -------
+    dict
+        ``fwhm``      — full width at half maximum.
+        ``fwtm``      — full width at tenth maximum.
+        ``fwtm_fwhm`` — their ratio; ~1.823 for a pure Gaussian (see
+                        :data:`GAUSS_FWTM_FWHM`), larger when tailed.
+        ``hwhm_left`` / ``hwhm_right`` — apex-to-flank half widths at half
+                        maximum (a longer side reveals asymmetry).
+        ``asymmetry`` — ``(left - right) / fwtm`` half widths at *tenth*
+                        maximum, where tails dominate; positive means a
+                        low-energy (left) tail, the usual HPGe signature.
+        Any value is NaN if the flank does not descend to the level inside
+        the supplied window.
+    """
+    x = np.asarray(x, dtype=float)
+    y = np.asarray(y, dtype=float)
+    nan = {
+        "fwhm": np.nan, "fwtm": np.nan, "fwtm_fwhm": np.nan,
+        "hwhm_left": np.nan, "hwhm_right": np.nan, "asymmetry": np.nan,
+    }
+    if x.size < 3 or not np.any(y > 0):
+        return nan
+
+    imax = int(np.argmax(y))
+    ymax = float(y[imax])
+    xmax = float(x[imax])
+    if imax == 0 or imax == x.size - 1:
+        return nan  # apex on an edge — widths would be cut off
+
+    xl, yl = x[: imax + 1], y[: imax + 1]
+    xr, yr = x[imax:], y[imax:]
+
+    def width(frac):
+        thr = frac * ymax
+        left = _side_crossing(xl, yl, thr, rising=True)
+        right = _side_crossing(xr, yr, thr, rising=False)
+        return left, right
+
+    l_half, r_half = width(0.5)
+    l_tenth, r_tenth = width(0.1)
+
+    fwhm = r_half - l_half
+    fwtm = r_tenth - l_tenth
+    return {
+        "fwhm": fwhm,
+        "fwtm": fwtm,
+        "fwtm_fwhm": fwtm / fwhm if fwhm else np.nan,
+        "hwhm_left": xmax - l_half,
+        "hwhm_right": r_half - xmax,
+        "asymmetry": ((xmax - l_tenth) - (r_tenth - xmax)) / fwtm if fwtm else np.nan,
+    }
+
+
+def shape_metrics(fit, npoints=2000):
+    """
+    Measured shape metrics for every peak of a fitted ``PeakFit``.
+
+    Evaluates each peak component on a fine grid spanning the fit window and
+    runs :func:`peak_shape_metrics` on it. Works for any
+    :class:`wara.peakfit.PeakFit` or subclass (Gaussian, Voigt, skewed, EMG,
+    Hypermet, step-background, ...).
+
+    Parameters
+    ----------
+    fit : PeakFit
+        A fitted object exposing ``x_data``, ``fit_result`` and ``peak_info``.
+    npoints : int, optional
+        Number of grid points for the crossing search. Default 2000.
+
+    Returns
+    -------
+    list of dict
+        One :func:`peak_shape_metrics` dict per peak, in peak order.
+    """
+    x = np.asarray(fit.x_data, dtype=float)
+    x_fine = np.linspace(x[0], x[-1], int(npoints))
+    comps = fit.fit_result.eval_components(x=x_fine)
+    return [
+        peak_shape_metrics(x_fine, comps[f"g{i+1}_"])
+        for i in range(len(fit.peak_info))
+    ]
+
+
+def shape_summary(fit, npoints=2000):
+    """
+    ``fit.summary()`` augmented with measured shape/tailing columns.
+
+    Appends ``fwhm_meas`` (numerically measured FWHM, valid for non-Gaussian
+    profiles where the ``fwhm`` column — derived from sigma — is only
+    approximate), ``fwtm``, ``fwtm_fwhm`` and ``asymmetry``. See
+    :func:`peak_shape_metrics` for definitions.
+
+    Parameters
+    ----------
+    fit : PeakFit
+        A fitted object.
+    npoints : int, optional
+        Grid density passed to :func:`shape_metrics`. Default 2000.
+
+    Returns
+    -------
+    pandas.DataFrame
+        One row per peak: the base summary columns plus the shape columns.
+    """
+    base = fit.summary()
+    mets = pd.DataFrame(shape_metrics(fit, npoints=npoints))
+    extra = pd.DataFrame({
+        "fwhm_meas": mets["fwhm"],
+        "fwtm": mets["fwtm"],
+        "fwtm_fwhm": mets["fwtm_fwhm"],
+        "asymmetry": mets["asymmetry"],
+    })
+    return pd.concat([base.reset_index(drop=True), extra], axis=1)
 
 
 # ---------------------------------------------------------------------------

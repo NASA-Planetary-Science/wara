@@ -253,3 +253,570 @@ class TestContinuumFit:
         c1 = adv.ContinuumFit(hpge_search, xrange=CONT_XRANGE, degree=1)
         c5 = adv.ContinuumFit(hpge_search, xrange=CONT_XRANGE, degree=5)
         assert c5.fit_result.redchi <= c1.fit_result.redchi
+
+
+# ---------------------------------------------------------------------------
+# GaussStepFit — Gaussian peak on a step background.
+# Mirrors examples/peakfit/example_gauss_step_fit.py. The isolated ~1158 keV
+# peak in the calibrated CeBr spectrum sits on a clear Compton step, so the
+# step background gives an excellent fit (redchi < 1). The default step is a
+# sharp Heaviside discontinuity; step="smooth" uses an erfc transition.
+# ---------------------------------------------------------------------------
+
+STEP_XRANGE = [1070, 1260]
+
+
+@pytest.fixture
+def cebr_search(spec_cal):
+    return ps.PeakSearch(spec_cal, ref_x=1220, ref_fwhm=31,
+                         fwhm_at_0=1.0, min_snr=5)
+
+
+class TestSharpStepBackgroundFunction:
+    def test_steps_down_across_center(self):
+        # Below the centroid -> offset + amplitude; above -> offset.
+        left = adv.sharp_step_background(-5.0, step_amplitude=100.0,
+                                         step_center=0.0, offset=20.0)
+        right = adv.sharp_step_background(5.0, step_amplitude=100.0,
+                                          step_center=0.0, offset=20.0)
+        assert left == pytest.approx(120.0)
+        assert right == pytest.approx(20.0)
+
+    def test_value_at_center_is_halfway(self):
+        mid = adv.sharp_step_background(0.0, step_amplitude=100.0,
+                                        step_center=0.0, offset=20.0)
+        assert mid == pytest.approx(70.0)
+
+    def test_transition_is_discontinuous(self):
+        import numpy as np
+        # No width parameter: just below vs just above the centroid jumps
+        # the full step height (a hard discontinuity).
+        eps = 1e-9
+        below = adv.sharp_step_background(-eps, step_amplitude=100.0,
+                                          step_center=0.0, offset=20.0)
+        above = adv.sharp_step_background(eps, step_amplitude=100.0,
+                                          step_center=0.0, offset=20.0)
+        assert np.isclose(below - above, 100.0)
+
+
+class TestSmoothStepBackgroundFunction:
+    def test_steps_down_across_center(self):
+        # Far left -> offset + amplitude; far right -> offset.
+        left = adv.step_background(-1e6, step_amplitude=100.0,
+                                   step_center=0.0, step_sigma=1.0, offset=20.0)
+        right = adv.step_background(1e6, step_amplitude=100.0,
+                                    step_center=0.0, step_sigma=1.0, offset=20.0)
+        assert left == pytest.approx(120.0)
+        assert right == pytest.approx(20.0)
+
+    def test_value_at_center_is_halfway(self):
+        mid = adv.step_background(0.0, step_amplitude=100.0,
+                                  step_center=0.0, step_sigma=1.0, offset=20.0)
+        assert mid == pytest.approx(70.0)
+
+
+class TestGaussStepFit:
+    """Default (sharp) step background."""
+
+    @pytest.fixture
+    def fit(self, cebr_search):
+        return adv.GaussStepFit(cebr_search, STEP_XRANGE)
+
+    def test_sharp_is_default(self, fit):
+        assert fit.step == "sharp"
+        assert fit.bkg == "step"
+        assert fit.bkg_key == "bkg_"
+
+    def test_no_step_sigma_parameter(self, fit):
+        # The sharp step has no width — only height, location, offset.
+        assert "bkg_step_sigma" not in fit.fit_result.params
+
+    def test_good_fit_quality(self, fit):
+        # A linear background can't track the Compton step; the step model
+        # fits this peak essentially at the noise level.
+        assert fit.fit_result.redchi == pytest.approx(0.8886, rel=1e-3)
+
+    def test_single_peak_found(self, fit):
+        assert len(fit.peak_info) == 1
+
+    def test_peak_centroid(self, fit):
+        assert fit.peak_info[0]["mean"] == pytest.approx(1158.85, rel=1e-4)
+
+    def test_peak_area_and_fwhm(self, fit):
+        assert fit.peak_info[0]["area"] == pytest.approx(9951.29, rel=1e-3)
+        assert fit.peak_info[0]["fwhm"] == pytest.approx(44.89, rel=1e-3)
+
+    def test_step_parameters(self, fit):
+        bv = fit.fit_result.best_values
+        assert bv["bkg_step_amplitude"] == pytest.approx(27.44, rel=1e-2)
+        assert bv["bkg_offset"] == pytest.approx(284.20, rel=1e-3)
+        # Positive step height -> higher on the low-energy side, as expected.
+        assert bv["bkg_step_amplitude"] > 0
+
+    def test_step_tied_to_peak(self, fit):
+        bv = fit.fit_result.best_values
+        assert bv["bkg_step_center"] == bv["g1_center"]
+
+    def test_summary_one_row(self, fit):
+        df = fit.summary()
+        assert len(df) == 1
+        assert {"mean", "area", "fwhm"} <= set(df.columns)
+
+    def test_errors_finite_and_positive(self, fit):
+        import numpy as np
+        err = fit.peak_err[0]
+        for key in ("mean_err", "area_err", "fwhm_err"):
+            assert np.isfinite(err[key]) and err[key] > 0
+
+    def test_shared_sigma_not_supported(self, cebr_search):
+        with pytest.raises(NotImplementedError, match="shared_sigma"):
+            adv.GaussStepFit(cebr_search, STEP_XRANGE, shared_sigma=True)
+
+    def test_unknown_step_raises(self, cebr_search):
+        with pytest.raises(ValueError, match="Unknown step"):
+            adv.GaussStepFit(cebr_search, STEP_XRANGE, step="wobble")
+
+    def test_hints_override_applied(self, cebr_search):
+        # Pin the centroid and confirm the fit honours it.
+        fit = adv.GaussStepFit(
+            cebr_search, STEP_XRANGE,
+            hints={"g1_center": {"value": 1160.0, "vary": False}},
+        )
+        assert fit.fit_result.best_values["g1_center"] == pytest.approx(1160.0)
+
+    def test_plot_runs_headless(self, fit):
+        import matplotlib
+        matplotlib.use("Agg")
+        fit.plot()
+
+    def test_plotted_peak_component_is_smooth(self, fit):
+        # Regression: the drawn peak must not inherit the step's
+        # discontinuity. The component curve is a smooth Gaussian lifted
+        # onto the background, so its largest jump between adjacent channels
+        # is far below the step height.
+        import numpy as np
+        comps = fit.fit_result.eval_components()
+        curve = fit._component_curve(comps, 0)
+        max_jump = np.abs(np.diff(curve)).max()
+        step_height = fit.fit_result.best_values["bkg_step_amplitude"]
+        assert max_jump < step_height
+
+    def test_json_roundtrip(self, fit, cebr_search, tmp_path):
+        path = tmp_path / "gauss_step.json"
+        fit.save_json(path)
+        restored = adv.GaussStepFit.load_json(path, cebr_search)
+        assert restored.step == "sharp"
+        assert restored.bkg == "step"
+        assert restored.fit_result.best_values["g1_center"] == pytest.approx(
+            fit.fit_result.best_values["g1_center"]
+        )
+
+
+class TestGaussStepFitSmooth:
+    """Optional smoothed (erfc) step background."""
+
+    @pytest.fixture
+    def fit(self, cebr_search):
+        return adv.GaussStepFit(cebr_search, STEP_XRANGE, step="smooth")
+
+    def test_smooth_selected(self, fit):
+        assert fit.step == "smooth"
+        assert fit.bkg == "step-smooth"
+
+    def test_has_step_sigma_tied_to_peak(self, fit):
+        bv = fit.fit_result.best_values
+        assert "bkg_step_sigma" in fit.fit_result.params
+        assert bv["bkg_step_center"] == bv["g1_center"]
+        assert bv["bkg_step_sigma"] == bv["g1_sigma"]
+
+    def test_good_fit_quality(self, fit):
+        assert fit.fit_result.redchi == pytest.approx(0.9256, rel=1e-3)
+
+    def test_peak_centroid_and_area(self, fit):
+        assert fit.peak_info[0]["mean"] == pytest.approx(1157.99, rel=1e-4)
+        assert fit.peak_info[0]["area"] == pytest.approx(9952.06, rel=1e-3)
+
+    def test_json_roundtrip_preserves_smooth(self, fit, cebr_search, tmp_path):
+        path = tmp_path / "gauss_step_smooth.json"
+        fit.save_json(path)
+        restored = adv.GaussStepFit.load_json(path, cebr_search)
+        assert restored.step == "smooth"
+        assert "bkg_step_sigma" in restored.fit_result.params
+
+
+# ---------------------------------------------------------------------------
+# Peak-shape diagnostics — peak_shape_metrics / shape_metrics / shape_summary.
+# Widths and tailing measured numerically from the fitted profile, valid for
+# any line shape (fixes the sigma*2.3548 FWHM that only holds for a Gaussian).
+# ---------------------------------------------------------------------------
+
+import numpy as np
+
+
+class TestPeakShapeMetricsFunction:
+    def test_gaussian_constant(self):
+        # FWTM/FWHM of a pure Gaussian is sqrt(ln10/ln2).
+        assert adv.GAUSS_FWTM_FWHM == pytest.approx(1.822615, rel=1e-5)
+
+    def test_pure_gaussian_widths(self):
+        sigma, mu = 5.0, 100.0
+        x = np.linspace(40, 160, 6000)
+        y = np.exp(-((x - mu) ** 2) / (2 * sigma**2))
+        m = adv.peak_shape_metrics(x, y)
+        assert m["fwhm"] == pytest.approx(2.354820 * sigma, rel=1e-3)
+        assert m["fwtm"] == pytest.approx(4.291932 * sigma, rel=1e-3)
+        assert m["fwtm_fwhm"] == pytest.approx(adv.GAUSS_FWTM_FWHM, rel=1e-3)
+        assert m["asymmetry"] == pytest.approx(0.0, abs=1e-3)
+
+    def test_low_energy_tail_positive_asymmetry(self):
+        # Build a peak that is wider on the low-energy (left) side.
+        mu, sig = 100.0, 5.0
+        x = np.linspace(40, 160, 6000)
+        left = np.exp(-((x - mu) ** 2) / (2 * (2.5 * sig) ** 2))  # broad left
+        right = np.exp(-((x - mu) ** 2) / (2 * sig**2))           # narrow right
+        y = np.where(x < mu, left, right)
+        m = adv.peak_shape_metrics(x, y)
+        assert m["hwhm_left"] > m["hwhm_right"]
+        assert m["asymmetry"] > 0          # low-energy tail -> positive
+        assert m["fwtm_fwhm"] > adv.GAUSS_FWTM_FWHM
+
+    def test_nan_when_apex_on_edge(self):
+        x = np.linspace(0, 10, 100)
+        y = np.linspace(1, 5, 100)  # monotonic, max at the right edge
+        m = adv.peak_shape_metrics(x, y)
+        assert np.isnan(m["fwhm"])
+
+    def test_nan_when_all_zero(self):
+        x = np.linspace(0, 10, 100)
+        m = adv.peak_shape_metrics(x, np.zeros_like(x))
+        assert all(np.isnan(v) for v in m.values())
+
+
+class TestShapeMetricsOnFits:
+    @pytest.fixture
+    def gauss_fit(self, cebr_search):
+        from wara import peakfit as pf
+        return pf.PeakFit(cebr_search, STEP_XRANGE, bkg="linear")
+
+    def test_one_dict_per_peak(self, gauss_fit):
+        mets = adv.shape_metrics(gauss_fit)
+        assert len(mets) == len(gauss_fit.peak_info) == 1
+
+    def test_gaussian_fit_ratio_is_reference(self, gauss_fit):
+        m = adv.shape_metrics(gauss_fit)[0]
+        assert m["fwtm_fwhm"] == pytest.approx(adv.GAUSS_FWTM_FWHM, rel=1e-3)
+
+    def test_measured_fwhm_matches_sigma_fwhm_for_gaussian(self, gauss_fit):
+        # For a true Gaussian the numeric FWHM should match sigma*2.3548.
+        m = adv.shape_metrics(gauss_fit)[0]
+        assert m["fwhm"] == pytest.approx(gauss_fit.peak_info[0]["fwhm"], rel=1e-3)
+
+    def test_shape_summary_adds_columns(self, gauss_fit):
+        df = adv.shape_summary(gauss_fit)
+        for col in ("fwhm_meas", "fwtm", "fwtm_fwhm", "asymmetry"):
+            assert col in df.columns
+        # base summary columns are preserved
+        assert {"mean", "area", "fwhm"} <= set(df.columns)
+        assert len(df) == 1
+
+    def test_shape_summary_works_for_step_fit(self, cebr_search):
+        # Subclass (step background) peaks flow through unchanged.
+        fit = adv.GaussStepFit(cebr_search, STEP_XRANGE)
+        df = adv.shape_summary(fit)
+        assert df["fwtm_fwhm"].iloc[0] == pytest.approx(
+            adv.GAUSS_FWTM_FWHM, rel=5e-3
+        )
+
+
+# ---------------------------------------------------------------------------
+# MultiProfilePeakFit tail profiles — EMG / SkewedVoigt (Tier A).
+# Exercised on the HPGe 399.5 keV peak.
+# ---------------------------------------------------------------------------
+
+HPGE_PEAK_XRANGE = [390, 410]
+
+
+class TestTailProfiles:
+    def test_emg_and_skewedvoigt_registered(self):
+        assert "emg" in adv._PROFILE_MODELS
+        assert "skewedvoigt" in adv._PROFILE_MODELS
+
+    def test_unknown_profile_raises(self, hpge_search):
+        with pytest.raises(ValueError, match="Unknown profile"):
+            adv.MultiProfilePeakFit(hpge_search, HPGE_PEAK_XRANGE, profile="nope")
+
+    def test_emg_fit_converges(self, hpge_search):
+        fit = adv.MultiProfilePeakFit(
+            hpge_search, HPGE_PEAK_XRANGE, bkg="linear", profile="emg"
+        )
+        assert fit.fit_result.success
+        assert fit.peak_info[0]["area"] > 0
+        # centroid lands on the ~399.5 keV line
+        assert fit.peak_info[0]["mean"] == pytest.approx(399.5, abs=1.0)
+
+    def test_emg_tail_is_low_energy(self, hpge_search):
+        # Our EMG is the *left*-tailed variant (lmfit's tails high), so a
+        # genuinely tailed peak shows a positive measured asymmetry.
+        fit = adv.MultiProfilePeakFit(
+            hpge_search, HYPERMET_XRANGE, bkg="linear", profile="emg"
+        )
+        assert "g1_tau" in fit.fit_result.params
+        assert fit.fit_result.best_values["g1_tau"] > 0
+        assert adv.shape_metrics(fit)[0]["asymmetry"] > 0
+
+    def test_emg_not_worse_than_gaussian(self, hpge_search):
+        # On a tailed HPGe peak the EMG should fit at least as well as a
+        # plain Gaussian (it adds a tail degree of freedom).
+        g = adv.MultiProfilePeakFit(
+            hpge_search, HPGE_PEAK_XRANGE, bkg="linear", profile="gauss"
+        )
+        emg = adv.MultiProfilePeakFit(
+            hpge_search, HPGE_PEAK_XRANGE, bkg="linear", profile="emg"
+        )
+        assert emg.fit_result.redchi <= g.fit_result.redchi * 1.05
+
+    def test_skewedvoigt_fit_converges(self, hpge_search):
+        fit = adv.MultiProfilePeakFit(
+            hpge_search, HPGE_PEAK_XRANGE, bkg="linear", profile="skewedvoigt"
+        )
+        assert fit.fit_result.success
+        assert fit.peak_info[0]["area"] > 0
+
+    def test_shape_metrics_on_emg(self, hpge_search):
+        fit = adv.MultiProfilePeakFit(
+            hpge_search, HPGE_PEAK_XRANGE, bkg="linear", profile="emg"
+        )
+        m = adv.shape_metrics(fit)[0]
+        assert np.isfinite(m["fwhm"]) and m["fwhm"] > 0
+        assert np.isfinite(m["fwtm_fwhm"])
+
+
+# ---------------------------------------------------------------------------
+# Hypermet peak model (Tier B) — Gaussian core + low-energy exponential tail.
+# The strong, visibly tailed 200.1 keV HPGe peak is the canonical case:
+# a plain Gaussian gives redchi ~71, the Hypermet ~2.6.
+# ---------------------------------------------------------------------------
+
+HYPERMET_XRANGE = [196, 204]
+
+
+class TestHypermetFunction:
+    def test_unit_area_amplitude(self):
+        x = np.linspace(50, 150, 200000)
+        amp = 1000.0
+        y = adv.hypermet(x, amplitude=amp, center=100.0, sigma=5.0,
+                         tail_fraction=0.3, tail_tau=8.0)
+        assert np.trapz(y, x) == pytest.approx(amp, rel=1e-3)
+
+    def test_zero_tail_reduces_to_gaussian(self):
+        x = np.linspace(50, 150, 4000)
+        g = adv.hypermet(x, 1000.0, 100.0, 5.0, tail_fraction=0.0, tail_tau=8.0)
+        ref = 1000.0 * np.exp(-0.5 * ((x - 100.0) / 5.0) ** 2) / (
+            5.0 * np.sqrt(2 * np.pi)
+        )
+        assert np.allclose(g, ref, rtol=1e-6)
+
+    def test_tail_on_low_energy_side(self):
+        x = np.linspace(50, 150, 4000)
+        y = adv.hypermet(x, 1000.0, 100.0, 5.0, tail_fraction=0.3, tail_tau=8.0)
+        dx = x[1] - x[0]
+        mass_left = y[x < 100.0].sum() * dx
+        mass_right = y[x >= 100.0].sum() * dx
+        assert mass_left > mass_right  # low-energy tail carries more area
+
+    def test_emg_left_unit_stable_small_tau(self):
+        # erfcx formulation must stay finite where exp*erfc would overflow.
+        x = np.linspace(-100, 100, 50000)
+        y = adv._emg_left_unit(x, 0.0, 5.0, 0.3)
+        assert np.all(np.isfinite(y))
+        assert np.all(y >= 0)
+
+
+class TestHypermetFit:
+    @pytest.fixture
+    def fit(self, hpge_search):
+        return adv.HypermetFit(hpge_search, HYPERMET_XRANGE, bkg="linear")
+
+    @pytest.fixture
+    def gauss(self, hpge_search):
+        return adv.MultiProfilePeakFit(
+            hpge_search, HYPERMET_XRANGE, bkg="linear", profile="gauss"
+        )
+
+    def test_has_tail_parameters(self, fit):
+        params = fit.fit_result.params
+        assert "g1_tail_fraction" in params
+        assert "g1_tail_tau" in params
+
+    def test_beats_gaussian_on_tailed_peak(self, fit, gauss):
+        # The whole point: on a tailed HPGe peak the Hypermet fits far better.
+        assert fit.fit_result.redchi < 0.2 * gauss.fit_result.redchi
+
+    def test_tail_fraction_significant(self, fit):
+        tf = fit.fit_result.best_values["g1_tail_fraction"]
+        assert 0.05 < tf < 0.95   # a real, bounded tail
+
+    def test_area_is_total_and_matches_gaussian(self, fit, gauss):
+        # Unit-area amplitude => total area; close to (slightly above) the
+        # Gaussian area since it now also counts the tail.
+        assert fit.peak_info[0]["area"] == pytest.approx(
+            gauss.peak_info[0]["area"], rel=0.05
+        )
+
+    def test_measured_shape_shows_low_energy_tail(self, fit):
+        m = adv.shape_metrics(fit)[0]
+        assert m["fwtm_fwhm"] > adv.GAUSS_FWTM_FWHM   # tailed, not Gaussian
+        assert m["asymmetry"] > 0                     # low-energy tail
+
+    def test_centroid_on_line(self, fit):
+        assert fit.peak_info[0]["mean"] == pytest.approx(200.05, abs=0.2)
+
+    def test_plot_runs_headless(self, fit):
+        import matplotlib
+        matplotlib.use("Agg")
+        fit.plot()
+
+    def test_json_roundtrip(self, fit, hpge_search, tmp_path):
+        path = tmp_path / "hypermet.json"
+        fit.save_json(path)
+        restored = adv.HypermetFit.load_json(path, hpge_search)
+        assert restored.fit_result.best_values["g1_tail_fraction"] == pytest.approx(
+            fit.fit_result.best_values["g1_tail_fraction"], rel=1e-6
+        )
+
+
+# ---------------------------------------------------------------------------
+# FullHPGePeakFit — Hypermet tail on a smoothed step (the full HPGe shape).
+# On the tight 200.1 keV window it is the best of all models (gauss ~71,
+# hypermet ~2.6, full ~2.2).
+# ---------------------------------------------------------------------------
+
+FULL_XRANGE = [196, 204]
+
+
+class TestFullHPGePeakFit:
+    @pytest.fixture
+    def fit(self, hpge_search):
+        return adv.FullHPGePeakFit(hpge_search, FULL_XRANGE)
+
+    @pytest.fixture
+    def gauss(self, hpge_search):
+        return adv.MultiProfilePeakFit(
+            hpge_search, FULL_XRANGE, bkg="linear", profile="gauss"
+        )
+
+    def test_mro_composes_tail_and_step(self):
+        names = [c.__name__ for c in adv.FullHPGePeakFit.__mro__]
+        # Hypermet peak component takes priority; step background follows.
+        assert names.index("_HypermetPeakMixin") < names.index("GaussStepFit")
+
+    def test_sharp_step_is_default(self, fit):
+        # The sharp step is the robust default: it shares only the centroid
+        # with the tail (not sigma), avoiding the smooth-step degeneracy.
+        assert fit.step == "sharp"
+        assert fit.bkg == "step"
+        assert fit.bkg_key == "bkg_"
+
+    def test_has_tail_and_step_parameters(self, fit):
+        params = fit.fit_result.params
+        assert "g1_tail_fraction" in params
+        assert "g1_tail_tau" in params
+        assert "bkg_step_amplitude" in params
+        assert "bkg_step_sigma" not in params  # sharp step has no width
+
+    def test_step_tied_to_peak(self, fit):
+        bv = fit.fit_result.best_values
+        assert bv["bkg_step_center"] == bv["g1_center"]
+
+    def test_converges(self, fit):
+        assert fit.fit_result.success
+
+    def test_converges_on_tailed_peak_without_step(self, hpge_search):
+        # Regression: the 6129 keV peak is strongly tailed but sits on a
+        # flat continuum (no Compton step). With the smooth step this fit
+        # diverged (step shares sigma with the tail -> singular); the sharp
+        # step default reduces the step to ~0 and still captures the tail.
+        fit = adv.FullHPGePeakFit(hpge_search, [6100, 6150])
+        gauss = adv.MultiProfilePeakFit(
+            hpge_search, [6100, 6150], bkg="linear", profile="gauss"
+        )
+        assert fit.fit_result.success
+        assert fit.fit_result.redchi < 0.2 * gauss.fit_result.redchi
+        assert fit.fit_result.best_values["g1_tail_fraction"] > 0.2
+
+    def test_beats_gaussian(self, fit, gauss):
+        assert fit.fit_result.redchi < 0.1 * gauss.fit_result.redchi
+
+    def test_tail_fraction_significant(self, fit):
+        tf = fit.fit_result.best_values["g1_tail_fraction"]
+        assert 0.05 < tf < 0.95
+
+    def test_area_total_matches_gaussian(self, fit, gauss):
+        assert fit.peak_info[0]["area"] == pytest.approx(
+            gauss.peak_info[0]["area"], rel=0.05
+        )
+
+    def test_measured_shape_shows_low_energy_tail(self, fit):
+        m = adv.shape_metrics(fit)[0]
+        assert m["fwtm_fwhm"] > adv.GAUSS_FWTM_FWHM
+        assert m["asymmetry"] > 0
+
+    def test_plot_runs_headless(self, fit):
+        import matplotlib
+        matplotlib.use("Agg")
+        fit.plot()
+
+    def test_shared_sigma_not_supported(self, hpge_search):
+        with pytest.raises(NotImplementedError, match="shared_sigma"):
+            adv.FullHPGePeakFit(hpge_search, FULL_XRANGE, shared_sigma=True)
+
+    def test_json_roundtrip(self, fit, hpge_search, tmp_path):
+        path = tmp_path / "full_hpge.json"
+        fit.save_json(path)
+        restored = adv.FullHPGePeakFit.load_json(path, hpge_search)
+        assert restored.step == "sharp"
+        assert restored.fit_result.best_values["g1_tail_fraction"] == pytest.approx(
+            fit.fit_result.best_values["g1_tail_fraction"], rel=1e-6
+        )
+        assert restored.fit_result.best_values["bkg_step_amplitude"] == pytest.approx(
+            fit.fit_result.best_values["bkg_step_amplitude"], rel=1e-6
+        )
+
+
+# ---------------------------------------------------------------------------
+# Peak area units — net counts, NOT counts/sec.
+# Regression: the area was being divided by livetime, reporting a rate that
+# was orders of magnitude too small (and silently breaking efficiency.py,
+# which compares it against an emitted-counts number).
+# ---------------------------------------------------------------------------
+
+class TestAreaIsNetCounts:
+    def test_area_not_divided_by_livetime(self, hpge_search):
+        from wara.peakfit import PeakFit
+
+        spect = hpge_search.spectrum
+        lt = spect.livetime
+        assert lt and lt > 1 and not spect.cps   # HPGe file has a 28800 s livetime
+
+        fit = PeakFit(hpge_search, [6100, 6150], bkg="linear")
+        area = fit.peak_info[0]["area"]
+
+        # area == amplitude / mean-bin-width, with NO livetime division.
+        amp = fit.fit_result.best_values["g1_amplitude"]
+        x = spect.energies
+        che = spect.channels[(x > 6100) & (x < 6150)]
+        correct_f = float(np.diff(spect.energies[che]).mean())
+        assert area == pytest.approx(amp / correct_f, rel=1e-6)
+
+        # Net counts here are ~10^5; the old (wrong) cps value was ~5.
+        assert area > 1e4
+        assert area / lt < 100   # the rate it must NOT be reporting
+
+    def test_area_matches_across_methods(self, hpge_search):
+        # All fitters share the same area convention (net counts).
+        from wara.peakfit import PeakFit
+        g = PeakFit(hpge_search, [6100, 6150], bkg="linear")
+        full = adv.FullHPGePeakFit(hpge_search, [6100, 6150])
+        # Both > 10^4 counts; the tailed fit recovers a bit more (the tail).
+        assert g.peak_info[0]["area"] > 1e4
+        assert full.peak_info[0]["area"] > g.peak_info[0]["area"]

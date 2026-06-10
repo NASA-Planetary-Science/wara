@@ -73,8 +73,11 @@ class TestMethodSwitch:
         window.set_roi(1106, 1214)
         window.method.setCurrentIndex(1)   # Net area − linear bkg
         assert not window.peakfit_controls.isVisible()
-        assert window._slider_labels["lo"].text().strip() == "Peak start"
-        assert window._slider_labels["hi"].text().strip() == "Peak end"
+        # The ROI sliders are relabeled for the net-area workflow. The
+        # descriptive text now lives in the slider tooltips (and the table
+        # header), not separate QLabels.
+        assert "Left edge of the peak" in window.slider_lo.toolTip()
+        assert "Right edge of the peak" in window.slider_hi.toolTip()
 
     def test_switch_back_restores_peakfit_controls(self, window):
         window.show()
@@ -82,7 +85,7 @@ class TestMethodSwitch:
         window.method.setCurrentIndex(1)
         window.method.setCurrentIndex(0)   # back to Peak fit
         assert window.peakfit_controls.isVisible()
-        assert window._slider_labels["lo"].text().strip() == "Fit low"
+        assert "Trim the lower bound" in window.slider_lo.toolTip()
 
 
 # ---------------------------------------------------------------------------
@@ -151,21 +154,127 @@ class TestPeakFitTable:
     def test_headers_carry_x_units(self, window):
         window.show()
         window.set_roi(1106, 1214)   # cebr is calibrated in keV
-        headers = [window.table.horizontalHeaderItem(c).text() for c in range(3)]
-        assert headers == ["Centroid (keV)", "Area", "FWHM (keV)"]
+        n = window.table.columnCount()
+        headers = [window.table.horizontalHeaderItem(c).text() for c in range(n)]
+        assert headers == ["Centroid (keV)", "Area", "FWHM (keV)",
+                           "FWTM (keV)", "FWTM/FWHM", "Asym"]
 
     def test_area_is_raw_counts_despite_livetime(self, hpge_search, hpge_window):
-        """Regression: PeakFit divides area by livetime (counts/sec); the GUI
-        must display raw counts so it matches the plot and the net-area method."""
+        """Regression: peak area is net counts (not counts/sec) even when the
+        spectrum has a livetime, so the GUI shows the backend area directly and
+        it matches the plot and the net-area method."""
         lt = hpge_search.spectrum.livetime
         assert lt and not hpge_search.spectrum.cps   # this file does have one
         pk = float(hpge_search.spectrum.energies[hpge_search.peaks_idx[5]])
         hpge_window.show()
         hpge_window.set_roi(pk - 8, pk + 8)
-        # The GUI area = backend area (a rate) * livetime = raw counts.
         gui_area = float(hpge_window.table.item(0, 1).text().split("±")[0])
         from wara.peakfit import PeakFit
         backend_area = PeakFit(hpge_search, [pk - 8, pk + 8],
                                bkg="poly1").peak_info[0]["area"]
-        assert gui_area == pytest.approx(backend_area * lt, rel=1e-6)
+        # peak_info["area"] is already net counts; the GUI displays it as-is
+        # (no livetime scaling), so the two match exactly.
+        assert gui_area == pytest.approx(backend_area, rel=1e-6)
         assert gui_area > 100   # plainly counts, not a ~1-count/sec rate
+
+
+# ---------------------------------------------------------------------------
+# New peak-fitting features surfaced in the beta GUI: all profiles, the step
+# background, and the enriched results table (FWTM / tailing / asymmetry).
+# ---------------------------------------------------------------------------
+
+from wara.gui_beta.fitting import PEAK_SHAPES, BKG_ARGS
+
+
+class TestProfilesAndModels:
+    def test_all_shapes_offered(self, window):
+        items = [window.shape.itemText(i) for i in range(window.shape.count())]
+        for name in ("Gaussian", "Voigt", "Pseudo-Voigt", "Skewed Voigt",
+                     "EMG (low-E tail)", "Doniach", "Hypermet"):
+            assert name in items
+
+    @pytest.mark.parametrize("shape", list(PEAK_SHAPES))
+    def test_every_profile_fits(self, hpge_window, shape):
+        hpge_window.show()
+        hpge_window.shape.setCurrentText(shape)
+        hpge_window.bkg.setCurrentText("Polynomial")
+        hpge_window.set_roi(6100, 6150)   # tailed 6129 keV peak
+        assert hpge_window.table.rowCount() == 1
+        area = float(hpge_window.table.item(0, 1).text().split("±")[0])
+        assert area > 0
+
+    def test_hypermet_beats_gaussian_chi2(self, hpge_window):
+        """The quality line carries reduced χ²; Hypermet should beat Gaussian
+        on the tailed peak."""
+        import re
+
+        def redchi(shape):
+            hpge_window.shape.setCurrentText(shape)
+            hpge_window.bkg.setCurrentText("Polynomial")
+            hpge_window.set_roi(6100, 6150)
+            m = re.search(r"=\s*([\d.]+)", hpge_window.lbl_quality.text())
+            return float(m.group(1))
+
+        hpge_window.show()
+        assert redchi("Hypermet") < redchi("Gaussian")
+
+
+class TestStepBackgroundInGui:
+    def test_gaussian_step_dispatches(self, hpge_window):
+        hpge_window.show()
+        hpge_window.shape.setCurrentText("Gaussian")
+        hpge_window.bkg.setCurrentText("Step (sharp)")
+        hpge_window.set_roi(6100, 6150)
+        assert hpge_window.table.rowCount() == 1
+        assert "step" in hpge_window.lbl_quality.text().lower()
+
+    def test_hypermet_step_dispatches(self, hpge_window):
+        hpge_window.show()
+        hpge_window.shape.setCurrentText("Hypermet")
+        hpge_window.bkg.setCurrentText("Step (smooth)")
+        hpge_window.set_roi(6100, 6150)
+        assert hpge_window.table.rowCount() == 1
+
+    def test_unsupported_combo_messages(self, hpge_window):
+        hpge_window.show()
+        hpge_window.shape.setCurrentText("Voigt")
+        hpge_window.bkg.setCurrentText("Step (sharp)")
+        hpge_window.set_roi(6100, 6150)
+        assert hpge_window.table.rowCount() == 0
+        assert "Step background supports" in hpge_window.lbl_status.text()
+
+    def test_shared_sigma_disabled_for_step(self, hpge_window):
+        hpge_window.show()
+        hpge_window.bkg.setCurrentText("Step (sharp)")
+        assert not hpge_window.cb_shared.isEnabled()
+        hpge_window.bkg.setCurrentText("Polynomial")
+        assert hpge_window.cb_shared.isEnabled()
+
+
+class TestEnrichedTable:
+    def test_gaussian_ratio_and_asymmetry(self, window):
+        """A Gaussian fit reads ~1.823 for the tailing ratio and ~0 asymmetry."""
+        window.show()
+        window.shape.setCurrentText("Gaussian")
+        window.bkg.setCurrentText("Polynomial")
+        window.set_roi(1106, 1214)
+        ratio = float(window.table.item(0, 4).text())
+        asym = float(window.table.item(0, 5).text())
+        assert ratio == pytest.approx(1.82, abs=0.03)
+        assert asym == pytest.approx(0.0, abs=0.03)
+
+    def test_quality_line_has_chi2_and_model(self, window):
+        window.show()
+        window.shape.setCurrentText("Voigt")
+        window.set_roi(1106, 1214)
+        q = window.lbl_quality.text()
+        assert "Voigt" in q and "peak" in q
+
+    def test_area_method_resets_columns(self, window):
+        window.show()
+        window.set_roi(1106, 1214)            # peak fit -> 6 columns
+        assert window.table.columnCount() == 6
+        window.method.setCurrentIndex(1)       # net area -> 3 columns
+        assert window.table.columnCount() == 3
+        window.method.setCurrentIndex(0)       # back -> 6 columns
+        assert window.table.columnCount() == 6

@@ -1,9 +1,19 @@
 """Drag-and-Fit: an always-on-top window that fits the peaks inside an ROI
-dragged on the main plot, using wara.peakfit (Gaussian / Skewed Gaussian +
-linear / quadratic / exponential / polynomial backgrounds). It reuses
-PeakFit.plot() for the rich fit view (residual panel, components, 3-σ band,
-reduced χ² title) and PeakFit.summary() for the results table. The ROI can be
-adjusted here (spin boxes) or on the main plot; the two stay in sync.
+dragged on the main plot.
+
+Peak shapes (wara.peakfit / wara.advanced_fit): Gaussian, Skewed Gaussian,
+Voigt, Pseudo-Voigt, Skewed Voigt, EMG (low-energy tail), Doniach and Hypermet
+(Gaussian core + low-energy tail, the HPGe model). Backgrounds: polynomial
+(degree 0–7), exponential, and a step continuum (sharp/smooth) — the latter
+routes Gaussian peaks through GaussStepFit and Hypermet peaks through
+FullHPGePeakFit. It reuses PeakFit.plot() for the rich fit view (residual
+panel, components, 3-σ band, reduced χ² title) and wara.advanced_fit.
+shape_summary() for the results table, which reports the fitted centroid /
+net-count area / FWHM plus the numerically-measured FWTM, the FWTM/FWHM
+tailing ratio (1.823 for a pure Gaussian) and the low-energy asymmetry. A
+status line below the plot carries reduced χ², the model and the tail / step
+parameters. The ROI can be adjusted here (spin boxes) or on the main plot; the
+two stay in sync.
 """
 import numpy as np
 import matplotlib.pyplot as plt
@@ -17,14 +27,46 @@ from PyQt5.QtWidgets import (
 )
 from PyQt5.QtCore import Qt, pyqtSignal
 
-from wara import peakfit
-from wara.advanced_fit import fit_bkg, PeakAreaLinearBkg
+from wara.advanced_fit import (
+    fit_bkg, PeakAreaLinearBkg, MultiProfilePeakFit, HypermetFit,
+    GaussStepFit, FullHPGePeakFit, shape_summary, GAUSS_FWTM_FWHM,
+)
 from wara.matplotlib_theme import set_theme, DARK
 from . import theme as T
 
+# Peak-shape menu → how to build the fit.
+#   ("profile", name) → MultiProfilePeakFit(profile=name)
+#   ("hypermet", None) → HypermetFit (Gaussian core + low-energy tail)
+# "gauss" is routed through MultiProfilePeakFit too; it is identical to a
+# plain PeakFit but keeps a single construction path.
+PEAK_SHAPES = {
+    "Gaussian":         ("profile", "gauss"),
+    "Skewed Gaussian":  ("profile", "skewed"),
+    "Voigt":            ("profile", "voigt"),
+    "Pseudo-Voigt":     ("profile", "pvoigt"),
+    "Skewed Voigt":     ("profile", "skewedvoigt"),
+    "EMG (low-E tail)": ("profile", "emg"),
+    "Doniach":          ("profile", "doniach"),
+    "Hypermet":         ("hypermet", None),
+}
+
 # Display name → bkg argument for peakfit. Polynomial uses the degree spinner
-# (degree 1 == a linear background).
-BKG_ARGS = {"Polynomial": None, "Exponential": "exponential"}
+# (degree 1 == a linear background). The two Step entries select the
+# erfc/Heaviside continuum (GaussStepFit / FullHPGePeakFit).
+BKG_ARGS = {
+    "Polynomial":    None,
+    "Exponential":   "exponential",
+    "Step (sharp)":  "step-sharp",
+    "Step (smooth)": "step-smooth",
+}
+
+# Results-table columns for the peak-fit method. FWHM/FWTM carry the
+# spectrum's x-units, filled in at display time. FWHM is the fitted
+# (Gaussian-sigma) width; FWTM, the tailing ratio and the asymmetry are
+# measured numerically from the fitted profile, so they are meaningful for
+# every line shape (a pure Gaussian has FWTM/FWHM = 1.823 and Asym = 0).
+PEAKFIT_COLS = ["Centroid", "Area", "FWHM", "FWTM", "FWTM/FWHM", "Asym"]
+AREA_COLS = ["Region", "Area", ""]
 
 # Slightly lighter than the main plot (#07070f) for better contrast in the popup.
 FIT_PLOT_BG = "#161622"
@@ -82,8 +124,13 @@ class FitWindow(QDialog):
         self.peakfit_controls = QWidget()
         row1 = QHBoxLayout(self.peakfit_controls)
         row1.setContentsMargins(0, 0, 0, 0)
-        self.shape = QComboBox(); self.shape.addItems(["Gaussian", "Skewed Gaussian"])
-        self.shape.setToolTip("Peak shape used for every peak in the ROI")
+        self.shape = QComboBox(); self.shape.addItems(list(PEAK_SHAPES.keys()))
+        self.shape.setToolTip(
+            "Peak shape used for every peak in the ROI.\n"
+            "Voigt/Pseudo-Voigt add Lorentzian wings; Skewed/EMG/Hypermet "
+            "model the low-energy tail of HPGe peaks (EMG and Hypermet are "
+            "the principled tailing models)."
+        )
         self.bkg = QComboBox(); self.bkg.addItems(list(BKG_ARGS.keys()))
         self.bkg.setToolTip("Continuum model under the peaks")
         self.degree = QSpinBox(); self.degree.setRange(0, 7); self.degree.setValue(1)
@@ -123,12 +170,17 @@ class FitWindow(QDialog):
         self.lbl_status.setObjectName("stat_key")
         outer.addWidget(self.lbl_status)
         self.canvas.mpl_connect("motion_notify_event", self._on_motion)
-        self.table = QTableWidget(0, 3)
-        self.table.setHorizontalHeaderLabels(["Centroid", "Area", "FWHM"])
+        # Persistent fit-quality line (reduced χ², model, tailing) — kept
+        # separate from lbl_status so the live x/y readout doesn't clobber it.
+        self.lbl_quality = QLabel("")
+        self.lbl_quality.setObjectName("stat_key")
+        outer.addWidget(self.lbl_quality)
+        self.table = QTableWidget(0, len(PEAKFIT_COLS))
+        self.table.setHorizontalHeaderLabels(PEAKFIT_COLS)
         self.table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
         self.table.verticalHeader().setVisible(False)
         self.table.setMaximumHeight(170)
-        self.table.setStyleSheet("QTableView { font-size: 17px; } QHeaderView::section { font-size: 17px; }")
+        self.table.setStyleSheet("QTableView { font-size: 16px; } QHeaderView::section { font-size: 15px; }")
         outer.addWidget(self.table)
 
         crow = QHBoxLayout(); crow.addStretch(1)
@@ -211,8 +263,25 @@ class FitWindow(QDialog):
     def _bkg_arg(self):
         return BKG_ARGS[self.bkg.currentText()] or f"poly{self.degree.value()}"
 
+    def _is_step_bkg(self):
+        return self.bkg.currentText().startswith("Step")
+
     def _on_bkg_changed(self):
+        # Degree only matters for a polynomial; the resolution-curve
+        # constraint is not available on the step-background classes.
         self.degree.setEnabled(self.bkg.currentText() == "Polynomial")
+        step = self._is_step_bkg()
+        self.cb_shared.setEnabled(not step)
+        if step:
+            self.cb_shared.setToolTip(
+                "Not available with a step background "
+                "(GaussStepFit / FullHPGePeakFit)."
+            )
+        else:
+            self.cb_shared.setToolTip(
+                "Constrain peak widths to follow the resolution curve  "
+                "fwhm = a + b·√E"
+            )
         self._refit()
 
     def _refit_if_poly(self):
@@ -236,15 +305,21 @@ class FitWindow(QDialog):
     def _on_method_changed(self):
         area = self._is_area_method()
         self.peakfit_controls.setVisible(not area)
+        self.lbl_quality.setText("")
         if area:
             self.slider_lo.setToolTip("Left edge of the peak — counts to its left are background")
             self.slider_hi.setToolTip("Right edge of the peak — counts to its right are background")
-            self.table.setHorizontalHeaderLabels(["Region", "Area", ""])
+            self._set_columns(AREA_COLS)
         else:
             self.slider_lo.setToolTip("Trim the lower bound of the fit range")
             self.slider_hi.setToolTip("Trim the upper bound of the fit range")
-            self.table.setHorizontalHeaderLabels(["Centroid", "Area", "FWHM"])
+            self._set_columns(PEAKFIT_COLS)
         self._refit()
+
+    def _set_columns(self, headers):
+        """Resize the results table and set its header labels."""
+        self.table.setColumnCount(len(headers))
+        self.table.setHorizontalHeaderLabels(headers)
 
     def _refit(self):
         if self._is_area_method():
@@ -252,19 +327,57 @@ class FitWindow(QDialog):
         else:
             self._refit_peakfit()
 
+    def _build_peakfit(self):
+        """
+        Construct the fit object for the current shape + background selection.
+
+        Returns the fit, or None when the combination is unsupported (a status
+        message is set in that case). A ValueError (no peaks in range) is left
+        to propagate so the caller can fall back to a background-only fit.
+        """
+        search = self._search
+        xr = list(self._xrange)
+        shared = self.cb_shared.isChecked()
+        kind, profile = PEAK_SHAPES[self.shape.currentText()]
+        bkg_label = self.bkg.currentText()
+
+        if bkg_label.startswith("Step"):
+            step = "sharp" if "sharp" in bkg_label else "smooth"
+            # The step-background classes are peak-shape specific.
+            if kind == "hypermet":
+                return FullHPGePeakFit(search, xr, step=step)
+            if profile == "gauss":
+                return GaussStepFit(search, xr, step=step)
+            self.lbl_status.setText(
+                "Step background supports the Gaussian or Hypermet shape. "
+                "Choose one of those, or use a Polynomial / Exponential "
+                "background with this profile."
+            )
+            return None
+
+        bkg = self._bkg_arg()
+        if kind == "hypermet":
+            return HypermetFit(search, xr, bkg=bkg, shared_sigma=shared)
+        return MultiProfilePeakFit(
+            search, xr, bkg=bkg, profile=profile, shared_sigma=shared
+        )
+
     def _refit_peakfit(self):
         if self._xrange is None or self._search is None:
             return
         try:
-            fit = peakfit.PeakFit(
-                self._search, list(self._xrange), bkg=self._bkg_arg(),
-                skew=(self.shape.currentText() == "Skewed Gaussian"),
-                shared_sigma=self.cb_shared.isChecked())
+            fit = self._build_peakfit()
         except ValueError:
             self._fit_bkg_only()
             return
         except Exception as exc:  # noqa: BLE001
             self.lbl_status.setText(f"Fit failed: {exc}")
+            self.lbl_quality.setText("")
+            self.table.setRowCount(0)
+            self.canvas.figure.clf(); self.canvas.draw_idle()
+            return
+        if fit is None:                       # unsupported combo (status set)
+            self.lbl_quality.setText("")
             self.table.setRowCount(0)
             self.canvas.figure.clf(); self.canvas.draw_idle()
             return
@@ -320,7 +433,8 @@ class FitWindow(QDialog):
         self.canvas.draw_idle()
 
         self.lbl_status.setText("No peaks in range — background fit only")
-        self.table.setHorizontalHeaderLabels(["", "Area", ""])
+        self.lbl_quality.setText("")
+        self._set_columns(["", "Area", ""])
         self.table.setRowCount(2)
         rows = [
             ("Raw sum", f"{result.area_raw:.2f} ± {result.area_raw_err:.2f}"),
@@ -417,7 +531,7 @@ class FitWindow(QDialog):
         self.canvas.draw_idle()
 
     def _fill_area_table(self, alb):
-        self.table.setHorizontalHeaderLabels(["Region", "Area", ""])
+        self._set_columns(AREA_COLS)
         rows = [
             ("Net (A)", f"{alb.A:.2f} ± {alb.sigA:.2f}"),
             ("Bkg (B)", f"{alb.B:.2f} ± {alb.sigB:.2f}"),
@@ -437,27 +551,64 @@ class FitWindow(QDialog):
             return xu[xu.index("(") + 1:xu.index(")")]
         return "ch"
 
+    def _fit_quality_text(self, fit):
+        """One-line reduced-χ² / model / tailing summary for lbl_quality."""
+        rc = fit.fit_result.redchi
+        npk = len(fit.peak_info)
+        shape = self.shape.currentText()
+        bkg = self.bkg.currentText()
+        bits = [f"χ²ᵣ = {rc:.3f}",
+                f"{npk} peak{'s' if npk != 1 else ''}",
+                f"{shape} + {bkg}"]
+        bv = fit.fit_result.best_values
+        # Tailing / step extras when the model carries them (peak g1 shown).
+        if "g1_tail_fraction" in bv:
+            bits.append(f"tail {100 * bv['g1_tail_fraction']:.0f}%")
+        if "bkg_step_amplitude" in bv:
+            bits.append(f"step {bv['bkg_step_amplitude']:.0f}")
+        ok = getattr(fit.fit_result, "success", True)
+        if not ok:
+            bits.append("⚠ did not converge")
+        return "    ·    ".join(bits)
+
     def _fill_table(self, fit):
-        df = fit.summary()
-        # PeakFit reports the area as a rate (counts/sec) when the spectrum is
-        # raw counts with a livetime. The plotted counts and the net-area method
-        # both work in raw counts, so undo that here to keep the Area column
-        # consistent and comparable (factor is 1 for a cps / no-livetime file).
-        spec = self._search.spectrum
-        rate_factor = spec.livetime if (not spec.cps and spec.livetime) else 1.0
+        # shape_summary = PeakFit.summary() (net-count area) plus numerically
+        # measured FWTM, the FWTM/FWHM tailing ratio (1.823 for a Gaussian)
+        # and the low-energy asymmetry — valid for every line shape.
+        df = shape_summary(fit)
         unit = self._x_unit_label()
-        self.table.setHorizontalHeaderLabels(
-            [f"Centroid ({unit})", "Area", f"FWHM ({unit})"])
+        headers = [f"Centroid ({unit})", "Area", f"FWHM ({unit})",
+                   f"FWTM ({unit})", "FWTM/FWHM", "Asym"]
+        self._set_columns(headers)
+        self._set_header_tooltips({
+            2: "Fitted FWHM (from the Gaussian sigma; exact for a Gaussian, "
+               "approximate for Voigt/EMG/Hypermet — see FWTM/FWHM).",
+            4: f"FWTM/FWHM, measured from the profile. {GAUSS_FWTM_FWHM:.3f} "
+               "for a pure Gaussian; larger means more tailing.",
+            5: "Low-energy tail asymmetry (measured at tenth maximum). "
+               "0 is symmetric; positive = low-energy tail.",
+        })
         self.table.setRowCount(len(df))
         for i, row in df.iterrows():
             cells = [_fmt(row["mean"], row["mean_err"]),
-                     _fmt(row["area"] * rate_factor, row["area_err"] * rate_factor),
-                     _fmt(row["fwhm"], row["fwhm_err"])]
+                     _fmt(row["area"], row["area_err"]),
+                     _fmt(row["fwhm"], row["fwhm_err"]),
+                     _fmt(row["fwtm"], None),
+                     _fmt(row["fwtm_fwhm"], None),
+                     _fmt(row["asymmetry"], None)]
             for c, text in enumerate(cells):
                 item = QTableWidgetItem(text)
                 item.setFlags(Qt.ItemIsEnabled | Qt.ItemIsSelectable)
                 item.setTextAlignment(Qt.AlignCenter)
                 self.table.setItem(i, c, item)
+        self.lbl_quality.setText(self._fit_quality_text(fit))
+
+    def _set_header_tooltips(self, tips):
+        """Attach tooltips to header sections by column index."""
+        for col, tip in tips.items():
+            item = self.table.horizontalHeaderItem(col)
+            if item is not None:
+                item.setToolTip(tip)
 
     def _on_motion(self, event):
         if event.inaxes is not None and event.xdata is not None:
