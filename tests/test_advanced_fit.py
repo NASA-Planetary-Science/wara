@@ -606,7 +606,7 @@ class TestHypermetFunction:
         amp = 1000.0
         y = adv.hypermet(x, amplitude=amp, center=100.0, sigma=5.0,
                          tail_fraction=0.3, tail_tau=8.0)
-        assert np.trapz(y, x) == pytest.approx(amp, rel=1e-3)
+        assert np.trapezoid(y, x) == pytest.approx(amp, rel=1e-3)
 
     def test_zero_tail_reduces_to_gaussian(self):
         x = np.linspace(50, 150, 4000)

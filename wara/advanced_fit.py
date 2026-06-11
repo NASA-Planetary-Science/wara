@@ -466,12 +466,13 @@ class MultiProfilePeakFit(PeakFit):
 
     def _set_peak_initial_values(self, pars, prefix, center, sigma, amplitude):
         super()._set_peak_initial_values(pars, prefix, center, sigma, amplitude)
-        # Seed the left-EMG tail length to the peak width (a width-matched
-        # start that scales correctly whether x is channels or keV).
         if self.profile == "emg":
             tname = f"{prefix}tau"
             if tname in pars:
                 pars[tname].set(value=float(max(sigma, 1e-3)), min=1e-3)
+        if self.profile == "doniach":
+            pars[f"{prefix}sigma"].set(min=1e-6)
+            pars[f"{prefix}gamma"].set(value=0.1, min=0.0, max=1.0)
 
 
 # ---------------------------------------------------------------------------
@@ -870,6 +871,18 @@ class _HypermetPeakMixin:
         )
         tau0 = self._tail_tau0 if self._tail_tau0 is not None else max(sigma, 1e-3)
         pars[f"{prefix}tail_tau"].set(value=tau0, min=1e-3)
+
+    def _sub_component_curves(self, cp, x):
+        prefix = f"g{cp+1}_"
+        bv = self.fit_result.best_values
+        amp = bv[f"{prefix}amplitude"]
+        cen = bv[f"{prefix}center"]
+        sig = bv[f"{prefix}sigma"]
+        tf  = bv[f"{prefix}tail_fraction"]
+        tau = bv[f"{prefix}tail_tau"]
+        core = amp * (1.0 - tf) * _gaussian_unit(x, cen, sig)
+        tail = amp * tf * _emg_left_unit(x, cen, sig, tau)
+        return [(core, "Core"), (tail, "Tail")]
 
 
 class HypermetFit(_HypermetPeakMixin, PeakFit):

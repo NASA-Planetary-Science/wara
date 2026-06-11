@@ -133,6 +133,16 @@ class PeakFit:
         """
         return comps[self.bkg_key] + comps[f"g{cp+1}_"]
 
+    def _sub_component_curves(self, cp, x):
+        """
+        Sub-component decomposition for peak ``cp`` in :meth:`plot`.
+
+        Returns a list of ``(y_values, label)`` tuples — peak-only values
+        (no background offset; the caller adds the same base used by
+        :meth:`_component_curve`).  Default: empty (no sub-components).
+        """
+        return []
+
     def _bkg_drawstyle(self):
         """matplotlib ``drawstyle`` for the background line in :meth:`plot`."""
         return "default"
@@ -550,6 +560,7 @@ class PeakFit:
             c_comp = "#b388ff"
             c_band = "#ffffff"
             c_res  = "#ffb300"
+            c_subs = ["#ffa726", "#ffee58"]
             a_band = 0.12
         else:
             c_data = "b"
@@ -558,6 +569,7 @@ class PeakFit:
             c_comp = "k"
             c_band = "#ABABAB"
             c_res  = None
+            c_subs = ["#e65100", "#00838f"]
             a_band = 0.4
 
         with plt.rc_context({"font.size": 12}):
@@ -588,16 +600,24 @@ class PeakFit:
                 label=f"Bkg: {self.bkg}", drawstyle=self._bkg_drawstyle(),
             )
             n_gauss = len(comps) - 1
+            sub_label_used = set()
             for cp in range(n_gauss):
                 label = "Comp." if cp == 0 else None
+                comp_curve = self._component_curve(comps, cp)
                 ax_fit.plot(
-                    x,
-                    self._component_curve(comps, cp),
-                    "--",
-                    color=c_comp,
-                    lw=2,
-                    label=label,
+                    x, comp_curve, "--", color=c_comp, lw=2, label=label,
                 )
+                base = comp_curve - comps[f"g{cp+1}_"]
+                for si, (y_sub, sub_label) in enumerate(
+                    self._sub_component_curves(cp, x)
+                ):
+                    show_label = sub_label if sub_label not in sub_label_used else None
+                    sub_label_used.add(sub_label)
+                    ax_fit.plot(
+                        x, base + y_sub, ":",
+                        color=c_subs[si % len(c_subs)],
+                        lw=2, label=show_label,
+                    )
 
             dely = res.eval_uncertainty(x=x_pred, sigma=3)
             ax_fit.fill_between(
