@@ -22,9 +22,10 @@ from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
 from PyQt5.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QLabel, QComboBox, QCheckBox, QSpinBox,
     QDoubleSpinBox, QPushButton, QTableWidget, QTableWidgetItem, QHeaderView,
-    QSizePolicy, QSlider, QWidget,
+    QSizePolicy, QSlider, QWidget, QTextEdit,
 )
 from PyQt5.QtCore import Qt, pyqtSignal
+from PyQt5.QtGui import QFont
 
 from wara.advanced_fit import (
     fit_bkg, PeakAreaLinearBkg, MultiProfilePeakFit, HypermetFit,
@@ -178,7 +179,14 @@ class FitWindow(QDialog):
         self.table.setStyleSheet("QTableView { font-size: 16px; } QHeaderView::section { font-size: 15px; }")
         outer.addWidget(self.table)
 
-        crow = QHBoxLayout(); crow.addStretch(1)
+        crow = QHBoxLayout()
+        self.btn_details = QPushButton("Fit details")
+        self.btn_details.setObjectName("action_btn")
+        self.btn_details.setToolTip("Show the full lmfit report for the current fit")
+        self.btn_details.setEnabled(False)
+        self.btn_details.clicked.connect(self._show_fit_details)
+        crow.addWidget(self.btn_details)
+        crow.addStretch(1)
         self.btn_close = QPushButton("Close"); self.btn_close.setObjectName("action_btn")
         self.btn_close.clicked.connect(self.close)
         crow.addWidget(self.btn_close)
@@ -320,6 +328,9 @@ class FitWindow(QDialog):
             self._refit_area()
         else:
             self._refit_peakfit()
+        has_report = (self.last_fit is not None
+                      and getattr(self.last_fit, "fit_result", None) is not None)
+        self.btn_details.setEnabled(has_report)
 
     def _build_peakfit(self):
         """
@@ -584,6 +595,61 @@ class FitWindow(QDialog):
             item = self.table.horizontalHeaderItem(col)
             if item is not None:
                 item.setToolTip(tip)
+
+    @staticmethod
+    def _report_to_html(report):
+        import html as _html
+        lines = report.splitlines()
+        out = []
+        for line in lines:
+            stripped = line.strip()
+            if stripped.startswith("[[") and stripped.endswith("]]"):
+                title = stripped[2:-2]
+                out.append(
+                    f'<h3 style="color:#7b8cff; margin:14px 0 4px 0; '
+                    f'border-bottom:1px solid #2a2a45; padding-bottom:3px;">'
+                    f'{_html.escape(title)}</h3>'
+                )
+                continue
+            escaped = _html.escape(line)
+            if stripped.startswith("#"):
+                escaped = f'<span style="color:#8888c0">{escaped}</span>'
+            elif stripped.startswith("C("):
+                escaped = f'<span style="color:#ffb300">{escaped}</span>'
+            elif ":" in stripped and "+/-" in stripped:
+                name, rest = escaped.split(":", 1)
+                rest = rest.replace("+/-", '<span style="color:#aab2e0">&#177;</span>')
+                escaped = f'<span style="color:#00e5ff">{name}</span>:{rest}'
+            elif "=" in stripped:
+                parts = escaped.split("=", 1)
+                escaped = (f'<span style="color:#00e5ff">{parts[0]}</span>'
+                           f'<span style="color:#aab2e0">=</span>{parts[1]}')
+            out.append(f'<div style="white-space:pre">{escaped}</div>')
+        return (
+            '<div style="font-family: Consolas, Cascadia Mono, monospace; '
+            'font-size: 12px; line-height: 1.5; color: #f4f6ff;">'
+            + "\n".join(out) + '</div>'
+        )
+
+    def _show_fit_details(self):
+        fit = self.last_fit
+        if fit is None or getattr(fit, "fit_result", None) is None:
+            return
+        report = fit.fit_result.fit_report()
+        dlg = QDialog(self)
+        dlg.setWindowTitle("Fit Details")
+        dlg.setStyleSheet(self.styleSheet())
+        dlg.resize(640, 520)
+        lay = QVBoxLayout(dlg)
+        text = QTextEdit()
+        text.setReadOnly(True)
+        text.setStyleSheet(
+            f"QTextEdit {{ background: {FIT_PLOT_BG}; border: 1px solid #2a2a45; "
+            f"border-radius: 6px; padding: 10px; }}"
+        )
+        text.setHtml(self._report_to_html(report))
+        lay.addWidget(text)
+        dlg.show()
 
     def _on_motion(self, event):
         if event.inaxes is not None and event.xdata is not None:

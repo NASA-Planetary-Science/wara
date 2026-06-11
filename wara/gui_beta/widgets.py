@@ -391,7 +391,7 @@ class PeakFindPanel(QFrame):
         for cb in (self.cb_kernel, self.cb_snr, self.cb_manual, self.cb_peaks):
             lay.addWidget(cb)
 
-        self.btn_find = QPushButton("Find Peaks"); self.btn_find.setObjectName("primary_btn")
+        self.btn_find = QPushButton("Find Peaks"); self.btn_find.setObjectName("find_btn")
         self.btn_find.setCursor(Qt.PointingHandCursor)
         lay.addWidget(self.btn_find)
         self.btn_clear = QPushButton("Clear Peaks"); self.btn_clear.setObjectName("danger_btn")

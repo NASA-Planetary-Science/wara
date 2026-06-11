@@ -138,6 +138,11 @@ QPushButton#primary_btn {{
     border-radius: 5px; padding: 9px 14px; font-size: 14px; font-weight: 700;
 }}
 QPushButton#primary_btn:hover {{ background-color: #1a5778; }}
+QPushButton#find_btn {{
+    background-color: #1e2a5e; color: #b8c4ff; border: 1px solid #7b8cff;
+    border-radius: 5px; padding: 9px 14px; font-size: 14px; font-weight: 700;
+}}
+QPushButton#find_btn:hover {{ background-color: #2a3a78; }}
 QPushButton#danger_btn {{
     background-color: #3a1420; color: #ff8aa0; border: 1px solid {ACCENT_RED};
     border-radius: 5px; padding: 9px 14px; font-size: 14px; font-weight: 700;
