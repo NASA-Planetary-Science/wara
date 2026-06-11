@@ -52,6 +52,28 @@ print("  -> the *fit* is a Gaussian so its ratio is 1.823 by construction;")
 print("     the large reduced chi^2 is what flags the un-modelled tail.")
 
 
+# --- 1b. Sanity check: measure the FWTM from the *data*, not the fit --------
+# shape_metrics reads the FWTM off the fitted profile, so a Gaussian fit can
+# only ever report the Gaussian ideal (1.823) no matter how tailed the real
+# peak is. To see the *actual* tail you can measure the widths straight from
+# the counts, isolating the peak by subtracting everything the model explains
+# except that peak:  y_data - best_fit + g1_component  (continuum and any
+# neighbours removed, fit residuals kept). This is just a cross-check — once
+# you fit a proper tailed model (Hypermet/EMG below) its profile FWTM already
+# matches the data, so there's no need to carry the data value around.
+def data_shape_metrics(fit, peak=0):
+    x = fit.x_data
+    comp = fit.fit_result.eval_components(x=x)[f"g{peak+1}_"]
+    isolated = fit.y_data - fit.fit_result.best_fit + comp
+    return adv.peak_shape_metrics(x, isolated)
+
+g_fit = adv.shape_metrics(gauss)[0]
+g_data = data_shape_metrics(gauss)
+print(f"\nGaussian peak — FWTM/FWHM from the fit  vs  from the data:")
+print(f"  from fit  = {g_fit['fwtm_fwhm']:.3f}   (pinned to the Gaussian ideal)")
+print(f"  from data = {g_data['fwtm_fwhm']:.3f}   (the real, tailed shape)")
+
+
 # --- 2. EMG: an exponentially-modified Gaussian -----------------------------
 emg = adv.MultiProfilePeakFit(search, XR, bkg="linear", profile="emg")
 print(f"\nEMG fit (reduced chi^2 = {emg.fit_result.redchi:.2f}):")

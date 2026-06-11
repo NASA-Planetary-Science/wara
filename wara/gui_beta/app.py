@@ -852,10 +852,12 @@ class WaraBetaApp(QMainWindow):
         self.spectrum_opts.btn_fit.setChecked(True)
         nav = self.spectrum_page.canvas.nav_toolbar
         if nav is not None and nav.mode != "":
-            if "zoom" in nav.mode.lower():
-                nav.zoom()
-            elif "pan" in nav.mode.lower():
+            # Toggle off whatever nav mode is active. Order matters: pan's mode
+            # string is "pan/zoom" (contains "zoom"), so check pan first.
+            if "pan" in nav.mode.lower():
                 nav.pan()
+            elif "zoom" in nav.mode.lower():
+                nav.zoom()
         self.spectrum_page.canvas.enable_roi()
         self.statusBar().showMessage("  Drag over peaks on the plot to fit  ·  click Drag and Fit again to stop")
 
