@@ -13,6 +13,20 @@ from PyQt5.QtCore import Qt, pyqtSignal
 
 from . import theme as T
 
+# wara logo, shown faded under the "NO SPECTRUM LOADED" placeholder. Loaded
+# lazily (and once) so a missing/unreadable file never blocks the GUI.
+from importlib.resources import files as _files
+_LOGO_PATH = str(_files("wara").joinpath("ui/wara-logo.png"))
+_LOGO_ARR = None
+
+
+def _logo_array():
+    global _LOGO_ARR
+    if _LOGO_ARR is None:
+        import matplotlib.image as _mpimg
+        _LOGO_ARR = _mpimg.imread(_LOGO_PATH)
+    return _LOGO_ARR
+
 
 # ── Scroll-safe inputs ───────────────────────────────────────────────────────
 # Inside a scroll area, combo boxes and spin boxes grab the mouse wheel and
@@ -134,9 +148,19 @@ class SpectrumCanvas(FigureCanvas):
         self._spect = None
         self.ax.clear()
         self.ax.set_facecolor(T.BG_PLOT)
-        self.ax.text(0.5, 0.5, "NO SPECTRUM LOADED", transform=self.ax.transAxes,
+        self.ax.text(0.5, 0.72, "NO SPECTRUM LOADED", transform=self.ax.transAxes,
                      ha="center", va="center", fontsize=16, color=T.BORDER,
                      fontweight="bold")
+        # wara logo, faded, centred just below the placeholder text.
+        try:
+            from matplotlib.offsetbox import OffsetImage, AnnotationBbox
+            arr = _logo_array()
+            zoom = 180.0 / arr.shape[0]          # ~180-px tall, DPI-independent
+            box = OffsetImage(arr, zoom=zoom, alpha=0.7)
+            self.ax.add_artist(AnnotationBbox(
+                box, (0.5, 0.40), xycoords="axes fraction", frameon=False))
+        except Exception:                        # noqa: BLE001 — logo is optional
+            pass
         self.ax.set_xticks([]); self.ax.set_yticks([])
         for sp in self.ax.spines.values():
             sp.set_color(T.BORDER)
@@ -362,6 +386,17 @@ class PeakFindPanel(QFrame):
             lay.addWidget(row)
             return e
 
+        # Detector preset sits above SNR: choosing it fills SNR / Ref. channel /
+        # Ref. FWHM, so it reads top-down as "pick a detector, then tune".
+        self.detector = ComboBox()
+        self.detector.addItems(["HPGe", "LaBr/CeBr", "NaI", "Plastic Scint."])
+        self.detector.setCurrentText("LaBr/CeBr")
+        self.detector.setMaximumWidth(150)
+        row, _ = labeled_row("Detector", self.detector)
+        lay.addWidget(row)
+
+        lay.addWidget(hsep())
+
         self.snr = field("SNR >", "3")
         self.ref_ch = field("Ref. channel")
         self.ref_ch.setPlaceholderText("e.g. 420")
@@ -375,20 +410,10 @@ class PeakFindPanel(QFrame):
         xl.addWidget(self.x0); xl.addWidget(self.x1)
         lay.addWidget(xr)
 
-        self.detector = ComboBox()
-        self.detector.addItems(["HPGe", "LaBr/CeBr", "NaI", "Plastic Scint."])
-        self.detector.setCurrentText("LaBr/CeBr")
-        self.detector.setMaximumWidth(150)
-        row, _ = labeled_row("Detector", self.detector)
-        lay.addWidget(row)
-
         lay.addWidget(hsep())
         self.cb_kernel = QCheckBox("Kernel Method"); self.cb_kernel.setChecked(True)
         self.cb_snr = QCheckBox("Plot SNR")
-        self.cb_manual = QCheckBox("Add peaks manually")
-        self.cb_manual.setToolTip("Click on the plot to place peaks by hand")
-        self.cb_peaks = QCheckBox("Show Peaks"); self.cb_peaks.setChecked(True)
-        for cb in (self.cb_kernel, self.cb_snr, self.cb_manual, self.cb_peaks):
+        for cb in (self.cb_kernel, self.cb_snr):
             lay.addWidget(cb)
 
         self.btn_find = QPushButton("Find Peaks"); self.btn_find.setObjectName("find_btn")
@@ -415,7 +440,6 @@ class PeakFindPanel(QFrame):
             "Derivative-based peak detection — more robust but slower.\n"
             "Needs < 9000 channels, or set an Xrange to limit the region.")
         self.cb_snr.setToolTip("Overlay the SNR curve on a second axis")
-        self.cb_peaks.setToolTip("Show or hide the peak markers on the plot")
         self.btn_find.setToolTip("Run the peak search with the settings above")
         self.btn_clear.setToolTip("Remove all peak markers from the plot")
 
@@ -491,6 +515,15 @@ class SpectrumOptions(QScrollArea):
 
         # Peaks & fitting (used most often, kept high up)
         lay.addWidget(hsep()); lay.addWidget(header("PEAKS & FITTING"))
+        # Manual peak placement is its own way of getting peaks (alongside
+        # Auto-Find), so it lives here on top of the action buttons rather than
+        # buried in the Auto-Find options.
+        self.cb_manual = QCheckBox("Add peaks manually")
+        self.cb_manual.setToolTip("Click on the plot to place peaks by hand")
+        lay.addWidget(self.cb_manual)
+        self.cb_peaks = QCheckBox("Show Peaks"); self.cb_peaks.setChecked(True)
+        self.cb_peaks.setToolTip("Show or hide the peak markers on the plot")
+        lay.addWidget(self.cb_peaks)
         self.btn_fit = QPushButton("Drag and Fit"); self.btn_fit.setObjectName("fit_btn")
         self.btn_fit.setCheckable(True)
         self.btn_fit.setToolTip(

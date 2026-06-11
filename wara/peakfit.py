@@ -359,10 +359,18 @@ class PeakFit:
                     # narrow-peak resolution curve; leave their sigma free.
                     continue
                 prefix = f"g{i+1}_"
-                pars[f"{prefix}center"].set(
-                    min=max(0.0, float(self.xrange[0])),
-                    max=float(self.xrange[1]),
-                )
+                # A declared peak (peaks=) already carries a tighter centroid
+                # window from _bound_user_centers; keep it instead of widening
+                # back to the full fit window. Still ensure a non-negative min.
+                user_bounds = getattr(self, "_user_center_bounds", {}).get(prefix)
+                if user_bounds is not None:
+                    lo, hi = user_bounds
+                    pars[f"{prefix}center"].set(min=max(0.0, lo), max=hi)
+                else:
+                    pars[f"{prefix}center"].set(
+                        min=max(0.0, float(self.xrange[0])),
+                        max=float(self.xrange[1]),
+                    )
                 pars[f"{prefix}sigma"].set(
                     expr=(
                         f"abs(_fwhm_a + _fwhm_b * sqrt({prefix}center))"

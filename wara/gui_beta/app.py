@@ -140,7 +140,7 @@ class SpectrumPage(QWidget):
 
 
 class WaraBetaApp(QMainWindow):
-    OPT_W = 300
+    OPT_W = 270
 
     def __init__(self, file_name=None, cli_opts=None):
         super().__init__()
@@ -330,9 +330,9 @@ class WaraBetaApp(QMainWindow):
         pf.btn_find.clicked.connect(self._find_peaks)
         pf.btn_clear.clicked.connect(self._clear_peaks)
         pf.detector.currentTextChanged.connect(self._apply_detector_preset)
-        pf.cb_peaks.toggled.connect(self.spectrum_page.canvas.set_show_peaks)
+        opts.cb_peaks.toggled.connect(self.spectrum_page.canvas.set_show_peaks)
         pf.cb_snr.toggled.connect(self._toggle_snr)
-        pf.cb_manual.toggled.connect(self._toggle_manual)
+        opts.cb_manual.toggled.connect(self._toggle_manual)
         # Entering zoom/pan takes over canvas clicks — drop manual peak mode.
         self.spectrum_page.canvas.nav_toolbar.mode_activated.connect(self._on_nav_mode)
         self.spectrum_page.canvas.point_clicked.connect(self._add_manual_peak)
@@ -755,7 +755,7 @@ class WaraBetaApp(QMainWindow):
         xs = self.spect.x[idx]
         ys = self.spect.counts[idx]
         peaks = [(float(px), float(py), f"{px:.1f}") for px, py in zip(xs, ys)]
-        self.spectrum_opts.pf_panel.cb_peaks.setChecked(True)
+        self.spectrum_opts.cb_peaks.setChecked(True)
         self.spectrum_page.canvas.set_peaks(peaks)
         if self.spectrum_opts.pf_panel.cb_snr.isChecked():
             self._draw_snr()
@@ -787,7 +787,7 @@ class WaraBetaApp(QMainWindow):
 
     def _on_nav_mode(self):
         # Zoom/pan hijacks canvas clicks; turn off manual peak mode if active.
-        cb = self.spectrum_opts.pf_panel.cb_manual
+        cb = self.spectrum_opts.cb_manual
         if cb.isChecked():
             cb.setChecked(False)
 
@@ -797,7 +797,7 @@ class WaraBetaApp(QMainWindow):
         idx = int(np.argmin(np.abs(self.spect.x - x)))
         px = float(self.spect.x[idx])
         py = float(self.spect.counts[idx])
-        self.spectrum_opts.pf_panel.cb_peaks.setChecked(True)
+        self.spectrum_opts.cb_peaks.setChecked(True)
         self.spectrum_page.canvas.add_peak(px, py, f"{px:.1f}")
         self._inject_manual_peak(idx)
         self.statusBar().showMessage(f"  Added peak at {px:.1f}")
@@ -839,7 +839,7 @@ class WaraBetaApp(QMainWindow):
 
     # ── Drag and Fit ─────────────────────────────────────────────────────────
     def _toggle_drag_fit(self):
-        self.spectrum_opts.pf_panel.cb_manual.setChecked(False)
+        self.spectrum_opts.cb_manual.setChecked(False)
         self.spectrum_page.canvas.set_manual(False)
         if self._drag_fit_active:
             self._stop_drag_fit()

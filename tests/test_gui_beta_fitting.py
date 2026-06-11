@@ -275,3 +275,56 @@ class TestEnrichedTable:
         assert window.table.columnCount() == 3
         window.method.setCurrentIndex(0)       # back -> 6 columns
         assert window.table.columnCount() == 6
+
+
+# ---------------------------------------------------------------------------
+# Fit-details report rendering (_report_to_html / _net_area_map)
+# ---------------------------------------------------------------------------
+
+class TestFitDetailsReport:
+    # A noted header ("[[Correlations]] (unreported ...)") must still become a
+    # title, and the model expression must not flip colour at its inner '='.
+    SAMPLE = (
+        "[[Model]]\n"
+        "    (Model(gaussian, prefix='g1_') + Model(polynomial, prefix='p_'))\n"
+        "[[Variables]]\n"
+        "    g1_amplitude:  142870.937 +/- 302.4 (0.21%) (init = 21083.7)\n"
+        "    g1_center:     1330.0 +/- 0.01 (init = 1330)\n"
+        "[[Correlations]] (unreported correlations are < 0.100)\n"
+        "    C(g1_amplitude, g1_sigma) = +0.3220\n"
+    )
+
+    def test_noted_header_becomes_title(self):
+        html = FitWindow._report_to_html(self.SAMPLE)
+        # The Correlations line, despite its trailing note, is an <h3> title and
+        # the note rides along — it does not leak into the body as a data row.
+        assert "<h3" in html and ">Correlations" in html
+        assert "unreported correlations" in html
+        assert "[[Correlations]]" not in html
+
+    def test_model_line_single_colour(self):
+        html = FitWindow._report_to_html(self.SAMPLE)
+        # The model expression (which contains prefix='g1_') is one colour span,
+        # so the colour cannot change midway through the line.
+        body = html.split(">Variables")[0]
+        assert body.count("color:#c4b5ff") == 1
+
+    def test_amplitude_annotated_with_net_area(self, window):
+        window.show()
+        window.shape.setCurrentText("Gaussian")
+        window.set_roi(1106, 1214)
+        fit = window.last_fit
+        html = FitWindow._report_to_html(
+            fit.fit_result.fit_report(), FitWindow._net_area_map(fit))
+        assert "net area" in html and "counts" in html
+        # The annotated value matches the net-count area in the results table.
+        area = fit.summary().iloc[0]["area"]
+        assert f"net area = {area:,.1f}" in html
+
+    def test_net_area_map_matches_summary(self, window):
+        window.show()
+        window.set_roi(1106, 1214)
+        fit = window.last_fit
+        amap = FitWindow._net_area_map(fit)
+        for i, row in fit.summary().iterrows():
+            assert amap[f"g{i + 1}"][0] == pytest.approx(row["area"])

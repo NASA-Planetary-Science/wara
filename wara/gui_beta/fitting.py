@@ -597,29 +597,64 @@ class FitWindow(QDialog):
                 item.setToolTip(tip)
 
     @staticmethod
-    def _report_to_html(report):
+    def _report_to_html(report, net_areas=None):
         import html as _html
-        lines = report.splitlines()
+        import re
+        net_areas = net_areas or {}
+        amp_re = re.compile(r"^(g\d+)_amplitude\s*:")
         out = []
-        for line in lines:
+        section = None
+        for line in report.splitlines():
             stripped = line.strip()
-            if stripped.startswith("[[") and stripped.endswith("]]"):
-                title = stripped[2:-2]
-                out.append(
-                    f'<h3 style="color:#7b8cff; margin:14px 0 4px 0; '
-                    f'border-bottom:1px solid #2a2a45; padding-bottom:3px;">'
-                    f'{_html.escape(title)}</h3>'
+            # Section headers look like "[[Name]]", optionally followed by a
+            # note, e.g. "[[Correlations]] (unreported correlations are < 0.1)".
+            # Match on the closing "]]" (not end-of-line) so the noted headers
+            # still render as titles instead of leaking into the body.
+            if stripped.startswith("[[") and "]]" in stripped:
+                close = stripped.index("]]")
+                title = stripped[2:close]
+                note = stripped[close + 2:].strip()
+                section = title.lower()
+                head = (
+                    f'<h3 style="color:#7b8cff; font-size:16px; '
+                    f'margin:16px 0 6px 0; border-bottom:1px solid #2a2a45; '
+                    f'padding-bottom:4px;">{_html.escape(title)}'
                 )
+                if note:
+                    head += (f' <span style="color:#8888c0; font-size:12px; '
+                             f'font-weight:normal;">{_html.escape(note)}</span>')
+                out.append(head + '</h3>')
                 continue
+
+            if not stripped:
+                out.append('<div style="white-space:pre">&nbsp;</div>')
+                continue
+
             escaped = _html.escape(line)
-            if stripped.startswith("#"):
+            if section == "model":
+                # The model expression contains '=' (e.g. prefix='g1_'); colour
+                # it as one block so the colour can't flip mid-line.
+                escaped = f'<span style="color:#c4b5ff">{escaped}</span>'
+            elif stripped.startswith("#"):
                 escaped = f'<span style="color:#8888c0">{escaped}</span>'
             elif stripped.startswith("C("):
                 escaped = f'<span style="color:#ffb300">{escaped}</span>'
-            elif ":" in stripped and "+/-" in stripped:
+            elif ":" in stripped:
                 name, rest = escaped.split(":", 1)
-                rest = rest.replace("+/-", '<span style="color:#aab2e0">&#177;</span>')
+                rest = rest.replace(
+                    "+/-", '<span style="color:#aab2e0">&#177;</span>')
                 escaped = f'<span style="color:#00e5ff">{name}</span>:{rest}'
+                # Annotate gN_amplitude (lmfit's integral in counts·x-units)
+                # with the net-count area shown in the results table.
+                m = amp_re.match(stripped)
+                if m and m.group(1) in net_areas:
+                    area, area_err = net_areas[m.group(1)]
+                    ann = f"net area = {area:,.1f}"
+                    if area_err is not None and np.isfinite(area_err):
+                        ann += f" ± {area_err:,.1f}"
+                    ann += " counts"
+                    escaped += (f'  <span style="color:#7cffb2">&#8594; '
+                                f'{_html.escape(ann)}</span>')
             elif "=" in stripped:
                 parts = escaped.split("=", 1)
                 escaped = (f'<span style="color:#00e5ff">{parts[0]}</span>'
@@ -627,9 +662,24 @@ class FitWindow(QDialog):
             out.append(f'<div style="white-space:pre">{escaped}</div>')
         return (
             '<div style="font-family: Consolas, Cascadia Mono, monospace; '
-            'font-size: 12px; line-height: 1.5; color: #f4f6ff;">'
+            'font-size: 14px; line-height: 1.55; color: #f4f6ff;">'
             + "\n".join(out) + '</div>'
         )
+
+    @staticmethod
+    def _net_area_map(fit):
+        """Map ``g{i}`` -> (net area, net-area error) from the fit summary, so
+        the report's ``amplitude`` parameters can be annotated with the same
+        net-count area shown in the results table. Peaks are appended g1..gN in
+        build order, matching the summary row order."""
+        try:
+            df = fit.summary()
+        except Exception:
+            return {}
+        areas = {}
+        for i, row in df.iterrows():
+            areas[f"g{i + 1}"] = (row.get("area"), row.get("area_err"))
+        return areas
 
     def _show_fit_details(self):
         fit = self.last_fit
@@ -639,7 +689,7 @@ class FitWindow(QDialog):
         dlg = QDialog(self)
         dlg.setWindowTitle("Fit Details")
         dlg.setStyleSheet(self.styleSheet())
-        dlg.resize(640, 520)
+        dlg.resize(720, 580)
         lay = QVBoxLayout(dlg)
         text = QTextEdit()
         text.setReadOnly(True)
@@ -647,7 +697,7 @@ class FitWindow(QDialog):
             f"QTextEdit {{ background: {FIT_PLOT_BG}; border: 1px solid #2a2a45; "
             f"border-radius: 6px; padding: 10px; }}"
         )
-        text.setHtml(self._report_to_html(report))
+        text.setHtml(self._report_to_html(report, self._net_area_map(fit)))
         lay.addWidget(text)
         dlg.show()
 

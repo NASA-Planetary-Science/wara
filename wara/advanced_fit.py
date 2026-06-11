@@ -566,6 +566,10 @@ class MultiProfilePeakFit(PeakFit):
         # Filled in _inject_constraint_peaks: prefix -> width/centroid bounds
         # to apply in _set_peak_initial_values.
         self._doppler_bounds = {}
+        # Filled in _inject_constraint_peaks when peaks= is given: prefix ->
+        # (lo, hi) centroid window keeping each declared peak near its seed so
+        # the optimizer can't collapse a doublet onto a single line.
+        self._user_center_bounds = {}
         # The "skewed" profile is also reachable via skew=True on the
         # parent class; pick consistent behaviour without surprising the
         # parent's gamma seeding.
@@ -608,6 +612,10 @@ class MultiProfilePeakFit(PeakFit):
             return
 
         super()._set_peak_initial_values(pars, prefix, center, sigma, amplitude)
+        cbounds = self._user_center_bounds.get(prefix)
+        if cbounds is not None:
+            lo, hi = cbounds
+            pars[f"{prefix}center"].set(value=float(center), min=lo, max=hi)
         if self.profile == "emg":
             tname = f"{prefix}tau"
             if tname in pars:
@@ -636,6 +644,7 @@ class MultiProfilePeakFit(PeakFit):
         # user is declaring exactly how many peaks the region has and where.
         if self._peaks is not None:
             erg, sig, amp = self._seed_user_peaks(narrow_sig)
+            self._bound_user_centers(erg, narrow_sig)
 
         if not self._doppler_specs:
             self._apply_peak_constraints(erg, narrow_sig)
@@ -718,6 +727,42 @@ class MultiProfilePeakFit(PeakFit):
             sig.append(narrow_sig)
             amp.append(height * narrow_sig * np.sqrt(2.0 * np.pi))
         return np.asarray(erg), np.asarray(sig), np.asarray(amp)
+
+    def _bound_user_centers(self, erg, narrow_sig):
+        """Pin each explicitly declared peak (``peaks=``) to a window around
+        its seed centroid.
+
+        With centres left fully free the optimizer can land in a degenerate
+        minimum where two declared lines pile onto the same strong peak and the
+        weak companion is never fitted. The user asserted a peak sits at each
+        energy, so we let the centroid drift only within the smaller of one
+        narrow FWHM or half the spacing to the nearest declared neighbour --
+        wide enough to absorb a small mis-call, tight enough that two windows
+        never cross. ``fix_center`` hints (applied later) still override this.
+        """
+        erg = np.asarray(erg, dtype=float)
+        narrow_fwhm = 2.355 * narrow_sig
+        # Peaks the user pins outright (fix_center, or a g{i}_center hint) must
+        # be left for that pin alone -- a window here would clamp the pinned
+        # value back to the boundary.
+        pinned = set()
+        for fe in self._fix_center:
+            pinned.add(int(np.argmin(np.abs(erg - float(fe)))))
+        for i in range(len(erg)):
+            if f"g{i + 1}_center" in self.hints:
+                pinned.add(i)
+        for i, energy in enumerate(erg):
+            if i in pinned:
+                continue
+            gaps = []
+            if i > 0:
+                gaps.append(energy - erg[i - 1])
+            if i < len(erg) - 1:
+                gaps.append(erg[i + 1] - energy)
+            drift = narrow_fwhm if not gaps else min(narrow_fwhm, 0.5 * min(gaps))
+            lo = max(float(self.xrange[0]), energy - drift)
+            hi = min(float(self.xrange[1]), energy + drift)
+            self._user_center_bounds[f"g{i + 1}_"] = (lo, hi)
 
     def _apply_peak_constraints(self, centers, narrow_sig):
         """
