@@ -121,6 +121,23 @@ class PeakFit:
         if self.skew:
             pars[f"{prefix}gamma"].set(value=-1)
 
+    def _inject_constraint_peaks(self, erg, sig, amp):
+        """
+        Hook: append seeds for user-constrained extra peaks.
+
+        Called after the automatic peak search and before the model is
+        built. Default is a no-op. Overrides may append extra peaks to the
+        ``(center, sigma, amplitude)`` seed arrays — they are built as
+        ordinary ``g{i}_`` components (so they are fitted, reported and
+        plotted like any other peak). Record the appended indices in
+        ``self._free_sigma_idx`` to exempt them from the shared-sigma
+        resolution curve (used for broad Doppler companions, whose width is
+        unrelated to the narrow-peak detector resolution).
+
+        Returns the (possibly extended) ``(erg, sig, amp)`` arrays.
+        """
+        return erg, sig, amp
+
     # -- Hooks for plotting ------------------------------------------------
     def _component_curve(self, comps, cp):
         """
@@ -232,6 +249,11 @@ class PeakFit:
         """
         maskx = (self.x > self.xrange[0]) & (self.x < self.xrange[1])
         m, b, amp, erg, sig = self.init_values()
+        # Subclasses may append extra, user-constrained peaks here (e.g. a
+        # broad Doppler companion). Indices recorded in self._free_sigma_idx
+        # are exempt from the shared-sigma resolution curve below.
+        self._free_sigma_idx = set()
+        erg, sig, amp = self._inject_constraint_peaks(erg, sig, amp)
         npeaks = len(erg)
 
         # .copy() is important: y0 gets mutated below (zero-replacement) and
@@ -296,7 +318,10 @@ class PeakFit:
             model += comp
 
         # --- Shared sigma: link every peak's sigma through fwhm = a + b*sqrt(E)
-        if self.shared_sigma and npeaks > 0:
+        # Only the resolution-curve (non-companion) peaks participate; a region
+        # made up solely of broad Doppler companions has nothing to share.
+        n_curve = npeaks - len(self._free_sigma_idx)
+        if self.shared_sigma and n_curve > 0:
             # Seed a, b from PeakSearch's resolution curve. The search
             # works in channels; rescale to whatever units self.x is in
             # by the local energy-per-channel slope. NOTE: the `m`
@@ -323,12 +348,16 @@ class PeakFit:
             pars.add("_fwhm_a", value=float(a_init), vary=True)
             # With only one peak, a and b are degenerate — keep b at the
             # search's value and let a absorb any offset.
-            b_vary = npeaks > 1
+            b_vary = n_curve > 1
             pars.add("_fwhm_b", value=float(b_init), vary=b_vary)
             # Bound each peak's center to the fit window so the
             # sqrt(center) term in the expression below can never see a
             # negative number during optimization.
             for i in range(npeaks):
+                if i in self._free_sigma_idx:
+                    # Broad/constrained companion peaks do not follow the
+                    # narrow-peak resolution curve; leave their sigma free.
+                    continue
                 prefix = f"g{i+1}_"
                 pars[f"{prefix}center"].set(
                     min=max(0.0, float(self.xrange[0])),

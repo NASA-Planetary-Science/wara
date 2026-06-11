@@ -204,16 +204,13 @@ class TestProfilesAndModels:
         assert area > 0
 
     def test_hypermet_beats_gaussian_chi2(self, hpge_window):
-        """The quality line carries reduced χ²; Hypermet should beat Gaussian
-        on the tailed peak."""
-        import re
+        """Hypermet should beat Gaussian on the tailed peak (reduced χ²)."""
 
         def redchi(shape):
             hpge_window.shape.setCurrentText(shape)
             hpge_window.bkg.setCurrentText("Polynomial")
             hpge_window.set_roi(6100, 6150)
-            m = re.search(r"=\s*([\d.]+)", hpge_window.lbl_quality.text())
-            return float(m.group(1))
+            return hpge_window.last_fit.fit_result.redchi
 
         hpge_window.show()
         assert redchi("Hypermet") < redchi("Gaussian")
@@ -226,7 +223,7 @@ class TestStepBackgroundInGui:
         hpge_window.bkg.setCurrentText("Step (sharp)")
         hpge_window.set_roi(6100, 6150)
         assert hpge_window.table.rowCount() == 1
-        assert "step" in hpge_window.lbl_quality.text().lower()
+        assert "bkg_step_amplitude" in hpge_window.last_fit.fit_result.best_values
 
     def test_hypermet_step_dispatches(self, hpge_window):
         hpge_window.show()
@@ -263,12 +260,12 @@ class TestEnrichedTable:
         assert ratio == pytest.approx(1.82, abs=0.03)
         assert asym == pytest.approx(0.0, abs=0.03)
 
-    def test_quality_line_has_chi2_and_model(self, window):
+    def test_fit_stored_with_chi2(self, window):
         window.show()
         window.shape.setCurrentText("Voigt")
         window.set_roi(1106, 1214)
-        q = window.lbl_quality.text()
-        assert "Voigt" in q and "peak" in q
+        assert window.last_fit is not None
+        assert window.last_fit.fit_result.redchi > 0
 
     def test_area_method_resets_columns(self, window):
         window.show()

@@ -408,6 +408,41 @@ _PROFILE_MODELS = {
 }
 
 
+_DOPPLER_KEYS = {"energy", "fwhm", "min_fwhm", "max_fwhm",
+                 "replace_narrow", "suppress_fwhm", "drift"}
+
+
+def _normalize_doppler(doppler):
+    """
+    Normalize the ``doppler`` kwarg to a list of spec dicts.
+
+    Accepts ``None``, a single energy (number), a single spec dict, or a
+    sequence mixing energies and dicts. Each returned dict has at least an
+    ``"energy"`` key. Raises ValueError on unknown dict keys or a missing
+    energy.
+    """
+    if doppler is None:
+        return []
+    if isinstance(doppler, dict) or not np.iterable(doppler):
+        doppler = [doppler]
+
+    specs = []
+    for entry in doppler:
+        if isinstance(entry, dict):
+            unknown = set(entry) - _DOPPLER_KEYS
+            if unknown:
+                raise ValueError(
+                    f"Unknown doppler key(s) {sorted(unknown)}; "
+                    f"allowed: {sorted(_DOPPLER_KEYS)}."
+                )
+            if "energy" not in entry:
+                raise ValueError("Each doppler dict needs an 'energy' key.")
+            specs.append(dict(entry))
+        else:
+            specs.append({"energy": float(entry)})
+    return specs
+
+
 class MultiProfilePeakFit(PeakFit):
     """
     PeakFit variant supporting additional line shapes:
@@ -429,9 +464,73 @@ class MultiProfilePeakFit(PeakFit):
     ----------
     profile : str
         Line-shape family. Default ``"voigt"``.
+    doppler : float | dict | sequence, optional
+        Add one or more *broad Doppler-broadened companion* peaks on top of
+        the narrow peaks found by the search — the case of a wide,
+        recoil-broadened gamma line underlying sharp lines (Evans et al.,
+        2006, e.g. the 2211 keV Al and 2230 keV S lines around the 2223 keV
+        hydrogen peak). Each companion is built as an ordinary Gaussian-
+        family component, but with a broad width seed, a width *floor* so it
+        cannot collapse onto a narrow peak, and a centroid that is free to
+        drift within the fit window (Doppler peaks are often shifted slightly
+        in energy). Companions are exempt from ``shared_sigma``.
+
+        Accepts a single energy, a sequence of energies, or a sequence of
+        dicts for finer control. Dict keys (all but ``energy`` optional)::
+
+            {"energy": 2211,      # companion centroid seed (required)
+             "fwhm": 8.0,         # width seed in x-units (default ~3x narrow)
+             "min_fwhm": 4.0,     # width floor    (default ~1.5x narrow)
+             "max_fwhm": 25.0,    # width ceiling  (default: unbounded)
+             "replace_narrow": True,  # drop auto-detected narrow peaks the
+                                  #   companion swallows (for broad-ONLY lines;
+                                  #   leave False for a true narrow-on-broad
+                                  #   overlap such as the 6129 keV O line)
+             "suppress_fwhm": 4}  # replace_narrow radius in x-units
+                                  #   (default: one narrow FWHM)
+
+    peaks : sequence of float, optional
+        Explicit peak centroids (in x-units). When given, these *replace* the
+        automatic peak search — the user declares exactly how many peaks the
+        region holds and roughly where, which is essential for overlapping or
+        weak lines the finder merges or misses. Width and amplitude are seeded
+        automatically and refined by the fit (constrain them with ``fix_fwhm``
+        / ``fix_center`` / ``ratios`` if needed)::
+
+            peaks=[1173.2, 1332.5]   # fit exactly these two lines
+
+    fix_center : dict, optional
+        Constrain peak centroids, keyed by approximate energy (the peak
+        nearest each key is selected). The value is either an exact centroid
+        to pin to, or ``True`` to freeze the peak at its fitted/seeded
+        position::
+
+            fix_center={511.0: 511.0,   # pin this peak to exactly 511.0
+                        1173.2: True}   # freeze at the detected position
+
+    fix_fwhm : dict, optional
+        Constrain peak widths, keyed by approximate energy. The value is a
+        single FWHM (in x-units) to fix the width to, or a ``(min, max)``
+        tuple to bound it::
+
+            fix_fwhm={511.0: 3.0,          # pin FWHM to 3.0 keV
+                      1332.5: (2.0, 4.0)}  # keep FWHM within 2-4 keV
+
+        The width is the *Gaussian-sigma* FWHM (exact for ``profile="gauss"``;
+        the Gaussian component for Voigt/EMG/etc.).
+    ratios : sequence, optional
+        Tie peak amplitudes (net areas) to a fixed ratio. Each entry is
+        ``(numerator_energy, denominator_energy, r)`` and imposes
+        ``area(numerator) = r * area(denominator)`` — e.g. a known branching
+        ratio or escape-peak fraction::
+
+            ratios=[(1173.2, 1332.5, 1.0)]   # equal-area doublet
+
+        For equal-width peaks the area ratio equals the height ratio.
     *args, **kwargs
-        Forwarded to :class:`wara.peakfit.PeakFit`. The legacy
-        ``skew=True`` kwarg is honoured for backwards compatibility but
+        Forwarded to :class:`wara.peakfit.PeakFit`. Per-parameter ``hints``
+        still work and take precedence over the constraint kwargs above. The
+        legacy ``skew=True`` kwarg is honoured for backwards compatibility but
         ``profile="skewed"`` is the preferred spelling.
 
     Notes
@@ -446,7 +545,9 @@ class MultiProfilePeakFit(PeakFit):
     width and tailing of these asymmetric shapes.
     """
 
-    def __init__(self, search, xrange, *args, profile="voigt", **kwargs):
+    def __init__(self, search, xrange, *args, profile="voigt", doppler=None,
+                 peaks=None, fix_center=None, fix_fwhm=None, ratios=None,
+                 **kwargs):
         profile = profile.lower()
         if profile not in _PROFILE_MODELS:
             raise ValueError(
@@ -454,6 +555,17 @@ class MultiProfilePeakFit(PeakFit):
                 f"Choose from {sorted(_PROFILE_MODELS)}."
             )
         self.profile = profile
+        # Explicit narrow-peak centroids (override the automatic peak search).
+        self._peaks = [float(e) for e in peaks] if peaks is not None else None
+        self._doppler_specs = _normalize_doppler(doppler)
+        # Energy-referenced peak constraints, translated to parameter hints in
+        # _inject_constraint_peaks (once the peak centroids are known).
+        self._fix_center = dict(fix_center) if fix_center else {}
+        self._fix_fwhm = dict(fix_fwhm) if fix_fwhm else {}
+        self._ratios = list(ratios) if ratios else []
+        # Filled in _inject_constraint_peaks: prefix -> width/centroid bounds
+        # to apply in _set_peak_initial_values.
+        self._doppler_bounds = {}
         # The "skewed" profile is also reachable via skew=True on the
         # parent class; pick consistent behaviour without surprising the
         # parent's gamma seeding.
@@ -461,10 +573,40 @@ class MultiProfilePeakFit(PeakFit):
             kwargs.setdefault("skew", True)
         super().__init__(search, xrange, *args, **kwargs)
 
+    def find_peaks_range(self):
+        # A region may legitimately contain no auto-detected narrow peaks when
+        # the user supplies the peaks explicitly (``peaks=``) or declares only
+        # broad Doppler companions (a wide, low line the finder skips). Fall
+        # back to an empty narrow set so the fit can still be built.
+        try:
+            return super().find_peaks_range()
+        except ValueError:
+            if self._peaks is not None or self._doppler_specs:
+                none = np.zeros(len(self.search.peaks_idx), dtype=bool)
+                return none, self.search.peaks_idx[none]
+            raise
+
     def _make_peak_component(self, prefix):
+        # Doppler broadening reflects a velocity distribution, so the broad
+        # companion is intrinsically a symmetric Gaussian — never the (possibly
+        # tailed) narrow-peak profile, which is pathological at large width.
+        if prefix in self._doppler_bounds:
+            return lmfit.models.GaussianModel(prefix=prefix)
         return _PROFILE_MODELS[self.profile](prefix=prefix)
 
     def _set_peak_initial_values(self, pars, prefix, center, sigma, amplitude):
+        bounds = self._doppler_bounds.get(prefix)
+        if bounds is not None:
+            # Broad Gaussian companion: floor the width (so it can't masquerade
+            # as a narrow peak), cap it if asked, and let the centroid drift
+            # only within its bounded window.
+            sig_min, sig_max, lo, hi = bounds
+            pars[f"{prefix}center"].set(value=float(center), min=lo, max=hi)
+            pars[f"{prefix}sigma"].set(value=float(sigma), min=sig_min,
+                                       max=sig_max)
+            pars[f"{prefix}amplitude"].set(value=float(amplitude), min=0.0)
+            return
+
         super()._set_peak_initial_values(pars, prefix, center, sigma, amplitude)
         if self.profile == "emg":
             tname = f"{prefix}tau"
@@ -473,6 +615,171 @@ class MultiProfilePeakFit(PeakFit):
         if self.profile == "doniach":
             pars[f"{prefix}sigma"].set(min=1e-6)
             pars[f"{prefix}gamma"].set(value=0.1, min=0.0, max=1.0)
+
+    def _inject_constraint_peaks(self, erg, sig, amp):
+        """Append broad Doppler companions, then translate energy-referenced
+        ``fix_center`` / ``fix_fwhm`` / ``ratios`` constraints into hints."""
+        erg = np.asarray(erg, dtype=float)
+        sig = np.asarray(sig, dtype=float)
+        amp = np.asarray(amp, dtype=float)
+
+        # Reference narrow width: median of the search seeds, or a small
+        # fraction of the window if the search found nothing. Computed before
+        # any replace_narrow culling (and before user peaks replace the seeds)
+        # so the width seeds stay stable.
+        if sig.size:
+            narrow_sig = float(np.median(sig))
+        else:
+            narrow_sig = (self.xrange[1] - self.xrange[0]) / 40.0
+
+        # Explicit ``peaks=`` replace the automatic detections entirely — the
+        # user is declaring exactly how many peaks the region has and where.
+        if self._peaks is not None:
+            erg, sig, amp = self._seed_user_peaks(narrow_sig)
+
+        if not self._doppler_specs:
+            self._apply_peak_constraints(erg, narrow_sig)
+            return erg, sig, amp
+
+        # ``replace_narrow`` companions absorb any auto-detected narrow peak
+        # within ``suppress_fwhm`` of their centroid — for a broad-only line
+        # (e.g. the Al/S Doppler bumps) the peak finder otherwise latches onto
+        # the broad apex as if it were a narrow peak and the two collide.
+        keep = np.ones(len(erg), dtype=bool)
+        for spec_d in self._doppler_specs:
+            if not spec_d.get("replace_narrow"):
+                continue
+            e0 = float(spec_d["energy"])
+            # Default radius is ONE narrow FWHM: wide enough to drop the false
+            # narrow detection sitting on the broad apex, narrow enough to
+            # spare genuine narrow neighbours (e.g. a line a few keV away).
+            radius = spec_d.get("suppress_fwhm")
+            if radius is None:
+                radius = 2.355 * narrow_sig
+            keep &= np.abs(erg - e0) > radius
+        erg, sig, amp = erg[keep], sig[keep], amp[keep]
+        n0 = len(erg)
+
+        spec = self.search.spectrum
+        xs = self.x
+        ys = spec.counts
+        win = (xs >= self.xrange[0]) & (xs <= self.xrange[1])
+        base = float(ys[win].min()) if np.any(win) else 0.0
+
+        new_e, new_s, new_a = [], [], []
+        for k, spec_d in enumerate(self._doppler_specs):
+            energy = float(spec_d["energy"])
+            # Width seed and bounds (stored in x-units as sigma).
+            sig_seed = (spec_d["fwhm"] / 2.355 if spec_d.get("fwhm")
+                        else 3.0 * narrow_sig)
+            sig_min = (spec_d["min_fwhm"] / 2.355 if spec_d.get("min_fwhm")
+                       else 1.5 * narrow_sig)
+            sig_max = (spec_d["max_fwhm"] / 2.355 if spec_d.get("max_fwhm")
+                       else None)
+            # Amplitude seed from the local peak height above the window floor.
+            idx = int(np.argmin(np.abs(xs - energy)))
+            height = max(float(ys[idx]) - base, 1.0)
+            amp_seed = 0.5 * height * sig_seed * np.sqrt(2.0 * np.pi)
+
+            # Centroid is free to drift (Doppler lines are often shifted a
+            # little in energy) but only within +/- ``drift`` of the seed, so
+            # a weak companion cannot wander onto a strong neighbour. Default
+            # drift is one seed sigma; clamp to the fit window.
+            drift = spec_d.get("drift", sig_seed)
+            lo = max(float(self.xrange[0]), energy - drift)
+            hi = min(float(self.xrange[1]), energy + drift)
+
+            prefix = f"g{n0 + k + 1}_"
+            self._doppler_bounds[prefix] = (sig_min, sig_max, lo, hi)
+            new_e.append(energy)
+            new_s.append(sig_seed)
+            new_a.append(amp_seed)
+            # This companion's sigma must stay free of the resolution curve.
+            self._free_sigma_idx.add(n0 + k)
+
+        erg = np.concatenate([erg, new_e])
+        sig = np.concatenate([sig, new_s])
+        amp = np.concatenate([amp, new_a])
+        self._apply_peak_constraints(erg, narrow_sig)
+        return erg, sig, amp
+
+    def _seed_user_peaks(self, narrow_sig):
+        """Build (center, sigma, amplitude) seeds from explicit ``peaks=``."""
+        spec = self.search.spectrum
+        xs = self.x
+        ys = spec.counts
+        win = (xs >= self.xrange[0]) & (xs <= self.xrange[1])
+        base = float(ys[win].min()) if np.any(win) else 0.0
+        erg, sig, amp = [], [], []
+        for energy in sorted(self._peaks):
+            idx = int(np.argmin(np.abs(xs - energy)))
+            height = max(float(ys[idx]) - base, 1.0)
+            erg.append(energy)
+            sig.append(narrow_sig)
+            amp.append(height * narrow_sig * np.sqrt(2.0 * np.pi))
+        return np.asarray(erg), np.asarray(sig), np.asarray(amp)
+
+    def _apply_peak_constraints(self, centers, narrow_sig):
+        """
+        Translate the energy-referenced ``fix_center`` / ``fix_fwhm`` /
+        ``ratios`` kwargs into per-parameter ``hints``.
+
+        ``centers`` are the seeded peak centroids (narrow peaks first, then
+        Doppler companions), so peak ``i`` carries the ``g{i+1}_`` prefix. A
+        constraint energy is matched to the nearest centroid; explicit
+        user-supplied ``hints`` always win (we only fill keys not already set).
+        """
+        if not (self._fix_center or self._fix_fwhm or self._ratios):
+            return
+        centers = np.asarray(centers, dtype=float)
+        if centers.size == 0:
+            raise ValueError(
+                "Peak constraints were given but the fit has no peaks to "
+                "constrain (the search found none and no doppler= was set)."
+            )
+        # Match within ~3 narrow FWHM so a constraint can't silently attach to
+        # a far-away peak.
+        tol = 3.0 * 2.355 * narrow_sig
+
+        def prefix_for(energy):
+            i = int(np.argmin(np.abs(centers - float(energy))))
+            if abs(centers[i] - float(energy)) > tol:
+                raise ValueError(
+                    f"No fitted peak within {tol:.2f} of {energy}; the nearest "
+                    f"peak is at {centers[i]:.2f}. Check the energy or widen "
+                    "the search."
+                )
+            return f"g{i + 1}_", i
+
+        def fill(name, attrs):
+            self.hints.setdefault(name, attrs)
+
+        for energy, target in self._fix_center.items():
+            prefix, i = prefix_for(energy)
+            value = centers[i] if target is True else float(target)
+            # expr="" clears any shared_sigma centroid coupling (harmless else).
+            fill(f"{prefix}center", {"value": value, "vary": False, "expr": ""})
+
+        for energy, spec in self._fix_fwhm.items():
+            prefix, _ = prefix_for(energy)
+            if isinstance(spec, (tuple, list)):
+                lo, hi = spec
+                fill(f"{prefix}sigma",
+                     {"min": lo / 2.355, "max": hi / 2.355, "expr": ""})
+            else:
+                fill(f"{prefix}sigma",
+                     {"value": float(spec) / 2.355, "vary": False, "expr": ""})
+
+        for numerator, denominator, r in self._ratios:
+            pnum, inum = prefix_for(numerator)
+            pden, iden = prefix_for(denominator)
+            if inum == iden:
+                raise ValueError(
+                    f"ratios: numerator ({numerator}) and denominator "
+                    f"({denominator}) resolve to the same peak at "
+                    f"{centers[inum]:.2f}. They must be two distinct peaks."
+                )
+            fill(f"{pnum}amplitude", {"expr": f"{float(r)}*{pden}amplitude"})
 
 
 # ---------------------------------------------------------------------------

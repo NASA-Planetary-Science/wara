@@ -606,7 +606,8 @@ class TestHypermetFunction:
         amp = 1000.0
         y = adv.hypermet(x, amplitude=amp, center=100.0, sigma=5.0,
                          tail_fraction=0.3, tail_tau=8.0)
-        assert np.trapezoid(y, x) == pytest.approx(amp, rel=1e-3)
+        trapezoid = getattr(np, "trapezoid", np.trapz)
+        assert trapezoid(y, x) == pytest.approx(amp, rel=1e-3)
 
     def test_zero_tail_reduces_to_gaussian(self):
         x = np.linspace(50, 150, 4000)
@@ -820,3 +821,327 @@ class TestAreaIsNetCounts:
         # Both > 10^4 counts; the tailed fit recovers a bit more (the tail).
         assert g.peak_info[0]["area"] > 1e4
         assert full.peak_info[0]["area"] > g.peak_info[0]["area"]
+
+
+# ---------------------------------------------------------------------------
+# Doppler-broadened companion peaks (MultiProfilePeakFit doppler=).
+# A broad, recoil-broadened line is many times the detector resolution and is
+# often too wide/shallow for the peak finder to flag (cf. Evans et al. 2006,
+# the broad atmospheric C/O lines). `doppler=` declares such a line as a broad
+# Gaussian. The broad-line tests mirror examples/peakfit/example_doppler_peak.py
+# (the ~2495 keV line of the HPGe NH3 spectrum, which the search skips).
+# ---------------------------------------------------------------------------
+
+
+class TestNormalizeDoppler:
+    def test_none_gives_empty(self):
+        assert adv._normalize_doppler(None) == []
+
+    def test_scalar_energy(self):
+        assert adv._normalize_doppler(2211) == [{"energy": 2211.0}]
+
+    def test_list_of_energies(self):
+        out = adv._normalize_doppler([2211, 2230])
+        assert [d["energy"] for d in out] == [2211.0, 2230.0]
+
+    def test_dict_passthrough(self):
+        out = adv._normalize_doppler({"energy": 2211, "fwhm": 8})
+        assert out == [{"energy": 2211, "fwhm": 8}]
+
+    def test_mixed_list(self):
+        out = adv._normalize_doppler([2211, {"energy": 2230, "max_fwhm": 18}])
+        assert len(out) == 2 and out[1]["max_fwhm"] == 18
+
+    def test_missing_energy_raises(self):
+        with pytest.raises(ValueError, match="needs an 'energy'"):
+            adv._normalize_doppler({"fwhm": 8})
+
+    def test_unknown_key_raises(self):
+        with pytest.raises(ValueError, match="Unknown doppler key"):
+            adv._normalize_doppler({"energy": 2211, "widht": 8})
+
+
+# --- A lone broad line (no narrow peaks) — mirrors the example --------------
+BROAD_XRANGE = [2462, 2530]
+BROAD_SPEC = [{"energy": 2498, "fwhm": 25, "min_fwhm": 10, "max_fwhm": 50}]
+
+
+@pytest.fixture(scope="module")
+def broad_search():
+    """Search over the broad ~2495 keV NH3 line the peak finder skips."""
+    spect = file_reader.read_txt(TXT_HPGE)
+    return ps.PeakSearch(spect, ref_x=2495, ref_fwhm=3.5, fwhm_at_0=1.0,
+                         min_snr=8, method="fast")
+
+
+class TestDopplerBroadLine:
+    @pytest.fixture(scope="module")
+    def fit(self, broad_search):
+        return adv.MultiProfilePeakFit(broad_search, BROAD_XRANGE, bkg="poly1",
+                                       profile="gauss", doppler=BROAD_SPEC)
+
+    def test_base_fit_raises_without_doppler(self, broad_search):
+        # No narrow peak is detected, so an ordinary fit cannot be set up.
+        with pytest.raises(ValueError, match="No peaks found"):
+            adv.MultiProfilePeakFit(broad_search, BROAD_XRANGE, bkg="poly1",
+                                    profile="gauss")
+
+    def test_fits_lone_broad_line(self, fit):
+        # The declared companion is the only component, and it is fitted well.
+        assert len(fit.peak_info) == 1
+        assert fit._free_sigma_idx == {0}
+        assert fit.fit_result.redchi < 4.0
+
+    def test_recovers_broad_symmetric_line(self, fit):
+        broad = fit.summary().iloc[0]
+        assert 20.0 < broad["fwhm"] < 50.0          # genuinely broad
+        assert 2490.0 < broad["mean"] < 2510.0      # near the declared energy
+        assert broad["area"] > 0
+        assert np.isfinite(broad["area_err"])
+
+    def test_width_bounds_respected(self, fit):
+        # The fitted FWHM stays within the min_fwhm / max_fwhm bounds.
+        assert 10.0 <= fit.summary().iloc[0]["fwhm"] <= 50.0
+
+    def test_seed_independent(self, broad_search):
+        # The result should not depend on the width seed for this clean line.
+        widths = []
+        for seed in (15, 25, 40):
+            spec = [dict(BROAD_SPEC[0], fwhm=seed)]
+            f = adv.MultiProfilePeakFit(broad_search, BROAD_XRANGE, bkg="poly1",
+                                        profile="gauss", doppler=spec)
+            widths.append(f.summary().iloc[0]["fwhm"])
+        assert max(widths) - min(widths) < 1.0
+
+
+# --- A companion together with narrow peaks (API mechanics) -----------------
+MECH_XRANGE = [2202, 2240]
+MECH_KW = dict(profile="skewed", bkg="poly1")
+# Broad companion near the 2211 keV bump; replace_narrow drops the auto peak
+# the finder places on the broad apex (~2213 keV).
+MECH_SPEC = [{"energy": 2211, "fwhm": 10, "max_fwhm": 22,
+              "replace_narrow": True, "suppress_fwhm": 4}]
+
+
+@pytest.fixture(scope="module")
+def h_search():
+    """Search over the 2223 keV hydrogen region (has narrow peaks)."""
+    spect = file_reader.read_txt(TXT_HPGE)
+    return ps.PeakSearch(spect, ref_x=2224, ref_fwhm=3.5, fwhm_at_0=1.0,
+                         min_snr=50, method="fast")
+
+
+class TestDopplerMechanics:
+    def test_none_matches_no_doppler(self, h_search):
+        base = adv.MultiProfilePeakFit(h_search, MECH_XRANGE, **MECH_KW)
+        explicit = adv.MultiProfilePeakFit(h_search, MECH_XRANGE, doppler=None,
+                                           **MECH_KW)
+        assert len(explicit.peak_info) == len(base.peak_info)
+        assert explicit._free_sigma_idx == set()
+
+    def test_companion_appended_and_free(self, h_search):
+        fit = adv.MultiProfilePeakFit(h_search, MECH_XRANGE, doppler=MECH_SPEC,
+                                      **MECH_KW)
+        # The companion is the last peak and is exempt from shared_sigma.
+        assert fit._free_sigma_idx == {len(fit.peak_info) - 1}
+        broad = fit.summary().iloc[-1]
+        assert broad["fwhm"] > 1.5 * fit.summary().iloc[:-1]["fwhm"].median()
+
+    def test_replace_narrow_culls_detection(self, h_search):
+        with_replace = adv.MultiProfilePeakFit(
+            h_search, MECH_XRANGE, doppler=MECH_SPEC, **MECH_KW)
+        keep = [dict(MECH_SPEC[0], replace_narrow=False)]
+        without = adv.MultiProfilePeakFit(
+            h_search, MECH_XRANGE, doppler=keep, **MECH_KW)
+        # replace_narrow drops the auto peak on the broad apex, so one fewer.
+        assert len(with_replace.peak_info) == len(without.peak_info) - 1
+
+    def test_multiple_companions(self, h_search):
+        fit = adv.MultiProfilePeakFit(h_search, MECH_XRANGE,
+                                      doppler=[2211, 2230], **MECH_KW)
+        assert len(fit._free_sigma_idx) == 2
+
+    def test_companion_is_plain_gaussian_under_emg(self, h_search):
+        # Doppler broadening is symmetric: the companion must be a plain
+        # Gaussian (no tail parameter) even when the narrow peaks are EMG.
+        kw = dict(MECH_KW, profile="emg")
+        fit = adv.MultiProfilePeakFit(h_search, MECH_XRANGE, doppler=MECH_SPEC,
+                                      **kw)
+        prefix = sorted(fit._doppler_bounds)[0]
+        names = set(fit.fit_result.params.keys())
+        assert f"{prefix}sigma" in names
+        assert f"{prefix}tau" not in names      # gaussian companion, no EMG tail
+        assert any(k.endswith("tau") for k in names)   # narrow peaks are EMG
+
+
+# ---------------------------------------------------------------------------
+# Peak constraints (peaks= / fix_center / fix_fwhm / ratios) on a synthetic
+# doublet with a known answer. Mirrors examples/peakfit/example_peak_constraints.
+# A strong line at 1330 keV with a weak (~12%), overlapping companion at 1339
+# keV on a flat background — the peak finder merges them, so the constraints
+# carry the physical knowledge needed to recover the truth.
+# ---------------------------------------------------------------------------
+
+DBL_BIN = 0.5
+DBL_SIGMA = 2.6
+DBL_FWHM = 2.355 * DBL_SIGMA
+DBL_RATIO = 2600.0 / 22000.0
+DBL_XRANGE = [1314, 1358]
+DBL_PEAKS = [1330, 1339]
+
+
+@pytest.fixture(scope="module")
+def doublet_search():
+    from wara.spectrum import Spectrum
+
+    e = np.arange(1300.0, 1380.0, DBL_BIN)
+    g = lambda h, c: h * np.exp(-0.5 * ((e - c) / DBL_SIGMA) ** 2)
+    truth = 350.0 + g(22000.0, 1330.0) + g(2600.0, 1339.0)
+    counts = np.random.default_rng(12).poisson(truth).astype(float)
+    spect = Spectrum(counts=counts, energies=e, e_units="keV", livetime=100)
+    return ps.PeakSearch(spect, ref_x=1330, ref_fwhm=DBL_FWHM, fwhm_at_0=0.5,
+                         min_snr=8, method="km")
+
+
+def _weak(fit):
+    """The weak (~1339 keV) peak's summary row."""
+    s = fit.summary()
+    return s.iloc[(s["mean"] - 1339).abs().idxmin()]
+
+
+class TestPeakConstraints:
+    def test_auto_merges_the_doublet(self, doublet_search):
+        auto = adv.MultiProfilePeakFit(doublet_search, DBL_XRANGE, bkg="poly0",
+                                       profile="gauss")
+        # The finder misses the weak line: one peak and a poor fit.
+        assert len(auto.peak_info) == 1
+        assert auto.fit_result.redchi > 50
+
+    def test_peaks_resolves_doublet(self, doublet_search):
+        fit = adv.MultiProfilePeakFit(doublet_search, DBL_XRANGE, bkg="poly0",
+                                      profile="gauss", peaks=DBL_PEAKS)
+        assert len(fit.peak_info) == 2
+        assert fit.fit_result.redchi < 2.0
+        # Recovers the true weak-line net area (~33890 counts) within errors.
+        w = _weak(fit)
+        assert w["area"] == pytest.approx(33890, rel=0.05)
+
+    def test_peaks_without_autodetection(self, doublet_search):
+        # A flat sub-window where the finder sees nothing still fits via peaks=.
+        fit = adv.MultiProfilePeakFit(doublet_search, [1300, 1312], bkg="poly0",
+                                      profile="gauss", peaks=[1306])
+        assert len(fit.peak_info) == 1
+
+    def test_fix_center_pins_centroid(self, doublet_search):
+        fit = adv.MultiProfilePeakFit(doublet_search, DBL_XRANGE, bkg="poly0",
+                                      profile="gauss", peaks=DBL_PEAKS,
+                                      fix_center={1339: 1339.0})
+        w = _weak(fit)
+        assert w["mean"] == pytest.approx(1339.0, abs=1e-6)
+        assert np.isnan(w["mean_err"]) or w["mean_err"] < 0.02
+
+    def test_fix_fwhm_pins_width(self, doublet_search):
+        fit = adv.MultiProfilePeakFit(doublet_search, DBL_XRANGE, bkg="poly0",
+                                      profile="gauss", peaks=DBL_PEAKS,
+                                      fix_fwhm={1339: DBL_FWHM})
+        w = _weak(fit)
+        assert w["fwhm"] == pytest.approx(DBL_FWHM, abs=1e-6)
+        assert np.isnan(w["fwhm_err"]) or w["fwhm_err"] < 0.02
+
+    def test_fix_fwhm_bounds(self, doublet_search):
+        fit = adv.MultiProfilePeakFit(doublet_search, DBL_XRANGE, bkg="poly0",
+                                      profile="gauss", peaks=DBL_PEAKS,
+                                      fix_fwhm={1339: (5.0, 7.0)})
+        assert 5.0 <= _weak(fit)["fwhm"] <= 7.0
+
+    def test_ratios_tie_areas(self, doublet_search):
+        fit = adv.MultiProfilePeakFit(doublet_search, DBL_XRANGE, bkg="poly0",
+                                      profile="gauss", peaks=DBL_PEAKS,
+                                      ratios=[(1339, 1330, DBL_RATIO)])
+        s = fit.summary()
+        strong = s.iloc[(s["mean"] - 1330).abs().idxmin()]
+        weak = s.iloc[(s["mean"] - 1339).abs().idxmin()]
+        assert weak["area"] / strong["area"] == pytest.approx(DBL_RATIO, rel=1e-4)
+
+    def test_ratios_shrink_weak_area_error(self, doublet_search):
+        free = adv.MultiProfilePeakFit(doublet_search, DBL_XRANGE, bkg="poly0",
+                                       profile="gauss", peaks=DBL_PEAKS)
+        tied = adv.MultiProfilePeakFit(doublet_search, DBL_XRANGE, bkg="poly0",
+                                       profile="gauss", peaks=DBL_PEAKS,
+                                       ratios=[(1339, 1330, DBL_RATIO)])
+        assert _weak(tied)["area_err"] < _weak(free)["area_err"]
+
+    def test_ratios_self_reference_raises(self, doublet_search):
+        with pytest.raises(ValueError, match="same peak"):
+            adv.MultiProfilePeakFit(doublet_search, DBL_XRANGE, bkg="poly0",
+                                    profile="gauss", peaks=DBL_PEAKS,
+                                    ratios=[(1330, 1330, 1.0)])
+
+    def test_constraint_far_from_any_peak_raises(self, doublet_search):
+        with pytest.raises(ValueError, match="No fitted peak within"):
+            adv.MultiProfilePeakFit(doublet_search, DBL_XRANGE, bkg="poly0",
+                                    profile="gauss", peaks=DBL_PEAKS,
+                                    fix_center={1500: 1500.0})
+
+    def test_user_hints_win_over_constraint(self, doublet_search):
+        # An explicit hint on the same parameter takes precedence over fix_center.
+        fit = adv.MultiProfilePeakFit(
+            doublet_search, DBL_XRANGE, bkg="poly0", profile="gauss",
+            peaks=DBL_PEAKS, fix_center={1339: 1339.0},
+            hints={"g2_center": {"value": 1340.0, "vary": False}})
+        assert _weak(fit)["mean"] == pytest.approx(1340.0, abs=1e-6)
+
+
+# ---------------------------------------------------------------------------
+# Peak constraints on REAL data — the overlapping 932.6/937.0 keV doublet in
+# the HPGe NH3 spectrum. Mirrors examples/peakfit/example_peak_constraints_real.
+# ---------------------------------------------------------------------------
+
+REAL_XRANGE = [927, 943]
+REAL_PEAKS = [932.5, 937.0]
+REAL_RES = 2.49        # detector FWHM at ~935 keV (from clean lines)
+
+
+@pytest.fixture(scope="module")
+def real_doublet_search():
+    spect = file_reader.read_txt(TXT_HPGE)
+    return ps.PeakSearch(spect, ref_x=935, ref_fwhm=2.5, fwhm_at_0=0.5,
+                         min_snr=6, method="km")
+
+
+class TestPeakConstraintsRealData:
+    def test_peaks_gives_two_resolved_lines(self, real_doublet_search):
+        fit = adv.MultiProfilePeakFit(real_doublet_search, REAL_XRANGE,
+                                      bkg="poly1", profile="gauss",
+                                      peaks=REAL_PEAKS)
+        assert len(fit.peak_info) == 2
+        means = sorted(p["mean"] for p in fit.peak_info)
+        assert means[0] == pytest.approx(932.3, abs=0.5)
+        assert means[1] == pytest.approx(936.8, abs=0.5)
+
+    def test_fix_fwhm_pins_both_widths(self, real_doublet_search):
+        fit = adv.MultiProfilePeakFit(
+            real_doublet_search, REAL_XRANGE, bkg="poly1", profile="gauss",
+            peaks=REAL_PEAKS, fix_fwhm={932.5: REAL_RES, 937.0: REAL_RES})
+        assert all(p["fwhm"] == pytest.approx(REAL_RES, abs=1e-6)
+                   for p in fit.peak_info)
+
+    def test_fix_fwhm_shrinks_area_errors(self, real_doublet_search):
+        free = adv.MultiProfilePeakFit(real_doublet_search, REAL_XRANGE,
+                                       bkg="poly1", profile="gauss",
+                                       peaks=REAL_PEAKS)
+        fixed = adv.MultiProfilePeakFit(
+            real_doublet_search, REAL_XRANGE, bkg="poly1", profile="gauss",
+            peaks=REAL_PEAKS, fix_fwhm={932.5: REAL_RES, 937.0: REAL_RES})
+        free_err = max(e["area_err"] for e in free.peak_err)
+        fixed_err = max(e["area_err"] for e in fixed.peak_err)
+        assert fixed_err < free_err
+
+    def test_ratios_tie_real_doublet(self, real_doublet_search):
+        fit = adv.MultiProfilePeakFit(real_doublet_search, REAL_XRANGE,
+                                      bkg="poly1", profile="gauss",
+                                      peaks=REAL_PEAKS,
+                                      ratios=[(937.0, 932.5, 0.70)])
+        s = fit.summary().sort_values("mean")
+        lo, hi = s.iloc[0], s.iloc[1]
+        assert hi["area"] / lo["area"] == pytest.approx(0.70, rel=1e-4)

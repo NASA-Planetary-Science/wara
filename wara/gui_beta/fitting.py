@@ -11,9 +11,8 @@ panel, components, 3-σ band, reduced χ² title) and wara.advanced_fit.
 shape_summary() for the results table, which reports the fitted centroid /
 net-count area / FWHM plus the numerically-measured FWTM, the FWTM/FWHM
 tailing ratio (1.823 for a pure Gaussian) and the low-energy asymmetry. A
-status line below the plot carries reduced χ², the model and the tail / step
-parameters. The ROI can be adjusted here (spin boxes) or on the main plot; the
-two stay in sync.
+status line below the plot shows the live x/y cursor readout. The ROI can be
+adjusted here (spin boxes) or on the main plot; the two stay in sync.
 """
 import numpy as np
 import matplotlib.pyplot as plt
@@ -104,6 +103,7 @@ class FitWindow(QDialog):
         self._xrange = None
         self._roi_lo, self._roi_hi = 0.0, 1.0   # initial ROI (slider bounds)
         self.N = 1000                             # slider resolution
+        self.last_fit = None                      # most recent peak-fit object
 
         outer = QVBoxLayout(self)
 
@@ -170,11 +170,6 @@ class FitWindow(QDialog):
         self.lbl_status.setObjectName("stat_key")
         outer.addWidget(self.lbl_status)
         self.canvas.mpl_connect("motion_notify_event", self._on_motion)
-        # Persistent fit-quality line (reduced χ², model, tailing) — kept
-        # separate from lbl_status so the live x/y readout doesn't clobber it.
-        self.lbl_quality = QLabel("")
-        self.lbl_quality.setObjectName("stat_key")
-        outer.addWidget(self.lbl_quality)
         self.table = QTableWidget(0, len(PEAKFIT_COLS))
         self.table.setHorizontalHeaderLabels(PEAKFIT_COLS)
         self.table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
@@ -305,7 +300,6 @@ class FitWindow(QDialog):
     def _on_method_changed(self):
         area = self._is_area_method()
         self.peakfit_controls.setVisible(not area)
-        self.lbl_quality.setText("")
         if area:
             self.slider_lo.setToolTip("Left edge of the peak — counts to its left are background")
             self.slider_hi.setToolTip("Right edge of the peak — counts to its right are background")
@@ -371,17 +365,18 @@ class FitWindow(QDialog):
             self._fit_bkg_only()
             return
         except Exception as exc:  # noqa: BLE001
+            self.last_fit = None
             self.lbl_status.setText(f"Fit failed: {exc}")
-            self.lbl_quality.setText("")
             self.table.setRowCount(0)
             self.canvas.figure.clf(); self.canvas.draw_idle()
             return
         if fit is None:                       # unsupported combo (status set)
-            self.lbl_quality.setText("")
+            self.last_fit = None
             self.table.setRowCount(0)
             self.canvas.figure.clf(); self.canvas.draw_idle()
             return
 
+        self.last_fit = fit
         ctx = self._context_data()
         fig = self.canvas.figure
         fig.clf()
@@ -399,6 +394,7 @@ class FitWindow(QDialog):
 
     def _fit_bkg_only(self):
         """Fit a pure background (no peaks) and display the area."""
+        self.last_fit = None
         spec = self._search.spectrum
         bkg_name = self._bkg_arg()
         deg = int(bkg_name.replace("poly", "")) if bkg_name.startswith("poly") else 1
@@ -433,7 +429,6 @@ class FitWindow(QDialog):
         self.canvas.draw_idle()
 
         self.lbl_status.setText("No peaks in range — background fit only")
-        self.lbl_quality.setText("")
         self._set_columns(["", "Area", ""])
         self.table.setRowCount(2)
         rows = [
@@ -449,6 +444,7 @@ class FitWindow(QDialog):
 
     # ── Net area − linear background (wara.advanced_fit.PeakAreaLinearBkg) ─────
     def _refit_area(self):
+        self.last_fit = None
         if self._search is None or self._xrange is None:
             return
         spect = self._search.spectrum
@@ -551,26 +547,6 @@ class FitWindow(QDialog):
             return xu[xu.index("(") + 1:xu.index(")")]
         return "ch"
 
-    def _fit_quality_text(self, fit):
-        """One-line reduced-χ² / model / tailing summary for lbl_quality."""
-        rc = fit.fit_result.redchi
-        npk = len(fit.peak_info)
-        shape = self.shape.currentText()
-        bkg = self.bkg.currentText()
-        bits = [f"χ²ᵣ = {rc:.3f}",
-                f"{npk} peak{'s' if npk != 1 else ''}",
-                f"{shape} + {bkg}"]
-        bv = fit.fit_result.best_values
-        # Tailing / step extras when the model carries them (peak g1 shown).
-        if "g1_tail_fraction" in bv:
-            bits.append(f"tail {100 * bv['g1_tail_fraction']:.0f}%")
-        if "bkg_step_amplitude" in bv:
-            bits.append(f"step {bv['bkg_step_amplitude']:.0f}")
-        ok = getattr(fit.fit_result, "success", True)
-        if not ok:
-            bits.append("⚠ did not converge")
-        return "    ·    ".join(bits)
-
     def _fill_table(self, fit):
         # shape_summary = PeakFit.summary() (net-count area) plus numerically
         # measured FWTM, the FWTM/FWHM tailing ratio (1.823 for a Gaussian)
@@ -601,7 +577,6 @@ class FitWindow(QDialog):
                 item.setFlags(Qt.ItemIsEnabled | Qt.ItemIsSelectable)
                 item.setTextAlignment(Qt.AlignCenter)
                 self.table.setItem(i, c, item)
-        self.lbl_quality.setText(self._fit_quality_text(fit))
 
     def _set_header_tooltips(self, tips):
         """Attach tooltips to header sections by column index."""
