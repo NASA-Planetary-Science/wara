@@ -4,11 +4,10 @@ A faithful port of the legacy ``gui/_mixins/calibration.py`` workflow into the
 beta GUI:
 
 * Calibration points live in an editable table (Use · Channel · Energy).
-* Channel centroids come from the peaks found on the Spectrum tab
-  ("Pull found peaks"), from a quick in-tab Gaussian fit that refines a centroid
-  to fit-accuracy ("Refine"), or from manual entry — the legacy "fit for an
-  accurate centroid, or type it by hand" choice.
-* Energies are typed into the table; units are eV / keV / MeV.
+* Channel centroids are pushed in from the Drag-and-Fit window
+  (``add_centroids``) or typed by hand into the table.
+* Energies are typed into the table; units are eV / keV / MeV and can be
+  changed at any time.
 * Fit a polynomial of degree 1–3, optionally forcing the origin (0, 0).
 * Or set the calibration directly from polynomial coefficients a + b·ch + c·ch²
   + d·ch³ (legacy "set equations").
@@ -18,8 +17,7 @@ Anything beyond the legacy feature set (smart auto-matching, piecewise models,
 Nuclear-Database energy sourcing) is intentionally left out — it will be built
 on top of this baseline.
 """
-import numpy as np
-import lmfit
+import io
 
 from matplotlib.figure import Figure
 from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
@@ -30,6 +28,7 @@ from PyQt5.QtWidgets import (
     QLineEdit, QCheckBox, QMessageBox, QApplication,
 )
 from PyQt5.QtCore import Qt
+from PyQt5.QtGui import QPixmap
 
 from wara import spectrum as sp
 from wara import energy_calibration as ec
@@ -42,6 +41,27 @@ CAL_PLOT_BG = "#161622"
 
 # Points-table columns.
 USE_COL, CH_COL, E_COL = range(3)
+
+
+def _mathtext_pixmap(mathtext, color=T.TEXT_PRIMARY, fontsize=11):
+    """Render a matplotlib *mathtext* string (``$...$``) to a QPixmap.
+
+    Qt's QLabel can't typeset math, so we let matplotlib's built-in mathtext
+    engine draw the equation onto a transparent canvas and hand back the
+    rasterised result. Rendered at 2x and tagged with a device-pixel-ratio so
+    it stays crisp on HiDPI screens without looking oversized.
+    """
+    fig = Figure(figsize=(0.1, 0.1))
+    fig.patch.set_alpha(0.0)
+    fig.text(0.0, 0.0, mathtext, color=color, fontsize=fontsize)
+    buf = io.BytesIO()
+    fig.savefig(buf, format="png", transparent=True,
+                bbox_inches="tight", pad_inches=0.02, dpi=200)
+    buf.seek(0)
+    pix = QPixmap()
+    pix.loadFromData(buf.getvalue(), "PNG")
+    pix.setDevicePixelRatio(2.0)   # 200 dpi ≈ 2x a 100-dpi screen
+    return pix
 
 
 # ── Plot column ──────────────────────────────────────────────────────────────
@@ -75,6 +95,9 @@ class CalibrationPage(QWidget):
         ax_res = self.fig.add_subplot(gs[0, 0])
         ax_fit = self.fig.add_subplot(gs[1, 0])
         cal.plot(residual=True, ax_fit=ax_fit, ax_res=ax_res)
+        # EnergyCalibration.plot labels the axis "Energy [units]"; the beta GUI
+        # uses parentheses for units, so relabel.
+        ax_fit.set_ylabel(f"Energy ({cal.e_units})")
         self._recolor_points(ax_fit)
         self._restyle()
         self.canvas.draw_idle()
@@ -100,7 +123,7 @@ class CalibrationPage(QWidget):
         ax = self.fig.add_subplot(111)
         ax.plot(channels, predicted, lw=2.5, color=T.ACCENT_GREEN, label=label)
         ax.set_xlabel("Channels")
-        ax.set_ylabel(f"Energy [{units}]")
+        ax.set_ylabel(f"Energy ({units})")
         ax.legend(fontsize=11)
         self._restyle()
         self.canvas.draw_idle()
@@ -176,25 +199,15 @@ class CalibrationOptions(QScrollArea):
         self.cb_origin.setToolTip("Include the point (channel 0, energy 0) in the fit")
         lay.addWidget(self.cb_origin)
 
-        # ── Centroids ────────────────────────────────────────────────
-        lay.addWidget(hsep()); lay.addWidget(header("CENTROIDS"))
-        self.btn_pull = QPushButton("Pull found peaks"); self.btn_pull.setObjectName("action_btn")
-        self.btn_pull.setToolTip("Fill the Channel column from the peaks found on the Spectrum tab")
-        self.btn_refine = QPushButton("Refine selected (fit)"); self.btn_refine.setObjectName("action_btn")
-        self.btn_refine.setToolTip(
-            "Fit a Gaussian around the selected row's channel for an accurate "
-            "centroid (channel axis only — remove calibration first).")
-        for b in (self.btn_pull, self.btn_refine):
-            b.setCursor(Qt.PointingHandCursor); lay.addWidget(b)
-
         # ── Polynomial fit (refits automatically on every change) ────
         lay.addWidget(hsep()); lay.addWidget(header("FIT"))
         urow = QHBoxLayout()
         self.units = ComboBox(); self.units.addItems(["eV", "keV", "MeV"])
         self.units.setCurrentText("keV")
         self.units.setToolTip(
-            "Energy units of the values entered above. Locked once the first "
-            "point is added; Reset to change it.")
+            "Energy units of the values entered above. Change it any time — the "
+            "entered energies are converted to the new units (e.g. keV → MeV "
+            "divides by 1000) and the fit re-runs.")
         urow.addWidget(QLabel("Units:")); urow.addStretch(1); urow.addWidget(self.units)
         lay.addLayout(urow)
 
@@ -206,15 +219,24 @@ class CalibrationOptions(QScrollArea):
 
         # ── Set from equation ────────────────────────────────────────
         lay.addWidget(hsep()); lay.addWidget(header("SET FROM EQUATION"))
-        eqn_help = QLabel("E = a + b·ch + c·ch² + d·ch³")
-        eqn_help.setObjectName("stat_key")
+        eqn_help = QLabel()
+        eqn_help.setPixmap(_mathtext_pixmap(
+            r"$E = a + b\cdot ch + c\cdot ch^{2} + d\cdot ch^{3}$"))
+        eqn_help.setToolTip("E = a + b·ch + c·ch² + d·ch³")
         lay.addWidget(eqn_help)
-        self.coef_a = QLineEdit(); self.coef_a.setPlaceholderText("a (constant)")
-        self.coef_b = QLineEdit(); self.coef_b.setPlaceholderText("b (·ch)")
-        self.coef_c = QLineEdit(); self.coef_c.setPlaceholderText("c (·ch²)  optional")
-        self.coef_d = QLineEdit(); self.coef_d.setPlaceholderText("d (·ch³)  optional")
-        for ed in (self.coef_a, self.coef_b, self.coef_c, self.coef_d):
-            lay.addWidget(ed)
+
+        # One labelled row per coefficient ("a =", "b =", ...) so each box is
+        # tied to its constant in the equation above.
+        self.coef_a = QLineEdit(); self.coef_a.setPlaceholderText("constant")
+        self.coef_b = QLineEdit(); self.coef_b.setPlaceholderText("· ch")
+        self.coef_c = QLineEdit(); self.coef_c.setPlaceholderText("· ch²  (optional)")
+        self.coef_d = QLineEdit(); self.coef_d.setPlaceholderText("· ch³  (optional)")
+        for name, ed in (("a", self.coef_a), ("b", self.coef_b),
+                         ("c", self.coef_c), ("d", self.coef_d)):
+            crow = QHBoxLayout(); crow.setSpacing(5)
+            tag = QLabel(f"{name} ="); tag.setObjectName("stat_key"); tag.setMinimumWidth(24)
+            crow.addWidget(tag); crow.addWidget(ed)
+            lay.addLayout(crow)
         self.btn_set_eqn = QPushButton("Set from equation"); self.btn_set_eqn.setObjectName("action_btn")
         self.btn_set_eqn.setToolTip("Build the calibration directly from the coefficients above")
         self.btn_set_eqn.setCursor(Qt.PointingHandCursor)
@@ -247,7 +269,7 @@ class CalibrationController:
         self.predicted = None      # energy predicted for every channel
         self.ecal_eqn = ""         # textual equation, stored on the spectrum
         self._loading = False      # suppress auto-refit during bulk table edits
-        self._units_locked = False
+        self._units = options.units.currentText()   # units the table values are in
         self._wire()
 
     # -- helpers ---------------------------------------------------------------
@@ -259,8 +281,6 @@ class CalibrationController:
         o.btn_add_row.clicked.connect(lambda: (self._add_row(), self._auto_calibrate()))
         o.btn_remove.clicked.connect(self._remove_rows)
         o.btn_reset.clicked.connect(self._reset)
-        o.btn_pull.clicked.connect(self._pull_found_peaks)
-        o.btn_refine.clicked.connect(self._refine_selected)
         o.btn_set_eqn.clicked.connect(self._calibrate_equation)
         o.btn_apply.clicked.connect(self._apply)
         o.btn_remove_cal.clicked.connect(self.app._remove_calibration)
@@ -269,6 +289,9 @@ class CalibrationController:
         o.tbl_points.cellChanged.connect(self._on_cell_changed)
         o.degree.valueChanged.connect(lambda *_: self._auto_calibrate())
         o.cb_origin.toggled.connect(lambda *_: self._auto_calibrate())
+        # Units are freely changeable; converting the entered values to the new
+        # units (then re-fitting) is handled in _on_units_changed.
+        o.units.currentTextChanged.connect(self._on_units_changed)
 
     def _on_cell_changed(self, *_):
         if not self._loading:
@@ -288,29 +311,68 @@ class CalibrationController:
             ed.setText(f"{coeffs[i]:.6E}" if i < len(coeffs) else "")
             ed.blockSignals(False)
 
-    # -- units locking ---------------------------------------------------------
+    # -- units ------------------------------------------------------------------
+    # Energy-unit scale factors relative to eV.
+    _UNIT_SCALE = {"eV": 1.0, "keV": 1.0e3, "MeV": 1.0e6}
+
+    def _has_energy(self):
+        """True once at least one row carries a usable channel+energy pair."""
+        return bool(self._read_points(used_only=False)[1])
+
     def locked_units(self):
-        """The locked energy-units string, or None if units are still free."""
-        return self.opts.units.currentText() if self._units_locked else None
+        """Energy-units string currently in effect, reported to the Drag-and-Fit
+        window so pushed centroids share the calibration's units. Returns None
+        until an energy has been entered (no calibration started yet). The combo
+        itself stays editable in the Calibration tab; the name is kept for the
+        Drag-and-Fit handshake in app.py/fitting.py.
+        """
+        return self.opts.units.currentText() if self._has_energy() else None
 
-    def _lock_units(self, units=None):
-        if units is not None:
-            self.opts.units.setCurrentText(units)
-        self._units_locked = True
-        self.opts.units.setEnabled(False)
+    def _on_units_changed(self, new_units):
+        """Convert every entered value to the newly selected units, then re-fit.
 
-    def _unlock_units(self):
-        self._units_locked = False
-        self.opts.units.setEnabled(True)
+        Changing the combo is a unit *conversion*, not just a relabel: the
+        numbers were typed in the previously selected units, so e.g. switching
+        keV → MeV must divide them by 1000. We rescale both the table's energy
+        cells and the 'set from equation' coefficients (every polynomial
+        coefficient scales by the same factor), then refit so the curve, R²,
+        and calibrated axis all follow.
+        """
+        old_units = self._units
+        if new_units == old_units or new_units not in self._UNIT_SCALE:
+            return
+        # value_new = value_old * scale_old / scale_new
+        factor = self._UNIT_SCALE[old_units] / self._UNIT_SCALE[new_units]
+        self._units = new_units
+        self._convert_values(factor)
+        self._auto_calibrate()
 
-    def _refresh_units_lock(self):
-        """Lock the units combo once any point carries an energy (legacy:
-        units are fixed after the first calibration point)."""
-        has_energy = bool(self._read_points(used_only=False)[1])
-        if has_energy and not self._units_locked:
-            self._lock_units()
-        elif not has_energy and self._units_locked:
-            self._unlock_units()
+    def _convert_values(self, factor):
+        """Multiply all numeric energy cells and equation coefficients by
+        *factor* (a unit-conversion scale). Blank/non-numeric entries are left
+        untouched."""
+        o = self.opts
+        was_loading = self._loading
+        self._loading = True               # batch the edits; caller refits once
+        for r in range(o.tbl_points.rowCount()):
+            e_item = o.tbl_points.item(r, E_COL)
+            try:
+                val = float((e_item.text() if e_item else "").strip())
+            except (AttributeError, ValueError):
+                continue
+            o.tbl_points.setItem(r, E_COL, QTableWidgetItem(f"{val * factor:.10g}"))
+        self._loading = was_loading
+        for ed in (o.coef_a, o.coef_b, o.coef_c, o.coef_d):
+            txt = ed.text().strip()
+            if not txt:
+                continue
+            try:
+                c = float(txt)
+            except ValueError:
+                continue
+            ed.blockSignals(True)
+            ed.setText(f"{c * factor:.6E}")
+            ed.blockSignals(False)
 
     # -- points table ----------------------------------------------------------
     def _add_row(self, channel="", energy="", use=True):
@@ -344,7 +406,6 @@ class CalibrationController:
         self.opts.tbl_points.setRowCount(0)
         self._loading = False
         self.predicted = None
-        self._unlock_units()
         self._fill_coeffs([])              # clear the equation boxes too
         self._set_result("—")
         self.page.show_empty()
@@ -398,20 +459,6 @@ class CalibrationController:
         return None
 
     # -- centroids -------------------------------------------------------------
-    def _found_peak_channels(self):
-        s = self.app.search
-        if s is None or s.peaks_idx is None or len(s.peaks_idx) == 0:
-            return []
-        idx = np.asarray(s.peaks_idx)
-        chans = self.app.spect.channels
-        try:
-            ii = idx.astype(int)
-            if ii.min() >= 0 and ii.max() < len(chans):
-                return chans[ii].astype(float).tolist()
-        except (ValueError, TypeError):
-            pass
-        return idx.astype(float).tolist()
-
     def _add_unique(self, pairs):
         """Add (channel, energy) rows, skipping any channel that duplicates a
         peak already in the table (same peak within half a FWHM). Returns
@@ -442,28 +489,19 @@ class CalibrationController:
         box.setWindowFlag(Qt.WindowStaysOnTopHint, True)
         box.exec_()
 
-    def _pull_found_peaks(self):
-        if not self.app._guard():
-            return
-        peaks = self._found_peak_channels()
-        if not peaks:
-            self._status("No peaks found yet — run Auto-Find Peaks on the Spectrum tab")
-            return
-        added, dupes = self._add_unique((ch, "") for ch in peaks)
-        self._auto_calibrate()
-        if dupes:
-            self._warn_duplicates(dupes)
-        self._status(f"Pulled {added} peak channel(s) — now enter their energies")
-
     def add_centroids(self, pairs, units=None):
         """Add (channel, energy) pairs pushed from the Drag-and-Fit window.
 
         ``pairs`` is a list of ``(channel, energy_str)``; the energy may be an
         empty string, in which case only the channel is filled in. ``units`` (if
-        given) sets the energy units when they are not yet locked. A peak that is
-        already in the calibration (e.g. the same peak fitted twice) is rejected
-        with a warning instead of being added again."""
-        if units and not self._units_locked:
+        given) sets the energy units. A peak that is already in the calibration
+        (e.g. the same peak fitted twice) is rejected with a warning instead of
+        being added again."""
+        # Adopt the pushed units only before a calibration is under way (no
+        # energy yet) — here it declares the units of the incoming energies. Once
+        # points exist the Drag-and-Fit dialog locks to the tab's units, so this
+        # never silently reinterprets values already in the table.
+        if units and not self._has_energy():
             self.opts.units.setCurrentText(units)
         added, dupes = self._add_unique(pairs)
         self._auto_calibrate()
@@ -471,63 +509,6 @@ class CalibrationController:
             self._warn_duplicates(dupes)
         if added:
             self._status(f"Added {added} centroid(s) from the fit")
-
-    def _refine_selected(self):
-        if not self.app._guard():
-            return
-        if self.app.spect.energies is not None:
-            self._status("Refine works on the channel axis — Remove Calibration first")
-            return
-        rows = sorted({i.row() for i in self.opts.tbl_points.selectedIndexes()})
-        if not rows:
-            self._status("Select a point row to refine")
-            return
-        refined = 0
-        for r in rows:
-            ch_item = self.opts.tbl_points.item(r, CH_COL)
-            try:
-                ch0 = float(ch_item.text())
-            except (AttributeError, ValueError):
-                continue
-            centroid = self._quick_centroid(ch0)
-            if centroid is not None:
-                self._loading = True
-                self.opts.tbl_points.setItem(r, CH_COL, QTableWidgetItem(f"{centroid:.3f}"))
-                self._loading = False
-                refined += 1
-        self._auto_calibrate()
-        self._status(f"Refined {refined} centroid(s) by Gaussian fit"
-                     if refined else "Could not refine — check the channel values")
-
-    def _quick_centroid(self, ch0):
-        """Gaussian + linear fit in a window around ch0; returns the centroid."""
-        spect = self.app.spect
-        chans = spect.channels.astype(float)
-        hw = 8.0
-        s = self.app.search
-        if s is not None and hasattr(s, "fwhm"):
-            try:
-                hw = max(3.0 * float(s.fwhm(ch0)), 4.0)
-            except Exception:  # noqa: BLE001 — fall back to the default window
-                pass
-        mask = (chans >= ch0 - hw) & (chans <= ch0 + hw)
-        if mask.sum() < 5:
-            return None
-        x = chans[mask]
-        y = spect.counts[mask].astype(float)
-        model = lmfit.models.GaussianModel(prefix="g_") + lmfit.models.LinearModel(prefix="b_")
-        pars = model.make_params()
-        base = float(min(y[0], y[-1]))
-        pars["g_center"].set(value=ch0, min=ch0 - hw, max=ch0 + hw)
-        pars["g_sigma"].set(value=max(hw / 3.0, 1.0), min=1e-3)
-        pars["g_amplitude"].set(value=max(float(y.max() - base), 1.0) * hw, min=0)
-        pars["b_slope"].set(value=0.0)
-        pars["b_intercept"].set(value=base)
-        try:
-            out = model.fit(y, pars, x=x)
-            return float(out.params["g_center"].value)
-        except Exception:  # noqa: BLE001 — refinement is best-effort
-            return None
 
     # -- validation ------------------------------------------------------------
     def _validation_error(self, chans, ergs):
@@ -561,7 +542,6 @@ class CalibrationController:
         a calibration line is always shown once enough valid points exist."""
         if self.app.spect is None:
             return
-        self._refresh_units_lock()
         chans, ergs = self._read_points()
         if len(chans) == 0:                    # nothing to fit yet
             self.predicted = None

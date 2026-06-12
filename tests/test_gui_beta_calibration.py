@@ -3,10 +3,10 @@ Offscreen GUI regression tests for the wara --beta Calibration tab
 (wara.gui_beta.calibration: CalibrationOptions / CalibrationPage /
 CalibrationController).
 
-Covers the legacy-faithful workflow: pulling found-peak channels into the
-points table, refining a centroid with the in-tab Gaussian fit, fitting a
-polynomial, setting the calibration directly from coefficients, and applying
-the calibration to the active spectrum.
+Covers the workflow: adding centroids into the points table (as the
+Drag-and-Fit window does), fitting a polynomial, setting the calibration
+directly from coefficients, changing units, and applying the calibration to
+the active spectrum.
 """
 
 import os
@@ -83,27 +83,33 @@ def _label_energies(w):
         tbl.setItem(r, E_COL, QTableWidgetItem(f"{SLOPE * chv + INTERCEPT:.4f}"))
 
 
+def _add_peak_channels(w):
+    """Populate the points table with PEAK_CHANNELS (energies blank), mirroring
+    how centroids arrive from the Drag-and-Fit window."""
+    w.calibration.add_centroids([(float(c), "") for c in PEAK_CHANNELS])
+
+
 # ---------------------------------------------------------------------------
-# Pulling found peaks + polynomial calibration
+# Adding centroids + polynomial calibration
 # ---------------------------------------------------------------------------
 
-class TestPullAndCalibrate:
-    def test_pull_found_peaks_fills_table(self, app_with_peaks):
+class TestAddAndCalibrate:
+    def test_add_centroids_fills_table(self, app_with_peaks):
         w = app_with_peaks
-        w.calibration._pull_found_peaks()
+        _add_peak_channels(w)
         assert _table(w).rowCount() == len(PEAK_CHANNELS)
 
-    def test_pull_is_idempotent(self, app_with_peaks):
+    def test_adding_same_channels_is_idempotent(self, app_with_peaks):
         w = app_with_peaks
-        w.calibration._pull_found_peaks()
-        w.calibration._pull_found_peaks()   # no duplicate channels
+        _add_peak_channels(w)
+        _add_peak_channels(w)                # no duplicate channels
         assert _table(w).rowCount() == len(PEAK_CHANNELS)
 
     def test_linear_calibration_recovers_truth(self, app_with_peaks):
         w = app_with_peaks
         cal = w.calibration
         cal.opts.cb_origin.setChecked(False)     # truth is E = 0.5ch + 10 (not through 0)
-        cal._pull_found_peaks()
+        _add_peak_channels(w)
         _label_energies(w)                       # fitting is automatic on edit
         assert cal.predicted is not None
         assert float(cal.opts.val_r2.text()) > 0.999999
@@ -115,7 +121,7 @@ class TestPullAndCalibrate:
     def test_unticked_rows_excluded_from_fit(self, app_with_peaks):
         w = app_with_peaks
         cal = w.calibration
-        cal._pull_found_peaks()
+        _add_peak_channels(w)
         _label_energies(w)
         _table(w).item(0, USE_COL).setCheckState(Qt.Unchecked)
         chans, ergs = cal._read_points()
@@ -124,7 +130,7 @@ class TestPullAndCalibrate:
     def test_reset_clears_points(self, app_with_peaks):
         w = app_with_peaks
         cal = w.calibration
-        cal._pull_found_peaks()
+        _add_peak_channels(w)
         cal._reset()
         assert _table(w).rowCount() == 0
         assert cal.predicted is None
@@ -140,7 +146,7 @@ class TestApply:
         w = app_with_peaks
         cal = w.calibration
         cal.opts.cb_origin.setChecked(False)
-        cal._pull_found_peaks()
+        _add_peak_channels(w)
         _label_energies(w)
         cal._apply()
         assert w.spect.energies is not None
@@ -150,33 +156,6 @@ class TestApply:
     def test_apply_disabled_before_fit(self, app_with_peaks):
         w = app_with_peaks
         assert not w.calibration.opts.btn_apply.isEnabled()
-
-
-# ---------------------------------------------------------------------------
-# In-tab centroid refinement
-# ---------------------------------------------------------------------------
-
-class TestRefine:
-    def test_refine_pulls_centroid_to_peak(self, app_with_peaks):
-        w = app_with_peaks
-        cal = w.calibration
-        cal._add_row(channel=497.0)          # a few channels off the true 500
-        _table(w).selectRow(0)
-        cal._refine_selected()
-        refined = float(_table(w).item(0, CH_COL).text())
-        assert refined == pytest.approx(500.0, abs=0.5)
-
-    def test_refine_blocked_when_calibrated(self, app_with_peaks):
-        w = app_with_peaks
-        cal = w.calibration
-        cal._pull_found_peaks()
-        _label_energies(w)
-        cal._apply()                         # now the spectrum has an energy axis
-        cal._add_row(channel=500.0)
-        last = _table(w).rowCount() - 1
-        _table(w).selectRow(last)
-        cal._refine_selected()               # should refuse, not crash
-        assert float(_table(w).item(last, CH_COL).text()) == 500.0
 
 
 # ---------------------------------------------------------------------------
@@ -201,7 +180,7 @@ class TestEquation:
         w = app_with_peaks
         cal = w.calibration
         cal.opts.cb_origin.setChecked(False)
-        cal._pull_found_peaks()
+        _add_peak_channels(w)
         _label_energies(w)                       # E = 0.5ch + 10, degree 1
         assert float(cal.opts.coef_a.text()) == pytest.approx(INTERCEPT, abs=1e-2)
         assert float(cal.opts.coef_b.text()) == pytest.approx(SLOPE, abs=1e-6)
@@ -268,12 +247,12 @@ class TestCentroidPush:
         assert cal.predicted is not None
         assert cal.predicted[0] == pytest.approx(INTERCEPT, abs=1e-2)
 
-    def test_add_centroids_sets_units_when_unlocked(self, app_with_peaks):
+    def test_add_centroids_sets_units(self, app_with_peaks):
         w = app_with_peaks
         cal = w.calibration
         cal.add_centroids([(500.0, "0.26"), (1200.0, "0.61")], units="MeV")
         assert cal.opts.units.currentText() == "MeV"
-        assert cal.locked_units() == "MeV"      # locked once a point has energy
+        assert cal.locked_units() == "MeV"      # reported once a point has energy
 
 
 # ---------------------------------------------------------------------------
@@ -356,13 +335,47 @@ class TestAutoFitAndUnits:
         assert abs(cal.predicted[0]) < abs(free_intercept)
         assert cal.predicted[0] != pytest.approx(free_intercept, abs=1.0)
 
-    def test_units_lock_and_reset_unlocks(self, app_with_peaks):
+    def test_units_stay_changeable_and_reset_clears(self, app_with_peaks):
         w = app_with_peaks
         cal = w.calibration
         assert cal.opts.units.isEnabled()
         cal.add_centroids([(500.0, "260.0"), (1200.0, "610.0")])
-        assert not cal.opts.units.isEnabled()    # locked after the first energy
-        assert cal.locked_units() == "keV"
+        assert cal.opts.units.isEnabled()        # units remain changeable
+        assert cal.locked_units() == "keV"       # reported to the Drag-and-Fit window
         cal._reset()
-        assert cal.opts.units.isEnabled()        # Reset frees the units again
-        assert cal.locked_units() is None
+        assert cal.opts.units.isEnabled()
+        assert cal.locked_units() is None        # no points → nothing to report
+
+    def test_changing_units_converts_values_and_refits(self, app_with_peaks):
+        w = app_with_peaks
+        cal = w.calibration
+        # cb_origin defaults to True, so two points + the origin give a line.
+        cal.add_centroids([(500.0, "260.0"), (1200.0, "610.0")])
+        assert cal.predicted is not None
+        kev_pred0 = cal.predicted[0]
+        cal.opts.units.setCurrentText("MeV")     # keV → MeV: values ÷ 1000
+        # The entered energies are converted, not just relabelled.
+        tbl = _table(w)
+        ergs = sorted(float(tbl.item(r, E_COL).text())
+                      for r in range(tbl.rowCount())
+                      if tbl.item(r, E_COL) and tbl.item(r, E_COL).text().strip())
+        assert ergs == [pytest.approx(0.26), pytest.approx(0.61)]
+        # The fit follows: the predicted curve is now 1000x smaller.
+        assert cal.predicted[0] == pytest.approx(kev_pred0 / 1000.0)
+        cal._apply()
+        assert w.spect.x_units == "Energy (MeV)"
+
+    def test_units_round_trip_preserves_values(self, app_with_peaks):
+        w = app_with_peaks
+        cal = w.calibration
+        cal.opts.cb_origin.setChecked(False)
+        # A 7-significant-figure energy that would lose precision if the
+        # conversion were formatted too coarsely.
+        cal._add_row(channel=500.0, energy="1332.501")
+        cal._add_row(channel=1200.0, energy="610.0")
+        cal._auto_calibrate()
+        cal.opts.units.setCurrentText("eV")      # keV → eV: ×1000
+        cal.opts.units.setCurrentText("keV")     # eV → keV: ÷1000 (back to start)
+        tbl = _table(w)
+        ergs = sorted(float(tbl.item(r, E_COL).text()) for r in range(tbl.rowCount()))
+        assert ergs == [pytest.approx(610.0), pytest.approx(1332.501)]

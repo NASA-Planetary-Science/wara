@@ -237,6 +237,66 @@ class PeakSearch:
         fwhm_sqr = (f1 / np.sqrt(x1)) * np.sqrt(x) + f0
         return fwhm_sqr
 
+    def _edge_guard_mask(self, peaks_idx, work_ch, work_cts):
+        """
+        Build a boolean mask that rejects peaks hugging the data boundaries.
+
+        Every search method here is a matched filter: it convolves the
+        spectrum with a Gaussian-derivative kernel and flags maxima of the
+        resulting SNR. A Gaussian derivative is an edge detector -- it fires
+        on *any* sharp change in counts, not just real peaks. The two ends of
+        the convolved data (the whole spectrum, or the ``xrange`` slice) are
+        artificial discontinuities: the data simply stops. So the filter rings
+        there and ``find_peaks`` reports spurious peaks pinned to the edges.
+        This happens regardless of ``xrange`` because the slice introduces its
+        own boundaries.
+
+        On the right edge the kernel is also truncated against the boundary,
+        which breaks the per-column zero-sum normalization in
+        ``kernel_matrix`` (the negative lobe gets over-amplified), letting a
+        flat continuum masquerade as signal. A non-zero baseline at the left
+        edge produces the same ringing.
+
+        The "edge" that matters is where real data begins/ends, not the raw
+        array index: spectra are routinely exported with leading/trailing zero
+        channels (below the low-energy threshold, above the last filled
+        channel), and the abrupt zero->data turn-on is itself a step the filter
+        rings on. So we anchor the guard to the first/last non-empty channel
+        and reject anything in (or beyond) the dead padding.
+
+        The contaminated band is the kernel's own support, ~4*sigma =
+        4*FWHM/2.355 -- the same half-width ``calculate_fast`` builds its
+        kernel with. FWHM grows with channel, so each edge is sized from its
+        own channel value independently.
+
+        Parameters
+        ----------
+        peaks_idx : numpy array
+            Peak positions as indices into the convolution domain
+            (0 .. len(work_cts) - 1), i.e. *before* mapping back to channels.
+        work_ch : numpy array
+            Channel values spanning the convolution domain.
+        work_cts : numpy array
+            Counts spanning the convolution domain, used to locate where real
+            data starts and ends.
+
+        Returns
+        -------
+        numpy array of bool
+            True for peaks to keep, False for those inside an edge band.
+        """
+        # Locate the populated region; everything outside it is dead padding.
+        filled = np.flatnonzero(work_cts != 0)
+        if filled.size == 0:
+            return np.zeros(peaks_idx.shape, dtype=bool)
+        first, last = filled[0], filled[-1]
+
+        # Guard width = kernel support (~4 sigma) at each edge, in channels.
+        sigma_to_fwhm = 2.355
+        left_guard = int(np.ceil(4.0 * self.fwhm(work_ch[first]) / sigma_to_fwhm))
+        right_guard = int(np.ceil(4.0 * self.fwhm(work_ch[last]) / sigma_to_fwhm))
+        return (peaks_idx >= first + left_guard) & (peaks_idx <= last - right_guard)
+
     def kernel(self, x, edges):
         """Generate the kernel for the given x value."""
         fwhm1 = self.fwhm(x)
@@ -299,6 +359,12 @@ class PeakSearch:
         # find peak indices
         peaks_idx = find_peaks(clipped_snr, height=self.min_snr)[0]
 
+        # Reject matched-filter ringing at the edges of the convolved data
+        # (the spectrum, or the xrange slice). See _edge_guard_mask.
+        work_ch = self.spectrum.channels if self.xrange is None else new_ch
+        work_cts = spect_cts if self.xrange is None else new_cts
+        peaks_idx = peaks_idx[self._edge_guard_mask(peaks_idx, work_ch, work_cts)]
+
         self.fwhm_guess = self.fwhm(peaks_idx)
         self.peak_plus_bkg = peak_plus_bkg
         self.bkg = bkg
@@ -313,23 +379,23 @@ class PeakSearch:
 
     def calculate_scipy(self):
         if self.xrange is None:
-            peaks_idx, params = find_peaks(
-                self.spectrum.counts,
-                prominence=self.min_snr,
-                width=self.fwhm(self.spectrum.channels),
-            )
-            self.peaks_idx = peaks_idx
+            work_ch = self.spectrum.channels
+            work_cts = self.spectrum.counts
         else:
-            new_ch = self.spectrum.channels[self.channel_idx]
-            new_cts = self.spectrum.counts[self.channel_idx]
-            new_widths = self.fwhm(new_ch)
-            peaks_idx, params = find_peaks(
-                new_cts, prominence=self.min_snr, width=new_widths
-            )
-            self.peaks_idx = new_ch[peaks_idx]
+            work_ch = self.spectrum.channels[self.channel_idx]
+            work_cts = self.spectrum.counts[self.channel_idx]
 
+        peaks_idx, params = find_peaks(
+            work_cts, prominence=self.min_snr, width=self.fwhm(work_ch)
+        )
+
+        # Drop edge-band detections; keep the per-peak prominences aligned.
+        keep = self._edge_guard_mask(peaks_idx, work_ch, work_cts)
+        peaks_idx = peaks_idx[keep]
+
+        self.peaks_idx = peaks_idx if self.xrange is None else work_ch[peaks_idx]
         self.fwhm_guess = self.fwhm(self.peaks_idx)
-        self.snr = params["prominences"]
+        self.snr = params["prominences"][keep]
     
     def calculate_fast(self):
         """
@@ -386,7 +452,11 @@ class PeakSearch:
     
         clipped_snr = snr.clip(0)
         peaks_idx = find_peaks(clipped_snr, height=self.min_snr)[0]
-    
+
+        # Reject matched-filter ringing at the data edges (incl. the
+        # zero-padded FFT boundaries) before refining. See _edge_guard_mask.
+        peaks_idx = peaks_idx[self._edge_guard_mask(peaks_idx, channels, counts)]
+
         # Refine peak positions using local argmax within fwhm window
         refined_peaks = []
         for idx in peaks_idx:
