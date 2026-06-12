@@ -546,6 +546,12 @@ class SpectrumOptions(QScrollArea):
         lay.addWidget(hsep()); lay.addWidget(header("SPECTRUM"))
         self.btn_reset = QPushButton("Reset Spectrum"); self.btn_reset.setObjectName("action_btn")
         self.btn_reset.setToolTip("Undo all customize edits and restore the originally loaded spectrum")
+        # A little red — softer than danger_btn — to flag it as a discard action.
+        self.btn_reset.setStyleSheet(
+            "QPushButton#action_btn { background-color: #2e1b22; color: #ffb3c1;"
+            " border: 2px solid #b05a6e; }"
+            "QPushButton#action_btn:hover { background-color: #4d1a2a;"
+            f" border: 2px solid {T.ACCENT_RED}; color: #ff8aa0; }}")
         self.btn_remcal = QPushButton("Remove Calibration"); self.btn_remcal.setObjectName("action_btn")
         self.btn_remcal.setToolTip("Strip the energy axis and revert to channel numbers")
         self.btn_addsub = QPushButton("Add / Subtract  ▾"); self.btn_addsub.setObjectName("action_btn")

@@ -22,7 +22,7 @@ from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
 from PyQt5.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QLabel, QComboBox, QCheckBox, QSpinBox,
     QDoubleSpinBox, QPushButton, QTableWidget, QTableWidgetItem, QHeaderView,
-    QSizePolicy, QSlider, QWidget, QTextEdit,
+    QSizePolicy, QSlider, QWidget, QTextEdit, QDialogButtonBox,
 )
 from PyQt5.QtCore import Qt, pyqtSignal
 from PyQt5.QtGui import QFont
@@ -88,15 +88,129 @@ class FitCanvas(FigureCanvas):
         self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
 
 
+class CentroidEnergyDialog(QDialog):
+    """Pair each fitted centroid (channel) with a user-entered energy before
+    sending the pairs to the Calibration tab.
+
+    The fit reports centroids in the spectrum's x-units; on a calibrated
+    spectrum these were mapped back to channels, so a warning is shown.  Energy
+    units are picked here unless the Calibration tab has already locked them.
+    """
+
+    def __init__(self, parent, channels, calibrated=False,
+                 default_units="keV", locked_units=None):
+        super().__init__(parent)
+        self.setWindowTitle("Send centroids to Calibration")
+        self.setStyleSheet(T.STYLESHEET)
+        self._channels = list(channels)
+
+        lay = QVBoxLayout(self)
+        if calibrated:
+            warn = QLabel(
+                "⚠  This spectrum is on a calibrated (energy) axis. The fitted "
+                "centroids were converted back to channel numbers for the "
+                "calibration points.")
+            warn.setWordWrap(True)
+            warn.setStyleSheet(f"color: {T.ACCENT_AMBER}; font-weight: 600;")
+            lay.addWidget(warn)
+
+        # Legacy "Note: calibration has already been initialized" warning.
+        if locked_units:
+            note = QLabel(
+                f"Note: a calibration has already been started — units are locked "
+                f"to {locked_units}.")
+            note.setWordWrap(True)
+            note.setStyleSheet(f"color: {T.ACCENT_RED}; font-weight: 600;")
+            lay.addWidget(note)
+
+        # Energy units: locked to the Calibration tab's choice once points exist.
+        urow = QHBoxLayout()
+        self.units = QComboBox(); self.units.addItems(["eV", "keV", "MeV"])
+        if locked_units:
+            self.units.setCurrentText(locked_units)
+            self.units.setEnabled(False)
+            self.units.setToolTip("Units are locked by the existing calibration points")
+        else:
+            self.units.setCurrentText(default_units)
+        urow.addWidget(QLabel("Energy units:")); urow.addStretch(1); urow.addWidget(self.units)
+        lay.addLayout(urow)
+
+        lay.addWidget(QLabel("Enter the energy for each fitted centroid, or use "
+                             "🔍 to pick it from the database (blank = skip):"))
+        self.table = QTableWidget(len(self._channels), 3)
+        self.table.setHorizontalHeaderLabels(["Channel", "Energy", ""])
+        self.table.verticalHeader().setVisible(False)
+        hh = self.table.horizontalHeader()
+        hh.setSectionResizeMode(0, QHeaderView.Stretch)
+        hh.setSectionResizeMode(1, QHeaderView.Stretch)
+        hh.setSectionResizeMode(2, QHeaderView.ResizeToContents)
+        for i, ch in enumerate(self._channels):
+            ch_item = QTableWidgetItem(f"{ch:.3f}")
+            ch_item.setFlags(Qt.ItemIsEnabled | Qt.ItemIsSelectable)  # read-only
+            ch_item.setTextAlignment(Qt.AlignCenter)
+            self.table.setItem(i, 0, ch_item)
+            e_item = QTableWidgetItem("")
+            e_item.setTextAlignment(Qt.AlignCenter)
+            self.table.setItem(i, 1, e_item)
+            # Per-row database picker — fills the Energy cell but leaves it editable.
+            btn = QPushButton("🔍"); btn.setObjectName("mini_btn")
+            btn.setToolTip("Pick this energy from the nuclear database")
+            btn.setCursor(Qt.PointingHandCursor)
+            btn.clicked.connect(lambda _=False, r=i: self._pick_energy(r))
+            self.table.setCellWidget(i, 2, btn)
+        self.table.setMinimumWidth(360)
+        lay.addWidget(self.table)
+
+        bb = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        bb.accepted.connect(self.accept)
+        bb.rejected.connect(self.reject)
+        lay.addWidget(bb)
+
+    def selected_units(self):
+        return self.units.currentText()
+
+    def _pick_energy(self, row):
+        """Open the database picker and drop the chosen energy into *row*'s
+        Energy cell (converted to the selected units). The cell stays editable."""
+        from .nuclear import NuclearLinePicker
+        picker = NuclearLinePicker(self)
+        if picker.exec_() != QDialog.Accepted:
+            return
+        energy_keV = picker.selected_energy()
+        if energy_keV is None:
+            return
+        value = self._from_keV(energy_keV)
+        self.table.item(row, 1).setText(f"{value:.6g}")
+
+    def _from_keV(self, energy_keV):
+        """Convert a keV database energy to the dialog's selected units."""
+        unit = self.units.currentText()
+        if unit == "eV":
+            return energy_keV * 1000.0
+        if unit == "MeV":
+            return energy_keV / 1000.0
+        return energy_keV
+
+    def pairs(self):
+        """Return [(channel, energy_str), …] for every row (energy may be '')."""
+        out = []
+        for i in range(self.table.rowCount()):
+            e_item = self.table.item(i, 1)
+            energy = e_item.text().strip() if e_item else ""
+            out.append((self._channels[i], energy))
+        return out
+
+
 class FitWindow(QDialog):
     """Non-modal, stays-on-top fit window driven by an ROI on the main plot."""
 
     roi_changed = pyqtSignal(float, float)   # emitted when the ROI is edited here
+    send_to_calibration = pyqtSignal(list, str)   # ([(channel, energy_str), …], units)
 
     def __init__(self, parent, search):
         super().__init__(parent)
         self.setWindowFlags(Qt.Window | Qt.WindowStaysOnTopHint)
-        self.setWindowTitle("Drag and Fit")
+        self.setWindowTitle("Peak fitting")
         self.setStyleSheet(T.STYLESHEET)
         self.resize(960, 840)
         set_theme(DARK)               # PeakFit.plot() uses wara's active theme
@@ -144,6 +258,12 @@ class FitWindow(QDialog):
         row1.addWidget(self.cb_shared); row1.addStretch(1)
         outer.addWidget(self.peakfit_controls)
 
+        # The user-selectable fit options (Peak fit, Hypermet, …) are shown in
+        # cyan to flag them as choices the user drives.
+        opt_css = f"QComboBox, QSpinBox {{ color: {T.ACCENT_CYAN}; font-weight: 600; }}"
+        for w in (self.method, self.shape, self.bkg, self.degree):
+            w.setStyleSheet(opt_css)
+
         # ── Fit plot (residual + components + 3-σ band) ──────────
         self.canvas = FitCanvas()
         outer.addWidget(self.canvas, stretch=1)
@@ -186,6 +306,15 @@ class FitWindow(QDialog):
         self.btn_details.setEnabled(False)
         self.btn_details.clicked.connect(self._show_fit_details)
         crow.addWidget(self.btn_details)
+        self.btn_to_cal = QPushButton("📐  Send centroids to Calibration")
+        self.btn_to_cal.setObjectName("yellow_btn")
+        self.btn_to_cal.setToolTip(
+            "Send the fitted peak centroid(s) to the Calibration tab as points "
+            "(channel axis — remove calibration first).")
+        self.btn_to_cal.setEnabled(False)
+        self.btn_to_cal.setCursor(Qt.PointingHandCursor)
+        self.btn_to_cal.clicked.connect(self._emit_centroids)
+        crow.addWidget(self.btn_to_cal)
         crow.addStretch(1)
         self.btn_close = QPushButton("Close"); self.btn_close.setObjectName("action_btn")
         self.btn_close.clicked.connect(self.close)
@@ -331,6 +460,7 @@ class FitWindow(QDialog):
         has_report = (self.last_fit is not None
                       and getattr(self.last_fit, "fit_result", None) is not None)
         self.btn_details.setEnabled(has_report)
+        self.btn_to_cal.setEnabled(self.last_fit is not None)
 
     def _build_peakfit(self):
         """
@@ -576,6 +706,7 @@ class FitWindow(QDialog):
                "0 is symmetric; positive = low-energy tail.",
         })
         self.table.setRowCount(len(df))
+        livetime = getattr(self._search.spectrum, "livetime", None)
         for i, row in df.iterrows():
             cells = [_fmt(row["mean"], row["mean_err"]),
                      _fmt(row["area"], row["area_err"]),
@@ -583,10 +714,24 @@ class FitWindow(QDialog):
                      _fmt(row["fwtm"], None),
                      _fmt(row["fwtm_fwhm"], None),
                      _fmt(row["asymmetry"], None)]
+            # Hover tooltips: a count rate on the area (only when a livetime is
+            # known) and a relative %FWHM (FWHM / centroid) on the FWHM.
+            tips = {}
+            if livetime:
+                rate = row["area"] / livetime
+                rate_err = (row["area_err"] / livetime
+                            if row["area_err"] is not None
+                            and np.isfinite(row["area_err"]) else None)
+                tips[1] = (f"Rate = {_fmt(rate, rate_err)} counts/s"
+                           f"  (livetime {livetime:.6g} s)")
+            if row["mean"]:
+                tips[2] = f"%FWHM = {100.0 * row['fwhm'] / row['mean']:.2f}%"
             for c, text in enumerate(cells):
                 item = QTableWidgetItem(text)
                 item.setFlags(Qt.ItemIsEnabled | Qt.ItemIsSelectable)
                 item.setTextAlignment(Qt.AlignCenter)
+                if c in tips:
+                    item.setToolTip(tips[c])
                 self.table.setItem(i, c, item)
 
     def _set_header_tooltips(self, tips):
@@ -680,6 +825,37 @@ class FitWindow(QDialog):
         for i, row in df.iterrows():
             areas[f"g{i + 1}"] = (row.get("area"), row.get("area_err"))
         return areas
+
+    def _emit_centroids(self):
+        """Convert the fitted centroids to channel positions, let the user enter
+        the matching energies, and send the (channel, energy) pairs to the
+        Calibration tab."""
+        if self.last_fit is None:
+            return
+        try:
+            df = shape_summary(self.last_fit)
+            means = [float(m) for m in df["mean"] if np.isfinite(m)]
+        except Exception:  # noqa: BLE001
+            means = []
+        if not means:
+            return
+        # Calibration is built against channels, so map the fitted centroids
+        # (in the spectrum's x-units) back to channel positions. For an
+        # uncalibrated spectrum x == channels and this is a no-op.
+        spect = self._search.spectrum
+        calibrated = spect.energies is not None
+        channels = [float(np.interp(m, spect.x, spect.channels)) for m in means]
+        default_units = spect.e_units if (calibrated and spect.e_units) else "keV"
+        dlg = CentroidEnergyDialog(
+            self, channels, calibrated=calibrated, default_units=default_units,
+            locked_units=getattr(self, "_cal_locked_units", None))
+        if dlg.exec_() != QDialog.Accepted:
+            return
+        pairs = dlg.pairs()
+        if pairs:
+            self.send_to_calibration.emit(pairs, dlg.selected_units())
+            self.lbl_status.setText(
+                f"Sent {len(pairs)} centroid(s) to the Calibration tab.")
 
     def _show_fit_details(self):
         fit = self.last_fit

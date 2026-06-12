@@ -10,6 +10,7 @@ BG_PANEL2    = "#0f0f18"
 BG_INPUT     = "#1b1b2b"
 BG_BTN       = "#272740"
 BORDER_BTN   = "#6a6ab0"
+BORDER_BTN_BRIGHT = "#a9a9e8"   # neutral action/mini buttons: brighter, thicker edge
 BG_PLOT      = "#07070f"
 LOGO_GREEN   = "#5cf04a"
 ACCENT_CYAN  = "#00e5ff"
@@ -41,7 +42,7 @@ NAV_SECTIONS = [
 ]
 
 # Tabs with a real/mocked options column. Others collapse the column.
-TABS_WITH_OPTIONS = {"Spectrum"}
+TABS_WITH_OPTIONS = {"Spectrum", "Calibration"}
 
 
 def apply_mpl_theme():
@@ -112,67 +113,67 @@ QLabel#opt_title {{ font-size: 18px; font-weight: 800; letter-spacing: 2px; colo
 QFrame#separator {{ background-color: {BORDER}; min-height: 1px; max-height: 1px; }}
 
 QPushButton#nav_btn {{
-    background-color: {BG_BTN}; color: {TEXT_PRIMARY}; border: 1px solid {BORDER_BTN};
-    border-radius: 6px; padding: 10px 12px; text-align: left; font-size: 16px; font-weight: 600;
+    background-color: {BG_BTN}; color: {TEXT_PRIMARY}; border: 2px solid {BORDER_BTN};
+    border-radius: 6px; padding: 9px 11px; text-align: left; font-size: 16px; font-weight: 600;
 }}
 QPushButton#nav_btn:hover {{ background-color: #313152; border-color: #5a5a8c; }}
 QPushButton#nav_btn:checked {{
-    background-color: #16384f; border: 1px solid {ACCENT_CYAN}; color: #ffffff; font-weight: 700;
+    background-color: #16384f; border: 2px solid {ACCENT_CYAN}; color: #ffffff; font-weight: 700;
 }}
 
 QPushButton#action_btn {{
-    background-color: {BG_BTN}; color: {TEXT_PRIMARY}; border: 1px solid {BORDER_BTN};
-    border-radius: 5px; padding: 9px 14px; font-size: 14px; font-weight: 600;
+    background-color: {BG_BTN}; color: {TEXT_PRIMARY}; border: 2px solid {BORDER_BTN_BRIGHT};
+    border-radius: 5px; padding: 8px 13px; font-size: 14px; font-weight: 600;
 }}
-QPushButton#action_btn:hover {{ background-color: #16384f; border: 1px solid {ACCENT_CYAN}; color: {ACCENT_CYAN}; }}
+QPushButton#action_btn:hover {{ background-color: #16384f; border: 2px solid {ACCENT_CYAN}; color: {ACCENT_CYAN}; }}
 QPushButton:disabled {{ color: #5a5a7a; border-color: #2e2e48; background-color: #1a1a28; }}
 
 QPushButton#open_btn {{
-    background-color: #2a1f5e; color: #d4b8ff; border: 1px solid #a07cff;
-    border-radius: 5px; padding: 9px 14px; font-size: 14px; font-weight: 700;
+    background-color: #2a1f5e; color: #d4b8ff; border: 2px solid #a07cff;
+    border-radius: 5px; padding: 8px 13px; font-size: 14px; font-weight: 700;
 }}
-QPushButton#open_btn:hover {{ background-color: #3a2d78; border: 1px solid #c4a8ff; color: #e8d8ff; }}
+QPushButton#open_btn:hover {{ background-color: #3a2d78; border: 2px solid #c4a8ff; color: #e8d8ff; }}
 
 QPushButton#primary_btn {{
-    background-color: #11405e; color: #aef3ff; border: 1px solid {ACCENT_CYAN};
-    border-radius: 5px; padding: 9px 14px; font-size: 14px; font-weight: 700;
+    background-color: #11405e; color: #aef3ff; border: 2px solid {ACCENT_CYAN};
+    border-radius: 5px; padding: 8px 13px; font-size: 14px; font-weight: 700;
 }}
 QPushButton#primary_btn:hover {{ background-color: #1a5778; }}
 QPushButton#find_btn {{
-    background-color: #1e2a5e; color: #b8c4ff; border: 1px solid #7b8cff;
-    border-radius: 5px; padding: 9px 14px; font-size: 14px; font-weight: 700;
+    background-color: #1e2a5e; color: #b8c4ff; border: 2px solid #7b8cff;
+    border-radius: 5px; padding: 8px 13px; font-size: 14px; font-weight: 700;
 }}
 QPushButton#find_btn:hover {{ background-color: #2a3a78; }}
 QPushButton#danger_btn {{
-    background-color: #3a1420; color: #ff8aa0; border: 1px solid {ACCENT_RED};
-    border-radius: 5px; padding: 9px 14px; font-size: 14px; font-weight: 700;
+    background-color: #3a1420; color: #ff8aa0; border: 2px solid {ACCENT_RED};
+    border-radius: 5px; padding: 8px 13px; font-size: 14px; font-weight: 700;
 }}
 QPushButton#danger_btn:hover {{ background-color: #4d1a2a; }}
 QPushButton#yellow_btn {{
-    background-color: #463808; color: #ffd766; border: 1px solid {ACCENT_AMBER};
-    border-radius: 5px; padding: 9px 14px; font-size: 14px; font-weight: 700;
+    background-color: #463808; color: #ffd766; border: 2px solid {ACCENT_AMBER};
+    border-radius: 5px; padding: 8px 13px; font-size: 14px; font-weight: 700;
 }}
 QPushButton#yellow_btn:hover {{ background-color: #5c4a0a; }}
 QPushButton#fit_btn {{
-    background-color: #1c4a1c; color: #c6ffb8; border: 1px solid {LOGO_GREEN};
-    border-radius: 5px; padding: 10px 14px; font-size: 15px; font-weight: 800; letter-spacing: 1px;
+    background-color: #1c4a1c; color: #c6ffb8; border: 2px solid {LOGO_GREEN};
+    border-radius: 5px; padding: 9px 13px; font-size: 15px; font-weight: 800; letter-spacing: 1px;
 }}
 QPushButton#fit_btn:hover {{ background-color: #266026; }}
 QPushButton#fit_btn:checked {{
-    background-color: #266026; color: {ACCENT_GREEN}; border: 2px solid {ACCENT_GREEN};
+    background-color: #266026; color: {ACCENT_GREEN}; border: 3px solid {ACCENT_GREEN};
 }}
 QPushButton#mini_btn {{
-    background-color: {BG_BTN}; color: {TEXT_PRIMARY}; border: 1px solid {BORDER_BTN};
-    border-radius: 4px; padding: 4px 7px; font-size: 13px; font-weight: 600;
+    background-color: {BG_BTN}; color: {TEXT_PRIMARY}; border: 2px solid {BORDER_BTN_BRIGHT};
+    border-radius: 4px; padding: 3px 6px; font-size: 13px; font-weight: 600;
 }}
-QPushButton#mini_btn:hover {{ background-color: #16384f; border: 1px solid {ACCENT_CYAN}; color: {ACCENT_CYAN}; }}
+QPushButton#mini_btn:hover {{ background-color: #16384f; border: 2px solid {ACCENT_CYAN}; color: {ACCENT_CYAN}; }}
 
 QDialogButtonBox QPushButton {{
-    background-color: {BG_BTN}; color: {TEXT_PRIMARY}; border: 1px solid {BORDER_BTN};
-    border-radius: 5px; padding: 6px 18px; font-size: 14px; font-weight: 600; min-width: 76px;
+    background-color: {BG_BTN}; color: {TEXT_PRIMARY}; border: 2px solid {BORDER_BTN_BRIGHT};
+    border-radius: 5px; padding: 5px 17px; font-size: 14px; font-weight: 600; min-width: 76px;
 }}
-QDialogButtonBox QPushButton:hover {{ border: 1px solid {ACCENT_CYAN}; color: {ACCENT_CYAN}; }}
-QDialogButtonBox QPushButton:default {{ border: 1px solid {ACCENT_CYAN}; color: {ACCENT_CYAN}; }}
+QDialogButtonBox QPushButton:hover {{ border: 2px solid {ACCENT_CYAN}; color: {ACCENT_CYAN}; }}
+QDialogButtonBox QPushButton:default {{ border: 2px solid {ACCENT_CYAN}; color: {ACCENT_CYAN}; }}
 
 QCheckBox {{ color: {TEXT_PRIMARY}; spacing: 9px; font-size: 15px; padding: 3px 0; }}
 QCheckBox::indicator {{

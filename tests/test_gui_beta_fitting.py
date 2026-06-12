@@ -328,3 +328,77 @@ class TestFitDetailsReport:
         amap = FitWindow._net_area_map(fit)
         for i, row in fit.summary().iterrows():
             assert amap[f"g{i + 1}"][0] == pytest.approx(row["area"])
+
+
+# ---------------------------------------------------------------------------
+# Send-centroids dialog: per-row database energy picker
+# ---------------------------------------------------------------------------
+
+class TestCentroidEnergyDialog:
+    def _dialog(self, qapp, **kw):
+        from wara.gui_beta.fitting import CentroidEnergyDialog
+        return CentroidEnergyDialog(None, [500.0, 1200.0], **kw)
+
+    def test_has_per_row_database_buttons(self, qapp):
+        dlg = self._dialog(qapp)
+        assert dlg.table.columnCount() == 3
+        assert dlg.table.cellWidget(0, 2) is not None
+        assert dlg.table.cellWidget(1, 2) is not None
+
+    def test_pick_energy_fills_cell_in_selected_units(self, qapp, monkeypatch):
+        import wara.gui_beta.nuclear as nuc
+        from PyQt5.QtWidgets import QDialog
+
+        class FakePicker:
+            def __init__(self, parent=None, element=""):
+                pass
+
+            def exec_(self):
+                return QDialog.Accepted
+
+            def selected_energy(self):
+                return 1332.5            # keV
+
+        monkeypatch.setattr(nuc, "NuclearLinePicker", FakePicker)
+
+        dlg = self._dialog(qapp, default_units="MeV")
+        dlg._pick_energy(0)
+        assert dlg.table.item(0, 1).text() == "1.3325"     # converted keV -> MeV
+        # The pair is then reported with that energy; the cell stays editable.
+        assert dlg.pairs()[0] == (500.0, "1.3325")
+
+    def test_pick_energy_cancel_leaves_cell_blank(self, qapp, monkeypatch):
+        import wara.gui_beta.nuclear as nuc
+        from PyQt5.QtWidgets import QDialog
+
+        class FakePicker:
+            def __init__(self, parent=None, element=""):
+                pass
+
+            def exec_(self):
+                return QDialog.Rejected
+
+            def selected_energy(self):
+                return 1332.5
+
+        monkeypatch.setattr(nuc, "NuclearLinePicker", FakePicker)
+
+        dlg = self._dialog(qapp)
+        dlg._pick_energy(0)
+        assert dlg.table.item(0, 1).text() == ""
+
+
+class TestNuclearLinePickerMemory:
+    def test_remembers_last_search(self, qapp):
+        import wara.gui_beta.nuclear as nuc
+        # Reset to a known baseline so the test is order-independent.
+        nuc._LAST_LINE_SEARCH.update(
+            database="Common lab sources", element="", energy="", range="")
+        p1 = nuc.NuclearLinePicker(None)
+        p1.db_combo.setCurrentText("TALYS 14 MeV")
+        p1.ed_element.setText("56Fe")
+        p1._search()
+        p2 = nuc.NuclearLinePicker(None)
+        assert p2.db_combo.currentText() == "TALYS 14 MeV"
+        assert p2.ed_element.text() == "56Fe"
+        assert p2.table.model().rowCount() > 0      # opens pre-populated

@@ -35,6 +35,7 @@ from .widgets import (
 from .io import load_spectrum_file, OPEN_FILTER
 from .nuclear import NuclearDatabaseDialog
 from .fitting import FitWindow
+from .calibration import CalibrationOptions, CalibrationPage, CalibrationController
 
 LOGO_PATH = str(files("wara").joinpath("ui/wara-logo.png"))
 
@@ -186,6 +187,8 @@ class WaraBetaApp(QMainWindow):
         self.statusBar().addPermanentWidget(self._file_label)
 
         self._wire_spectrum_tab()
+        self.calibration = CalibrationController(
+            self, self.calibration_opts, self.calibration_page)
         self._rebuild_spectra_list()
         self.statusBar().showMessage("  Ready  ·  open a spectrum file to begin")
 
@@ -248,9 +251,12 @@ class WaraBetaApp(QMainWindow):
 
         self.opt_stack = QStackedWidget()
         self.spectrum_opts = SpectrumOptions()
+        self.calibration_opts = CalibrationOptions()
         for name, _c in NAV_SECTIONS:
             if name == "Spectrum":
                 self.opt_stack.addWidget(self.spectrum_opts)
+            elif name == "Calibration":
+                self.opt_stack.addWidget(self.calibration_opts)
             else:
                 self.opt_stack.addWidget(PlaceholderOptions(name))
         outer.addWidget(self.opt_stack, stretch=1)
@@ -284,9 +290,12 @@ class WaraBetaApp(QMainWindow):
     def _build_stack(self):
         self.stack = QStackedWidget()
         self.spectrum_page = SpectrumPage()
+        self.calibration_page = CalibrationPage()
         for name, _c in NAV_SECTIONS:
             if name == "Spectrum":
                 self.stack.addWidget(self.spectrum_page)
+            elif name == "Calibration":
+                self.stack.addWidget(self.calibration_page)
             else:
                 self.stack.addWidget(PlaceholderPage(name))
         return self.stack
@@ -874,7 +883,11 @@ class WaraBetaApp(QMainWindow):
             self._fit_window = FitWindow(self, self.search)
             self._fit_window.finished.connect(self._on_fit_window_closed)
             self._fit_window.roi_changed.connect(self._on_fit_roi_changed)
+            self._fit_window.send_to_calibration.connect(self.calibration.add_centroids)
         self._fit_window.set_search(self.search)
+        # Tell the fit window whether the Calibration tab has already locked its
+        # energy units, so its "send centroids" dialog can honour that.
+        self._fit_window._cal_locked_units = self.calibration.locked_units()
         self._fit_window.set_roi(xmin, xmax)
         self._fit_window.show()
         self._fit_window.raise_()

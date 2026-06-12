@@ -11,7 +11,7 @@ import pandas as pd
 from PyQt5.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QFormLayout, QLabel, QLineEdit,
     QComboBox, QPushButton, QCheckBox, QTableView, QAbstractItemView,
-    QColorDialog, QHeaderView, QFrame,
+    QColorDialog, QHeaderView, QFrame, QDialogButtonBox,
 )
 from PyQt5.QtGui import QColor
 from PyQt5.QtCore import Qt, QAbstractTableModel, pyqtSignal
@@ -306,3 +306,113 @@ class NuclearDatabaseDialog(QDialog):
         element = self.ed_abund.text().strip()
         self.lbl_abund.setTextFormat(Qt.RichText)
         self.lbl_abund.setText(abundance_html(element) if element else "")
+
+
+# Last line-picker search, remembered across opens so reusing it is faster.
+_LAST_LINE_SEARCH = {"database": "Common lab sources", "element": "", "energy": "", "range": ""}
+
+
+class NuclearLinePicker(QDialog):
+    """Compact, modal database picker: search the gamma-line libraries and pick
+    one line's energy. Reuses the same load/filter helpers as the full Nuclear
+    Database dialog. ``selected_energy()`` returns the chosen energy in keV.
+
+    The last search (database + filters) is remembered across opens so the
+    table comes back pre-populated."""
+
+    def __init__(self, parent=None, element=None):
+        super().__init__(parent)
+        self.setWindowTitle("Select energy from database")
+        self.setStyleSheet(T.STYLESHEET)
+        # Stay above the (always-on-top) Drag-and-Fit window and its child dialog.
+        self.setWindowFlag(Qt.WindowStaysOnTopHint, True)
+        self.setMinimumSize(680, 640)
+        self.resize(740, 720)
+        self._df = pd.DataFrame()
+        last = _LAST_LINE_SEARCH
+
+        lay = QVBoxLayout(self)
+        form = QFormLayout()
+        self.db_combo = QComboBox(); self.db_combo.addItems(list(DATABASES.keys()))
+        self.db_combo.setCurrentText(last["database"])
+        self.db_combo.setToolTip("Gamma-ray line database to search")
+        # An explicit element wins; otherwise restore the last-searched isotope.
+        self.ed_element = QLineEdit(element if element is not None else last["element"])
+        self.ed_element.setPlaceholderText("e.g. Co60, Cs137  (blank = all)")
+        self.ed_energy = QLineEdit(last["energy"]); self.ed_energy.setPlaceholderText("keV (optional)")
+        self.ed_range = QLineEdit(last["range"]); self.ed_range.setPlaceholderText("± keV (default 1)")
+        form.addRow("Database:", self.db_combo)
+        form.addRow("Element / isotope:", self.ed_element)
+        form.addRow("Energy:", self.ed_energy)
+        form.addRow("Range:", self.ed_range)
+        lay.addLayout(form)
+
+        self.btn_search = QPushButton("Search"); self.btn_search.setObjectName("primary_btn")
+        self.btn_search.setCursor(Qt.PointingHandCursor)
+        self.btn_search.clicked.connect(self._search)
+        lay.addWidget(self.btn_search)
+
+        self.table = QTableView()
+        self.table.setSelectionBehavior(QAbstractItemView.SelectRows)
+        self.table.setSelectionMode(QAbstractItemView.SingleSelection)
+        self.table.setAlternatingRowColors(True)
+        self.table.setSortingEnabled(True)
+        self.table.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self.table.setToolTip("Pick a line, then OK (or double-click a row)")
+        self.table.doubleClicked.connect(lambda *_: self.accept())
+        lay.addWidget(self.table, stretch=1)
+
+        bb = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        bb.accepted.connect(self.accept)
+        bb.rejected.connect(self.reject)
+        lay.addWidget(bb)
+
+        # Make Enter run a search (not accept the dialog), so typing an isotope
+        # and pressing Enter filters the list rather than closing with nothing.
+        for b in (bb.button(QDialogButtonBox.Ok), bb.button(QDialogButtonBox.Cancel)):
+            b.setAutoDefault(False)
+            b.setDefault(False)
+        self.btn_search.setAutoDefault(True)
+        self.btn_search.setDefault(True)
+
+        self._search()
+
+    def _search(self):
+        try:
+            df = load_database(self.db_combo.currentText())
+            df = filter_lines(df, self.ed_element.text(),
+                              self.ed_energy.text(), self.ed_range.text())
+        except Exception:  # noqa: BLE001 — leave the previous results on error
+            return
+        self._df = df
+        self.table.setModel(_PandasModel(df))
+        self.table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
+        # Remember this search so the next picker opens pre-populated.
+        _LAST_LINE_SEARCH.update(
+            database=self.db_combo.currentText(),
+            element=self.ed_element.text(),
+            energy=self.ed_energy.text(),
+            range=self.ed_range.text())
+
+    def _selected_row(self):
+        model = self.table.model()
+        if model is None or model.rowCount() == 0:
+            return None
+        sel = self.table.selectionModel().selectedRows()
+        if not sel:
+            return None
+        return model._df.iloc[sel[0].row()]
+
+    def selected_energy(self):
+        """Chosen line energy in keV, or None if nothing is selected."""
+        row = self._selected_row()
+        if row is None:
+            return None
+        try:
+            return float(row["Energy (keV)"])
+        except (TypeError, ValueError, KeyError):
+            return None
+
+    def selected_isotope(self):
+        row = self._selected_row()
+        return "" if row is None else str(row.get("Isotope", ""))
