@@ -786,9 +786,13 @@ class CalibrationController:
             self._status("Load a spectrum first")
             return
         from .smartcal import SmartCalibrationDialog   # lazy: avoids import cycle
-        self._smart_dialog = SmartCalibrationDialog(self.app, self, self.app)
+        # Reuse the existing dialog so the channels/energies the user collected
+        # last time survive a close/reopen — closing only hides it.
+        if getattr(self, "_smart_dialog", None) is None:
+            self._smart_dialog = SmartCalibrationDialog(self.app, self, self.app)
         self._smart_dialog.show()
         self._smart_dialog.raise_()
+        self._smart_dialog.activateWindow()
 
     def set_smart_results(self, pairs, units="keV"):
         """Replace the points table with auto-matched (channel, energy) pairs.

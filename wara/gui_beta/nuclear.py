@@ -432,3 +432,21 @@ class NuclearLinePicker(QDialog):
             except (TypeError, ValueError, KeyError):
                 continue
         return out
+
+    def selected_lines(self):
+        """``(energy_keV, isotope)`` for each chosen row (for ``multi=True``).
+
+        Rows whose energy can't be parsed are skipped; the isotope falls back to
+        an empty string when the column is missing."""
+        model = self.table.model()
+        if model is None or model.rowCount() == 0:
+            return []
+        out = []
+        for i in sorted({idx.row() for idx in self.table.selectionModel().selectedRows()}):
+            row = model._df.iloc[i]
+            try:
+                energy = float(row["Energy (keV)"])
+            except (TypeError, ValueError, KeyError):
+                continue
+            out.append((energy, str(row.get("Isotope", "") or "")))
+        return out

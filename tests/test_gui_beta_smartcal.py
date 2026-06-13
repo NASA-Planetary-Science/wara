@@ -13,12 +13,16 @@ import numpy as np
 import pytest
 
 pytest.importorskip("PyQt5")
-from PyQt5.QtWidgets import QApplication, QListWidgetItem
+from PyQt5.QtWidgets import QApplication, QDialog, QListWidgetItem
 
 from wara import spectrum as sp
 from wara.peaksearch import PeakSearch
 from wara.gui_beta.app import WaraBetaApp
-from wara.gui_beta.smartcal import SmartCalibrationDialog
+from wara.gui_beta import smartcal
+from wara.gui_beta.smartcal import (
+    SmartCalibrationDialog, FavoriteEnergiesDialog,
+    load_favorite_lists, save_favorite_lists,
+)
 from wara.gui_beta.calibration import CH_COL, E_COL
 
 
@@ -188,3 +192,180 @@ class TestMultiLinePicker:
         out = picker.selected_energies()
         assert isinstance(out, list)
         picker.close()
+
+
+@pytest.fixture
+def fav_file(tmp_path, monkeypatch):
+    """Point favorite-energy persistence at a throwaway file."""
+    path = tmp_path / "favorite_energies.json"
+    monkeypatch.setattr(smartcal, "FAV_PATH", str(path))
+    return path
+
+
+def _energies_of(lst):
+    """Energies of a saved list (a list of {'energy','isotope'} dicts)."""
+    return [e["energy"] for e in lst]
+
+
+class TestFavoritePersistence:
+    def test_roundtrip_named_lists_with_isotopes(self, fav_file):
+        lists = {"API": [
+            {"energy": 1332.5, "isotope": "Co-60"},
+            {"energy": 1173.2, "isotope": "Co-60"},
+        ]}
+        save_favorite_lists(lists)
+        loaded = load_favorite_lists()
+        assert list(loaded) == ["API"]
+        # Sorted by energy, isotopes preserved.
+        assert loaded["API"] == [
+            {"energy": 1173.2, "isotope": "Co-60"},
+            {"energy": 1332.5, "isotope": "Co-60"},
+        ]
+
+    def test_dedup_within_list(self, fav_file):
+        cleaned = save_favorite_lists({"L": [
+            {"energy": 511.0, "isotope": "annih"},
+            {"energy": 511.0, "isotope": "dup"},
+        ]})
+        assert cleaned["L"] == [{"energy": 511.0, "isotope": "annih"}]
+
+    def test_load_missing_file_returns_empty(self, fav_file):
+        assert not fav_file.exists()
+        assert load_favorite_lists() == {}
+
+    def test_load_corrupt_file_returns_empty(self, fav_file):
+        fav_file.write_text("{ not json", encoding="utf-8")
+        assert load_favorite_lists() == {}
+
+    def test_v1_file_migrates_to_favorites_list(self, fav_file):
+        fav_file.write_text('{"version": 1, "energies": [20.0, 10.0]}', encoding="utf-8")
+        loaded = load_favorite_lists()
+        assert list(loaded) == ["Favorites"]
+        assert loaded["Favorites"] == [
+            {"energy": 10.0, "isotope": ""},
+            {"energy": 20.0, "isotope": ""},
+        ]
+
+    def test_skips_nonnumeric_energy_entries(self, fav_file):
+        cleaned = save_favorite_lists({"L": [
+            {"energy": 10.0, "isotope": "a"},
+            {"energy": "oops", "isotope": "b"},
+            {"energy": 20.0, "isotope": "c"},
+        ]})
+        assert _energies_of(cleaned["L"]) == [10.0, 20.0]
+
+
+class TestFavoriteEnergiesDialog:
+    def test_combo_lists_and_loads_table(self, qapp, fav_file):
+        save_favorite_lists({
+            "API": [{"energy": 100.0, "isotope": "X"}],
+            "BG":  [{"energy": 200.0, "isotope": "Y"}, {"energy": 300.0, "isotope": "Z"}],
+        })
+        dlg = FavoriteEnergiesDialog()
+        assert sorted(dlg.cmb.itemText(i) for i in range(dlg.cmb.count())) == ["API", "BG"]
+        dlg.cmb.setCurrentText("BG")
+        assert dlg.tbl.rowCount() == 2
+        assert dlg.selected_energies() == [200.0, 300.0]
+        dlg.close()
+
+    def test_new_list_creates_and_selects(self, qapp, fav_file, monkeypatch):
+        monkeypatch.setattr(smartcal.QInputDialog, "getText",
+                            staticmethod(lambda *a, **k: ("API", True)))
+        dlg = FavoriteEnergiesDialog()
+        dlg._new_list()
+        assert dlg._current_list_name() == "API"
+        assert "API" in load_favorite_lists()
+        dlg.close()
+
+    def test_add_row_and_edit_persists(self, qapp, fav_file, monkeypatch):
+        monkeypatch.setattr(smartcal.QInputDialog, "getText",
+                            staticmethod(lambda *a, **k: ("API", True)))
+        dlg = FavoriteEnergiesDialog()
+        dlg._new_list()
+        dlg._add_row_blank()
+        r = dlg.tbl.rowCount() - 1
+        dlg.tbl.item(r, smartcal.EN_COL).setText("661.7")    # commits → save
+        dlg.tbl.item(r, smartcal.ISO_COL).setText("Cs-137")
+        loaded = load_favorite_lists()["API"]
+        assert loaded == [{"energy": 661.7, "isotope": "Cs-137"}]
+        dlg.close()
+
+    def test_add_from_database_uses_energy_and_isotope(self, qapp, fav_file, monkeypatch):
+        monkeypatch.setattr(smartcal.QInputDialog, "getText",
+                            staticmethod(lambda *a, **k: ("API", True)))
+        # Stub the database picker: accept with two (energy, isotope) lines.
+        from wara.gui_beta import nuclear
+        monkeypatch.setattr(nuclear.NuclearLinePicker, "exec_", lambda self: QDialog.Accepted)
+        monkeypatch.setattr(nuclear.NuclearLinePicker, "selected_lines",
+                            lambda self: [(1173.2, "Co-60"), (1332.5, "Co-60")])
+        dlg = FavoriteEnergiesDialog()
+        dlg._new_list()
+        dlg._add_from_database()
+        assert load_favorite_lists()["API"] == [
+            {"energy": 1173.2, "isotope": "Co-60"},
+            {"energy": 1332.5, "isotope": "Co-60"},
+        ]
+        dlg.close()
+
+    def test_remove_rows_persists(self, qapp, fav_file):
+        save_favorite_lists({"API": [
+            {"energy": 100.0, "isotope": "a"},
+            {"energy": 200.0, "isotope": "b"},
+            {"energy": 300.0, "isotope": "c"},
+        ]})
+        dlg = FavoriteEnergiesDialog()
+        dlg.tbl.selectRow(1)                      # the 200.0 row
+        dlg._remove_rows()
+        assert _energies_of(load_favorite_lists()["API"]) == [100.0, 300.0]
+        dlg.close()
+
+    def test_rename_list(self, qapp, fav_file, monkeypatch):
+        save_favorite_lists({"API": [{"energy": 100.0, "isotope": "a"}]})
+        monkeypatch.setattr(smartcal.QInputDialog, "getText",
+                            staticmethod(lambda *a, **k: ("PGAA", True)))
+        dlg = FavoriteEnergiesDialog()
+        dlg._rename_list()
+        lists = load_favorite_lists()
+        assert "PGAA" in lists and "API" not in lists
+        assert dlg._current_list_name() == "PGAA"
+        dlg.close()
+
+    def test_delete_list(self, qapp, fav_file, monkeypatch):
+        save_favorite_lists({"API": [{"energy": 100.0, "isotope": "a"}],
+                             "BG": [{"energy": 200.0, "isotope": "b"}]})
+        monkeypatch.setattr(FavoriteEnergiesDialog, "_confirm", lambda self, text: True)
+        dlg = FavoriteEnergiesDialog()
+        dlg.cmb.setCurrentText("API")
+        dlg._delete_list()
+        assert list(load_favorite_lists()) == ["BG"]
+        dlg.close()
+
+    def test_selected_returns_only_highlighted(self, qapp, fav_file):
+        save_favorite_lists({"API": [
+            {"energy": 10.0, "isotope": "a"},
+            {"energy": 20.0, "isotope": "b"},
+            {"energy": 30.0, "isotope": "c"},
+        ]})
+        dlg = FavoriteEnergiesDialog()
+        dlg.tbl.selectRow(0)
+        dlg.tbl.item(2, smartcal.EN_COL).setSelected(True)
+        assert dlg.selected_energies() == [10.0, 30.0]
+        dlg.close()
+
+
+class TestFromFavoritesIntegration:
+    def test_from_favorites_adds_to_energy_column(self, app_with_peaks, fav_file, monkeypatch):
+        save_favorite_lists({"API": [
+            {"energy": 253.0, "isotope": "a"},
+            {"energy": 603.0, "isotope": "b"},
+        ]})
+        w = app_with_peaks
+        dlg = SmartCalibrationDialog(w, w.calibration, w)
+        # Auto-accept the favorites dialog; with nothing selected it returns all.
+        monkeypatch.setattr(FavoriteEnergiesDialog, "exec_", lambda self: QDialog.Accepted)
+
+        dlg._from_favorites()
+        assert sorted(dlg._values(dlg.lst_en)) == [253.0, 603.0]
+        # Adding again does not duplicate the already-present energies.
+        dlg._from_favorites()
+        assert sorted(dlg._values(dlg.lst_en)) == [253.0, 603.0]
