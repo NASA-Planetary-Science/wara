@@ -320,9 +320,11 @@ class NuclearLinePicker(QDialog):
     The last search (database + filters) is remembered across opens so the
     table comes back pre-populated."""
 
-    def __init__(self, parent=None, element=None):
+    def __init__(self, parent=None, element=None, multi=False):
         super().__init__(parent)
-        self.setWindowTitle("Select energy from database")
+        self._multi = multi
+        self.setWindowTitle("Select energies from database" if multi
+                            else "Select energy from database")
         self.setStyleSheet(T.STYLESHEET)
         # Stay above the (always-on-top) Drag-and-Fit window and its child dialog.
         self.setWindowFlag(Qt.WindowStaysOnTopHint, True)
@@ -354,7 +356,8 @@ class NuclearLinePicker(QDialog):
 
         self.table = QTableView()
         self.table.setSelectionBehavior(QAbstractItemView.SelectRows)
-        self.table.setSelectionMode(QAbstractItemView.SingleSelection)
+        self.table.setSelectionMode(QAbstractItemView.ExtendedSelection if multi
+                                    else QAbstractItemView.SingleSelection)
         self.table.setAlternatingRowColors(True)
         self.table.setSortingEnabled(True)
         self.table.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
@@ -416,3 +419,16 @@ class NuclearLinePicker(QDialog):
     def selected_isotope(self):
         row = self._selected_row()
         return "" if row is None else str(row.get("Isotope", ""))
+
+    def selected_energies(self):
+        """All chosen line energies in keV (for ``multi=True``). Empty if none."""
+        model = self.table.model()
+        if model is None or model.rowCount() == 0:
+            return []
+        out = []
+        for i in sorted({idx.row() for idx in self.table.selectionModel().selectedRows()}):
+            try:
+                out.append(float(model._df.iloc[i]["Energy (keV)"]))
+            except (TypeError, ValueError, KeyError):
+                continue
+        return out

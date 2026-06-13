@@ -613,11 +613,242 @@ def smart_calibration(
             "require_monotonic=False."
         )
     return best
-    
-    
-    
-    
-    
-    
-    
+
+
+# ---------------------------------------------------------------------------
+# Outlier-tolerant automatic calibration (RANSAC-style partial matching)
+# ---------------------------------------------------------------------------
+def _poly_is_increasing(coeffs_high_first, lo, hi, samples=256):
+    """True if the polynomial (np.polyfit order, highest degree first) is
+    strictly increasing across [lo, hi]. The derivative is checked on a dense
+    grid so curved (quadratic/cubic) fits cannot turn over *between* the fitted
+    points — unlike a check at the fitted x-values alone."""
+    deriv = np.polyder(np.poly1d(coeffs_high_first))
+    xs = np.linspace(lo, hi, samples)
+    return bool(np.all(deriv(xs) > 0))
+
+
+def _align_channels_to_energies(pred, ergs, tol):
+    """Order-preserving optimal matching between predicted energies ``pred``
+    (one per sorted channel) and candidate ``ergs`` (sorted).
+
+    Returns ``(count, cost, pairs)`` where *pairs* is a list of
+    ``(channel_index, energy_index)``. Maximises the number of matches, then
+    minimises the total absolute residual. A channel matches an energy only
+    when ``|pred_i - erg_j| <= tol``. This is the classic sequence-alignment
+    DP, which (because both sequences are sorted) yields a globally consistent,
+    one-to-one, monotone pairing — outliers on either side are simply skipped.
+    """
+    N, M = len(pred), len(ergs)
+    NEG = float("inf")
+    # dp[i][j] = (count, cost) for pred[:i] vs ergs[:j]; choice[i][j] records
+    # the move taken so we can backtrack the actual pairs.
+    dp = [[(0, 0.0)] * (M + 1) for _ in range(N + 1)]
+    choice = [[0] * (M + 1) for _ in range(N + 1)]   # 0 skip-ch, 1 skip-e, 2 match
+
+    def better(a, b):
+        return a[0] > b[0] or (a[0] == b[0] and a[1] < b[1])
+
+    for i in range(1, N + 1):
+        for j in range(1, M + 1):
+            best, mv = dp[i - 1][j], 0                 # skip channel i
+            if better(dp[i][j - 1], best):
+                best, mv = dp[i][j - 1], 1             # skip energy j
+            d = abs(pred[i - 1] - ergs[j - 1])
+            if d <= tol:
+                cand = (dp[i - 1][j - 1][0] + 1, dp[i - 1][j - 1][1] + d)
+                if better(cand, best):
+                    best, mv = cand, 2                 # match i-1 ↔ j-1
+            dp[i][j], choice[i][j] = best, mv
+
+    pairs = []
+    i, j = N, M
+    while i > 0 and j > 0:
+        mv = choice[i][j]
+        if mv == 2:
+            pairs.append((i - 1, j - 1)); i -= 1; j -= 1
+        elif mv == 1:
+            j -= 1
+        else:
+            i -= 1
+    pairs.reverse()
+    count, cost = dp[N][M]
+    return count, cost, pairs
+
+
+def smart_calibration_auto(
+    channels,
+    energies,
+    n: int = 1,
+    tol: float = None,
+    min_matches: int = None,
+    require_monotonic: bool = True,
+    channel_range=None,
+    max_exhaustive: int = 200_000,
+    max_iters: int = 5000,
+    random_state: int = 0):
+    """Automatically pair detected peaks with reference energies and calibrate,
+    tolerating spurious peaks and absent lines on *both* inputs.
+
+    Unlike :func:`smart_calibration`, this does **not** force every element of
+    the shorter list into the fit. It searches for the calibration that maps the
+    *largest consistent subset* of channels onto energies (RANSAC-style), so a
+    noise peak in ``channels`` or an energy line that is not actually present can
+    be left unmatched.
+
+    Algorithm
+    ---------
+    1. Draw a minimal sample of ``n + 1`` channel↔energy correspondences
+       (order-preserving). Small inputs are searched exhaustively (deterministic);
+       large inputs fall back to random sampling capped at ``max_iters``.
+    2. Fit the exact degree-``n`` polynomial through the sample and reject it if
+       it is not strictly increasing across ``channel_range``.
+    3. Score the model by how many of *all* channels it maps to within ``tol`` of
+       an available energy (optimal order-preserving assignment), breaking ties
+       by smallest total residual.
+    4. Refit a least-squares degree-``n`` polynomial on the best model's matched
+       (inlier) pairs — that refit is the returned calibration.
+
+    Parameters
+    ----------
+    channels, energies : array-like
+        Detected peak positions (channel) and candidate reference energies
+        (keV). Need not be sorted or the same length.
+    n : int
+        Polynomial degree, 1–3.
+    tol : float, optional
+        Energy match tolerance (keV). Defaults to ``0.3 * (smallest gap between
+        candidate energies)``, which protects against matching a peak to the
+        wrong (adjacent) line while staying permissive on calibration residuals.
+    min_matches : int, optional
+        Minimum number of matched pairs to accept a calibration. Defaults to
+        ``max(n + 1, 3)``.
+    require_monotonic : bool
+        Reject calibrations that are not strictly increasing over
+        ``channel_range`` (default True).
+    channel_range : (lo, hi), optional
+        Channel span over which monotonicity is enforced. Defaults to the span
+        of the input ``channels``. Pass the spectrum's full ``(0, n_channels)``
+        so the calibration is monotonic everywhere it will be applied.
+    max_exhaustive : int
+        If the number of minimal samples ``C(Nc, n+1) * C(Ne, n+1)`` does not
+        exceed this, every sample is tried (deterministic result). Otherwise a
+        random subset of ``max_iters`` samples is drawn.
+    max_iters : int
+        Number of random minimal samples when not searching exhaustively.
+    random_state : int
+        Seed for the random sampler (reproducible results).
+
+    Returns
+    -------
+    dict
+        ``c0, c1[, c2, c3]`` polynomial coefficients (ascending power),
+        ``coeffs`` (same, as a list), ``n``, ``channels`` and ``energies`` (the
+        matched, sorted pairs — feed straight into :class:`EnergyCalibration`),
+        ``pairs`` (list of ``(channel, energy)``), ``residuals`` (keV, per pair),
+        ``r2``, ``rmse``, ``n_matched``, ``unmatched_channels`` and
+        ``unmatched_energies``.
+
+    Raises
+    ------
+    ValueError
+        If ``n`` is not 1–3, too few inputs are supplied, or no calibration
+        reaches ``min_matches`` valid, monotonic pairs.
+    """
+    if n not in (1, 2, 3):
+        raise ValueError(f"n must be 1, 2 or 3; got {n}.")
+
+    ch = np.sort(np.asarray(channels, dtype=float))
+    en = np.sort(np.asarray(energies, dtype=float))
+    Nc, Ne = len(ch), len(en)
+    m = n + 1
+    if min_matches is None:
+        min_matches = max(m, 3)
+    if Nc < m or Ne < m:
+        raise ValueError(
+            f"Need at least {m} channels and {m} energies for a degree-{n} fit; "
+            f"got {Nc} channels and {Ne} energies.")
+
+    if tol is None:
+        gaps = np.diff(en)
+        gaps = gaps[gaps > 0]
+        tol = 0.3 * float(gaps.min()) if len(gaps) else 1.0
+        tol = max(tol, 1e-9)
+
+    if channel_range is None:
+        lo, hi = float(ch.min()), float(ch.max())
+    else:
+        lo, hi = float(channel_range[0]), float(channel_range[1])
+
+    # Enumerate (or sample) minimal channel/energy index subsets.
+    n_samples = comb(Nc, m) * comb(Ne, m)
+    if n_samples <= max_exhaustive:
+        sample_iter = (
+            (ci, ei)
+            for ci in combinations(range(Nc), m)
+            for ei in combinations(range(Ne), m))
+    else:
+        rng = np.random.default_rng(random_state)
+        def _random_samples():
+            for _ in range(max_iters):
+                ci = tuple(sorted(rng.choice(Nc, size=m, replace=False)))
+                ei = tuple(sorted(rng.choice(Ne, size=m, replace=False)))
+                yield ci, ei
+        sample_iter = _random_samples()
+
+    best_key = (0, np.inf)        # (match count ↑, total cost ↓)
+    best_pairs = None
+    for ci, ei in sample_iter:
+        x = ch[list(ci)]
+        y = en[list(ei)]
+        if len(np.unique(x)) < m:                 # degenerate sample
+            continue
+        coeffs = np.polyfit(x, y, n)              # exact through m points
+        if require_monotonic and not _poly_is_increasing(coeffs, lo, hi):
+            continue
+        pred = np.polyval(coeffs, ch)
+        count, cost, pairs = _align_channels_to_energies(pred, en, tol)
+        if count < min_matches:
+            continue
+        key = (count, -cost)                      # more matches, then less cost
+        if key[0] > best_key[0] or (key[0] == best_key[0] and cost < best_key[1]):
+            best_key = (count, cost)
+            best_pairs = pairs
+
+    if not best_pairs:
+        raise ValueError(
+            f"No calibration matched at least {min_matches} peaks to energies "
+            f"within {tol:.3g} keV. Loosen `tol`, add points, or check the data.")
+
+    ch_idx = [p[0] for p in best_pairs]
+    e_idx = [p[1] for p in best_pairs]
+    mx, my = ch[ch_idx], en[e_idx]
+
+    # Final least-squares refit on the matched inliers.
+    coeffs = np.polyfit(mx, my, n)                # high → low
+    y_pred = np.polyval(coeffs, mx)
+    residuals = my - y_pred
+    ss_res = float(np.sum(residuals ** 2))
+    ss_tot = float(np.sum((my - my.mean()) ** 2))
+    r2 = 1.0 - ss_res / ss_tot if ss_tot > 0 else 1.0
+    rmse = float(np.sqrt(ss_res / len(mx)))
+
+    asc = coeffs[::-1]                            # low → high: c0, c1, ...
+    result = {
+        "n": n,
+        "coeffs": [float(c) for c in asc],
+        "channels": mx.copy(),
+        "energies": my.copy(),
+        "pairs": list(zip(mx.tolist(), my.tolist())),
+        "residuals": residuals.tolist(),
+        "r2": float(r2),
+        "rmse": rmse,
+        "n_matched": len(mx),
+        "unmatched_channels": [float(c) for k, c in enumerate(ch) if k not in ch_idx],
+        "unmatched_energies": [float(e) for k, e in enumerate(en) if k not in e_idx],
+    }
+    for i, name in enumerate(("c0", "c1", "c2", "c3")[:n + 1]):
+        result[name] = float(asc[i])
+    return result
+
     

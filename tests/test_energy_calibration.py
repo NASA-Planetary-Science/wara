@@ -5,7 +5,8 @@ Pytest tests for EnergyCalibration class and smart_calibration function.
 import pytest
 import numpy as np
 
-from wara.energy_calibration import EnergyCalibration, smart_calibration
+from wara.energy_calibration import (
+    EnergyCalibration, smart_calibration, smart_calibration_auto)
 
 
 # ---------------------------------------------------------------------------
@@ -288,3 +289,102 @@ class TestSmartCalibration:
             max_combinations=1_000_000,
         )
         assert result["r2"] > 0.999
+
+
+# ---------------------------------------------------------------------------
+# smart_calibration_auto (RANSAC-style, outlier-tolerant)
+# ---------------------------------------------------------------------------
+
+AUTO_SLOPE = 0.5
+AUTO_INTERCEPT = 3.0
+
+
+def _line(chs):
+    return AUTO_INTERCEPT + AUTO_SLOPE * np.asarray(chs, dtype=float)
+
+
+class TestSmartCalibrationAuto:
+    def test_perfect_linear_recovers_coeffs(self):
+        ch = [100, 200, 300, 400, 500]
+        en = _line(ch)
+        r = smart_calibration_auto(ch, en.tolist())
+        assert r["c1"] == pytest.approx(AUTO_SLOPE, rel=1e-6)
+        assert r["c0"] == pytest.approx(AUTO_INTERCEPT, abs=1e-6)
+        assert r["n_matched"] == 5
+        assert r["rmse"] < 1e-6
+
+    def test_drops_spurious_channel(self):
+        """A noise peak with no matching energy must be left unmatched."""
+        ch = [100, 200, 300, 377, 400, 500]      # 377 is spurious
+        en = _line([100, 200, 300, 400, 500])
+        r = smart_calibration_auto(ch, en.tolist())
+        assert r["n_matched"] == 5
+        assert 377.0 in r["unmatched_channels"]
+        assert r["c1"] == pytest.approx(AUTO_SLOPE, rel=1e-3)
+
+    def test_drops_absent_energy(self):
+        """An energy line that is not present in the spectrum is left unmatched."""
+        ch = [100, 200, 300, 400, 500]
+        en = _line([100, 200, 250, 300, 400, 500])  # 250-channel line absent
+        r = smart_calibration_auto(ch, en.tolist())
+        assert r["n_matched"] == 5
+        assert r["c1"] == pytest.approx(AUTO_SLOPE, rel=1e-3)
+        assert pytest.approx(_line([250])[0]) in r["unmatched_energies"]
+
+    def test_pairs_are_consistent(self):
+        ch = [100, 200, 300, 400, 500]
+        en = _line(ch)
+        r = smart_calibration_auto(ch, en.tolist())
+        for c, e in r["pairs"]:
+            assert e == pytest.approx(AUTO_INTERCEPT + AUTO_SLOPE * c, abs=1e-6)
+
+    def test_handles_noisy_centroids(self):
+        rng = np.random.default_rng(1)
+        true_ch = np.array([120, 350, 610, 960, 1330, 1760], dtype=float)
+        en = _line(true_ch)
+        noisy = true_ch + rng.normal(0, 0.5, size=true_ch.size)
+        r = smart_calibration_auto(noisy.tolist(), en.tolist(), tol=5.0)
+        assert r["n_matched"] >= 5
+        assert r["c1"] == pytest.approx(AUTO_SLOPE, rel=0.05)
+
+    def test_quadratic_recovers_and_is_monotonic(self):
+        ch = np.array([100, 250, 450, 700, 1000, 1350], dtype=float)
+        en = 2.0 + 0.5 * ch + 1e-4 * ch ** 2
+        r = smart_calibration_auto(ch.tolist(), en.tolist(), n=2)
+        assert r["n"] == 2
+        assert r["c2"] == pytest.approx(1e-4, rel=0.05)
+        assert r["n_matched"] >= 5
+
+    def test_unmatched_when_no_consistent_set(self):
+        with pytest.raises(ValueError, match="No calibration matched"):
+            smart_calibration_auto([10, 400, 905], [5.0, 933.0, 17.0],
+                                   tol=0.01, min_matches=3)
+
+    def test_too_few_points_raises(self):
+        with pytest.raises(ValueError, match="at least"):
+            smart_calibration_auto([100], [50.0], n=1)
+
+    def test_bad_degree_raises(self):
+        with pytest.raises(ValueError, match="n must be"):
+            smart_calibration_auto([1, 2, 3, 4], [1, 2, 3, 4], n=5)
+
+    def test_large_input_uses_sampling(self):
+        """Many channels vs few energies: exhaustive search would blow up, so the
+        random sampler kicks in and still finds the calibration."""
+        rng = np.random.default_rng(0)
+        true_ch = np.array([200, 600, 1100, 1700, 2400], dtype=float)
+        en = _line(true_ch)
+        noise = rng.uniform(0, 4000, size=40)        # 40 spurious peaks
+        ch = np.concatenate([true_ch, noise])
+        r = smart_calibration_auto(ch.tolist(), en.tolist(),
+                                   tol=3.0, max_exhaustive=1000, max_iters=8000)
+        assert r["n_matched"] == 5
+        assert r["c1"] == pytest.approx(AUTO_SLOPE, rel=0.05)
+
+    def test_result_feeds_energy_calibration(self):
+        ch = [100, 200, 300, 400, 500]
+        en = _line(ch)
+        r = smart_calibration_auto(ch, en.tolist())
+        cal = EnergyCalibration(mean_vals=r["channels"], erg=r["energies"],
+                                channels=np.arange(600), n=r["n"])
+        assert cal.predicted is not None

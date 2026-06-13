@@ -27,7 +27,7 @@ search_hpge = ps.PeakSearch(spe_hpge, ref_x, ref_fwhm, fwhm_at_0, min_snr=100,
 pos_ergs = [2223.248, 3853.51, 6129.89-2*511, 6129.89-511, 6129.89]
 peak_chan = search_hpge.peaks_idx
 
-result = ecal.smart_calibration(channels=peak_chan, energies=pos_ergs) 
+result = ecal.smart_calibration_auto(channels=peak_chan, energies=pos_ergs) 
 print(result)
 
 ch = spe_hpge.channels

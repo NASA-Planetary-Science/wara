@@ -68,8 +68,8 @@ BKG_ARGS = {
 PEAKFIT_COLS = ["Centroid", "Area", "FWHM", "FWTM", "FWTM/FWHM", "Asym"]
 AREA_COLS = ["Region", "Area", ""]
 
-# Slightly lighter than the main plot (#07070f) for better contrast in the popup.
-FIT_PLOT_BG = "#161622"
+# Match the main Spectrum tab's plot background (pure black).
+FIT_PLOT_BG = T.BG_PLOT
 
 
 def _fmt(v, e):

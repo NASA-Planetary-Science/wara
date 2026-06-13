@@ -136,7 +136,16 @@ class SpectrumPage(QWidget):
         # Let the canvas reset the toolbar's view history on each redraw, so the
         # Home button always returns to the current full view.
         self.canvas.nav_toolbar = nav
-        lay.addWidget(nav)
+
+        # Live cursor readout (X in cyan, Counts in green), shown on the toolbar
+        # row so it steals no vertical space from the plot.
+        self.readout = QLabel("")
+        self.readout.setStyleSheet("font-size:14px; font-weight:700; padding:0 8px;")
+        toprow = QHBoxLayout(); toprow.setContentsMargins(0, 0, 0, 0); toprow.setSpacing(6)
+        toprow.addWidget(nav)
+        toprow.addStretch(1)
+        toprow.addWidget(self.readout)
+        lay.addLayout(toprow)
         lay.addWidget(self.canvas, stretch=1)
 
 
@@ -164,6 +173,7 @@ class WaraBetaApp(QMainWindow):
         self.spect = None
         self._spect_orig = None
         self.search = None
+        self._cursor_xlabel = "X"      # axis label shown in the cursor readout
         self._fit_window = None
         self._drag_fit_active = False
         self._remove_cal = False     # strip energy calibration in the recompute
@@ -308,6 +318,10 @@ class WaraBetaApp(QMainWindow):
         self.opt_panel.setVisible(has_opts)
         if has_opts:
             self._apply_opt_state()
+        # Re-discover saved calibration files each time the tab is opened, so
+        # files added/removed outside the GUI show up without a restart.
+        if name == "Calibration" and getattr(self, "calibration", None) is not None:
+            self.calibration.refresh_saved()
         self.statusBar().showMessage(f"  {name}")
 
     # ── Spectrum tab wiring ──────────────────────────────────────────────────
@@ -648,39 +662,39 @@ class WaraBetaApp(QMainWindow):
         self._rebuild_spectra_list()
         self._refresh()
 
-    def _replot(self, *args):
+    def _replot(self, *args, keep_zoom=False):
         if self.spect is None:
             return
         self.spectrum_page.canvas.plot_spectrum(
             self.spect, log_y=self.spectrum_opts.cb_log.isChecked(),
             label=self._display_name(self.spect, self._active_name),
-            xlabel=self._xlabel, ylabel=self._ylabel)
+            xlabel=self._xlabel, ylabel=self._ylabel, keep_zoom=keep_zoom)
 
-    def _refresh(self):
+    def _refresh(self, keep_zoom=False):
         """Replot and refresh the stat readouts. Any existing peak markers
-        refer to the previous data, so they are cleared."""
+        refer to the previous data, so they are cleared. ``keep_zoom`` preserves
+        the current pan/zoom (used by live Customize edits)."""
         if self.spect is None:
             return
         self.search = None
         self.spectrum_page.canvas.clear_snr()
         self.spectrum_page.canvas.set_peaks([])
-        self._replot()
+        self._replot(keep_zoom=keep_zoom)
         self._update_cursor_units()
         c = self.spect.counts
         self.spectrum_opts.set_stats(len(c), c.max(), c.sum())
 
     def _update_cursor_units(self):
-        """Set the CURSOR 'X' label to the active spectrum's actual x-units."""
+        """Remember the active spectrum's x-axis label for the cursor readout."""
         xu = self.spect.x_units if self.spect is not None else None
         if not xu:
-            unit = "ch/keV"
+            self._cursor_xlabel = "X"
         elif "(" in xu and ")" in xu:
-            unit = xu[xu.index("(") + 1:xu.rindex(")")]   # e.g. Energy (keV) -> keV
+            self._cursor_xlabel = f"X ({xu[xu.index('(') + 1:xu.rindex(')')]})"  # Energy (keV) -> X (keV)
         elif xu.lower().startswith("chan"):
-            unit = "ch"
+            self._cursor_xlabel = "X (ch)"
         else:
-            unit = xu
-        self.spectrum_opts.key_cur_x.setText(f"X ({unit})")
+            self._cursor_xlabel = f"X ({xu})"
 
     def _clear(self):
         self.spect = None
@@ -694,14 +708,18 @@ class WaraBetaApp(QMainWindow):
         self.spectrum_page.canvas.clear_ref_lines()
         self.spectrum_page.canvas.draw_empty()
         self.spectrum_opts.clear_stats()
-        self.spectrum_opts.key_cur_x.setText("X (ch/keV)")
+        self._cursor_xlabel = "X"
+        self.spectrum_page.readout.setText("")
         self._rebuild_spectra_list()
         self._file_label.setText("")
         self.statusBar().showMessage("  Cleared")
 
     def _on_cursor(self, x, y):
-        self.spectrum_opts.val_cur_x.setText(f"{x:.2f}")
-        self.spectrum_opts.val_cur_y.setText(f"{int(y):,}")
+        xlabel = getattr(self, "_cursor_xlabel", "X")
+        self.spectrum_page.readout.setText(
+            f"<span style='color:{T.ACCENT_CYAN}'>{xlabel}: {x:.2f}</span>"
+            f"&nbsp;&nbsp;&nbsp;&nbsp;"
+            f"<span style='color:{T.ACCENT_GREEN}'>Counts: {int(y):,}</span>")
 
     # ── Peak finding ─────────────────────────────────────────────────────────
     # Detector presets: (SNR, ref. channel, ref. FWHM) — mirrors legacy wara.
@@ -988,7 +1006,10 @@ class WaraBetaApp(QMainWindow):
             self.statusBar().showMessage(f"  {exc}")
             return
         self.spect = s
-        self._refresh()
+        # Keep the user's pan/zoom when tweaking Customize options live (same as
+        # toggling "Show peaks") — they're adjusting the current view, not loading
+        # new data.
+        self._refresh(keep_zoom=True)
 
     def _reset_customize_checks(self):
         for cb in self._cust_checks:
@@ -1009,6 +1030,10 @@ class WaraBetaApp(QMainWindow):
             return
         self._remove_cal = True
         self._recompute()
+        # The calibration is no longer on the spectrum — revert the Calibration
+        # tab's Apply button from its green "applied" state back to cyan.
+        if getattr(self, "calibration", None) is not None:
+            self.calibration._mark_applied(False)
         self.statusBar().showMessage("  Calibration removed  ·  Reset Spectrum to restore")
 
     def _reset_spectrum(self):

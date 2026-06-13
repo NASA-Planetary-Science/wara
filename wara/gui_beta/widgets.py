@@ -166,13 +166,14 @@ class SpectrumCanvas(FigureCanvas):
             sp.set_color(T.BORDER)
         self.draw_idle()
 
-    def plot_spectrum(self, spect, log_y=False, label=None, xlabel=None, ylabel=None):
+    def plot_spectrum(self, spect, log_y=False, label=None, xlabel=None, ylabel=None,
+                      keep_zoom=False):
         self._spect = spect
         self._log = log_y
         self._active_label = label
         self._xlabel = xlabel
         self._ylabel = ylabel
-        self._redraw(keep_zoom=False)
+        self._redraw(keep_zoom=keep_zoom)
 
     def set_overlays(self, items):
         """items: list of (x, y, label, color) for kept/overlaid spectra."""
@@ -487,13 +488,10 @@ class SpectrumOptions(QScrollArea):
         title = QLabel("SPECTRUM"); title.setObjectName("opt_title")
         lay.addWidget(title); lay.addWidget(hsep())
 
-        # Live readouts
-        lay.addWidget(header("CURSOR"))
-        r, self.val_cur_x = stat_row("X (ch/keV)", T.ACCENT_CYAN); lay.addWidget(r)
-        self.key_cur_x = r.layout().itemAt(0).widget()   # the "X (…)" label
-        r, self.val_cur_y = stat_row("Counts", T.ACCENT_GREEN); lay.addWidget(r)
+        # Live readouts. The cursor position is shown below the plot (see
+        # SpectrumPage), so only the static stats live here.
         lay.addWidget(header("STATS"))
-        r, self.val_channels = stat_row("Channels"); lay.addWidget(r)
+        r, self.val_channels = stat_row("Channels", T.ACCENT_CYAN); lay.addWidget(r)
         r, self.val_max = stat_row("Max Counts", T.ACCENT_AMBER); lay.addWidget(r)
         r, self.val_total = stat_row("Total Counts"); lay.addWidget(r)
 
@@ -639,8 +637,7 @@ class SpectrumOptions(QScrollArea):
         self.val_total.setText(fmt_count(total))
 
     def clear_stats(self):
-        for v in (self.val_channels, self.val_max, self.val_total,
-                  self.val_cur_x, self.val_cur_y):
+        for v in (self.val_channels, self.val_max, self.val_total):
             v.setText("—")
 
 
