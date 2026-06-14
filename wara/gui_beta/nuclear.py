@@ -183,7 +183,7 @@ class NuclearDatabaseDialog(QDialog):
         self.table.setSelectionBehavior(QAbstractItemView.SelectRows)
         self.table.setAlternatingRowColors(True)
         self.table.setSortingEnabled(True)
-        self.table.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self.table.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
         self.table.setToolTip("Click a column header to sort; select rows to plot only those")
         lay.addWidget(self.table, stretch=1)
 
@@ -269,7 +269,7 @@ class NuclearDatabaseDialog(QDialog):
             return
         self._df = df
         self.table.setModel(_PandasModel(df))
-        self.table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
+        T.make_headers_readable(self.table)
         self.lbl_count.setText(f"{len(df)} lines  ·  select rows to plot a subset")
 
     def _lines(self):
@@ -360,7 +360,7 @@ class NuclearLinePicker(QDialog):
                                     else QAbstractItemView.SingleSelection)
         self.table.setAlternatingRowColors(True)
         self.table.setSortingEnabled(True)
-        self.table.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self.table.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
         self.table.setToolTip("Pick a line, then OK (or double-click a row)")
         self.table.doubleClicked.connect(lambda *_: self.accept())
         lay.addWidget(self.table, stretch=1)
@@ -389,7 +389,7 @@ class NuclearLinePicker(QDialog):
             return
         self._df = df
         self.table.setModel(_PandasModel(df))
-        self.table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
+        T.make_headers_readable(self.table)
         # Remember this search so the next picker opens pre-populated.
         _LAST_LINE_SEARCH.update(
             database=self.db_combo.currentText(),
@@ -419,6 +419,28 @@ class NuclearLinePicker(QDialog):
     def selected_isotope(self):
         row = self._selected_row()
         return "" if row is None else str(row.get("Isotope", ""))
+
+    def selected_record(self):
+        """Full record for the chosen line: isotope plus any of energy /
+        intensity / half-life present in the database (missing fields → None).
+        Used by the Efficiency tab to auto-fill half-life and branching ratio."""
+        row = self._selected_row()
+        if row is None:
+            return None
+
+        def num(col):
+            try:
+                val = row[col]
+            except (KeyError, TypeError):
+                return None
+            return float(val) if not pd.isna(val) else None
+
+        return {
+            "isotope": str(row.get("Isotope", "") or ""),
+            "energy": num("Energy (keV)"),
+            "intensity": num("Intensity (%)"),
+            "half_life": num("Half life (s)"),
+        }
 
     def selected_energies(self):
         """All chosen line energies in keV (for ``multi=True``). Empty if none."""

@@ -2,9 +2,7 @@
 Efficiency curve example.
 Data file: data/test_data_lab_sources.cnf
 """
-import numpy as np
 from wara import file_reader
-from wara import spectrum as sp
 from wara import peaksearch as ps
 from wara import peakfit as pf
 from wara import efficiency

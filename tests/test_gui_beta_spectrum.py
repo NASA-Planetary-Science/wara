@@ -81,3 +81,19 @@ def test_clear_empties_readout(app):
     app._on_cursor(10.0, 20.0)
     app._clear()
     assert app.spectrum_page.readout.text() == ""
+
+
+def test_long_spectrum_name_is_elided_not_widening_panel(app):
+    """A long file name is elided to a capped width so it stays visible but does
+    not force the fixed-width options panel wider (which clipped the buttons on
+    the right). The full name remains in the tooltip."""
+    from PyQt5.QtWidgets import QPushButton
+    long_name = "a_really_quite_long_spectrum_file_name_2024_run42_cal.txt"
+    row = app._make_spectrum_row(
+        long_name, "#00e5ff", True, on_toggle=lambda *_: None,
+        on_remove=lambda *_: None, on_activate=lambda *_: None)
+    name_btn = row.findChild(QPushButton, "spectrum_name")
+    assert name_btn.maximumWidth() <= 160          # width-capped to fit the panel
+    assert name_btn.text()                          # still visible (not empty)
+    assert name_btn.text() != long_name             # ...and shortened (elided)
+    assert long_name in name_btn.toolTip()          # full name in the tooltip

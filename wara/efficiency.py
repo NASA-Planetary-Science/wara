@@ -88,7 +88,7 @@ class Efficiency:
         dfdb = self.A0 * np.exp(-lmd * self.t_elapsed) * self.livetime
         dfdtc = self.A0 * np.exp(-lmd * self.t_elapsed) * self.Br
         sig_f = np.sqrt(
-            dfdA0**2 * A0_sig
+            dfdA0**2 * A0_sig**2
             + dfdlmd**2 * lmd_sig**2
             + dfdte**2 * t_elapsed_sig**2
             + dfdb**2 * Br_sig**2

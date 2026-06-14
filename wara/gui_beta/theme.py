@@ -2,6 +2,7 @@
 import matplotlib
 from PyQt5.QtCore import Qt, QSize
 from PyQt5.QtGui import QColor, QPixmap, QPainter, QIcon, QBrush
+from PyQt5.QtWidgets import QHeaderView
 
 # ── Palette ─────────────────────────────────────────────────────────────────
 BG_DARK      = "#0a0a0f"
@@ -42,7 +43,7 @@ NAV_SECTIONS = [
 ]
 
 # Tabs with a real/mocked options column. Others collapse the column.
-TABS_WITH_OPTIONS = {"Spectrum", "Calibration"}
+TABS_WITH_OPTIONS = {"Spectrum", "Calibration", "Efficiency", "Resolution"}
 
 
 def apply_mpl_theme():
@@ -61,6 +62,16 @@ def apply_mpl_theme():
         "text.color":        TEXT_PRIMARY,
         "savefig.facecolor": BG_PLOT,
     })
+
+
+def make_headers_readable(table):
+    """Size every column to fit its header + contents (so column titles never
+    truncate), let the last column absorb any slack (no blank gap on the right),
+    and scroll horizontally when the columns overflow the viewport."""
+    hh = table.horizontalHeader()
+    hh.setSectionResizeMode(QHeaderView.ResizeToContents)
+    hh.setStretchLastSection(True)
+    table.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
 
 
 def dot_icon(color, size=14):
@@ -144,6 +155,16 @@ QPushButton#applied_btn {{
     border-radius: 5px; padding: 8px 13px; font-size: 14px; font-weight: 700;
 }}
 QPushButton#applied_btn:hover {{ background-color: #266026; }}
+/* "✓ Sent" confirmation state for the Drag-and-Fit send buttons: a bright,
+   filled green that stands out from their resting (amber / outlined) look. */
+QPushButton#sent_btn {{
+    background-color: {ACCENT_GREEN}; color: {BG_DARK}; border: 2px solid {ACCENT_GREEN};
+    border-radius: 5px; padding: 8px 13px; font-size: 14px; font-weight: 800;
+}}
+QPushButton#sent_btn:hover {{ background-color: #6bff4a; border-color: #6bff4a; }}
+QPushButton#sent_btn:disabled {{
+    background-color: #1c4a1c; color: {ACCENT_GREEN}; border: 2px solid {ACCENT_GREEN};
+}}
 QPushButton#find_btn {{
     background-color: #1e2a5e; color: #b8c4ff; border: 2px solid #7b8cff;
     border-radius: 5px; padding: 8px 13px; font-size: 14px; font-weight: 700;
@@ -276,5 +297,11 @@ QLabel#placeholder {{ color: {TEXT_DIM}; font-size: 19px; font-weight: 700; lett
 QStatusBar {{
     background: {BG_PANEL}; color: {TEXT_DIM}; border-top: 1px solid {BORDER};
     font-size: 13px; letter-spacing: 1px;
+}}
+
+QToolTip {{
+    background-color: {BG_PANEL}; color: {TEXT_PRIMARY};
+    border: 1px solid {BORDER_BTN}; border-radius: 4px; padding: 5px 7px;
+    font-size: 13px;
 }}
 """

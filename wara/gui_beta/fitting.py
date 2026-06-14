@@ -22,7 +22,8 @@ from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
 from PyQt5.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QLabel, QComboBox, QCheckBox, QSpinBox,
     QDoubleSpinBox, QPushButton, QTableWidget, QTableWidgetItem, QHeaderView,
-    QSizePolicy, QSlider, QWidget, QTextEdit, QDialogButtonBox,
+    QSizePolicy, QSlider, QWidget, QTextEdit, QDialogButtonBox, QToolTip,
+    QApplication,
 )
 from PyQt5.QtCore import Qt, pyqtSignal
 from PyQt5.QtGui import QFont
@@ -206,6 +207,8 @@ class FitWindow(QDialog):
 
     roi_changed = pyqtSignal(float, float)   # emitted when the ROI is edited here
     send_to_calibration = pyqtSignal(list, str)   # ([(channel, energy_str), …], units)
+    send_to_efficiency = pyqtSignal(object)       # the peak-fit object
+    send_to_resolution = pyqtSignal(object)       # the peak-fit object
 
     def __init__(self, parent, search):
         super().__init__(parent)
@@ -219,6 +222,7 @@ class FitWindow(QDialog):
         self._roi_lo, self._roi_hi = 0.0, 1.0   # initial ROI (slider bounds)
         self.N = 1000                             # slider resolution
         self.last_fit = None                      # most recent peak-fit object
+        self._iso_cache = {}                      # {round(centroid, 3): ID HTML}
 
         outer = QVBoxLayout(self)
 
@@ -315,6 +319,24 @@ class FitWindow(QDialog):
         self.btn_to_cal.setCursor(Qt.PointingHandCursor)
         self.btn_to_cal.clicked.connect(self._emit_centroids)
         crow.addWidget(self.btn_to_cal)
+        self.btn_to_eff = QPushButton("📈  Send to Efficiency")
+        self.btn_to_eff.setObjectName("fit_btn")
+        self.btn_to_eff.setToolTip(
+            "Send this peak fit to the Efficiency tab to build an efficiency "
+            "point from one of its peaks.")
+        self.btn_to_eff.setEnabled(False)
+        self.btn_to_eff.setCursor(Qt.PointingHandCursor)
+        self.btn_to_eff.clicked.connect(self._emit_to_efficiency)
+        crow.addWidget(self.btn_to_eff)
+        self.btn_to_res = QPushButton("📏  Send to Resolution")
+        self.btn_to_res.setObjectName("danger_btn")   # red — matches the Resolution tab
+        self.btn_to_res.setToolTip(
+            "Send this peak fit to the Resolution tab to add its peak FWHM(s) to "
+            "the resolution (FWHM vs energy) curve.")
+        self.btn_to_res.setEnabled(False)
+        self.btn_to_res.setCursor(Qt.PointingHandCursor)
+        self.btn_to_res.clicked.connect(self._emit_to_resolution)
+        crow.addWidget(self.btn_to_res)
         crow.addStretch(1)
         self.btn_close = QPushButton("Close"); self.btn_close.setObjectName("action_btn")
         self.btn_close.clicked.connect(self.close)
@@ -460,7 +482,36 @@ class FitWindow(QDialog):
         has_report = (self.last_fit is not None
                       and getattr(self.last_fit, "fit_result", None) is not None)
         self.btn_details.setEnabled(has_report)
+        # A new fit means the peaks changed — clear any "✓ Sent" confirmation so
+        # the buttons reflect that this fit hasn't been sent yet.
+        self._reset_send_buttons()
         self.btn_to_cal.setEnabled(self.last_fit is not None)
+        # Efficiency / Resolution need per-peak info (area, centroid, FWHM),
+        # which the net-area method does not produce.
+        has_peaks = self.last_fit is not None and bool(getattr(self.last_fit, "peak_info", None))
+        self.btn_to_eff.setEnabled(has_peaks)
+        self.btn_to_res.setEnabled(has_peaks)
+
+    # Default object name + label for each send button (its resting appearance).
+    _SEND_DEFAULTS = {
+        "btn_to_cal": ("yellow_btn", "📐  Send centroids to Calibration"),
+        "btn_to_eff": ("fit_btn", "📈  Send to Efficiency"),
+        "btn_to_res": ("danger_btn", "📏  Send to Resolution"),
+    }
+
+    def _mark_sent(self, button, sent_text):
+        """Switch a send button to the bright green "✓ Sent" confirmation look."""
+        button.setText(sent_text)
+        button.setObjectName("sent_btn")
+        button.style().unpolish(button); button.style().polish(button)
+
+    def _reset_send_buttons(self):
+        """Restore both send buttons to their resting label / style."""
+        for name, (obj, text) in self._SEND_DEFAULTS.items():
+            button = getattr(self, name)
+            if button.objectName() != obj:
+                button.setObjectName(obj); button.setText(text)
+                button.style().unpolish(button); button.style().polish(button)
 
     def _build_peakfit(self):
         """
@@ -693,10 +744,22 @@ class FitWindow(QDialog):
         # measured FWTM, the FWTM/FWHM tailing ratio (1.823 for a Gaussian)
         # and the low-energy asymmetry — valid for every line shape.
         df = shape_summary(fit)
+        self._iso_cache.clear()                   # centroids changed
         unit = self._x_unit_label()
+        # The fitted centroid is the precise energy, so offer per-line isotope ID
+        # — but only on a calibrated spectrum (otherwise the centroid is channels).
+        calibrated = getattr(self._search.spectrum, "energies", None) is not None
         headers = [f"Centroid ({unit})", "Area", f"FWHM ({unit})",
                    f"FWTM ({unit})", "FWTM/FWHM", "Asym"]
+        if calibrated:
+            headers.append("ID")
         self._set_columns(headers)
+        if calibrated:
+            # Keep the ID column narrow so the data columns get the space.
+            hh = self.table.horizontalHeader()
+            hh.setSectionResizeMode(QHeaderView.Stretch)
+            hh.setSectionResizeMode(len(headers) - 1, QHeaderView.Fixed)
+            self.table.setColumnWidth(len(headers) - 1, 30)
         self._set_header_tooltips({
             2: "Fitted FWHM (from the Gaussian sigma; exact for a Gaussian, "
                "approximate for Voigt/EMG/Hypermet — see FWTM/FWHM).",
@@ -733,6 +796,39 @@ class FitWindow(QDialog):
                 if c in tips:
                     item.setToolTip(tips[c])
                 self.table.setItem(i, c, item)
+            if calibrated:
+                self._add_id_button(i, len(cells), float(row["mean"]))
+
+    def _add_id_button(self, table_row, col, centroid):
+        """A small per-line button that identifies the fitted centroid energy."""
+        btn = QPushButton("⚛"); btn.setObjectName("mini_btn")
+        btn.setToolTip("Identify the likely isotope(s) for this fitted centroid")
+        btn.setCursor(Qt.PointingHandCursor)
+        btn.clicked.connect(lambda _=False, e=centroid, b=btn: self._identify_centroid(e, b))
+        self.table.setCellWidget(table_row, col, btn)
+
+    def _identify_centroid(self, energy, button):
+        """Identify *energy* (cached per centroid), show it as a popup at the
+        button, and keep it as the button's tooltip for later hovers."""
+        from . import isotope_id   # lazy: pulls in the heavy identifier
+        key = round(energy, 3)
+        html = self._iso_cache.get(key)
+        if html is None:
+            # The other found peaks give context so this centroid can be flagged
+            # as a possible escape peak of another line.
+            spect = self._search.spectrum
+            idx = getattr(self._search, "peaks_idx", None)
+            context = [float(spect.x[i]) for i in idx] if idx is not None else []
+            QApplication.setOverrideCursor(Qt.WaitCursor)
+            try:
+                html = isotope_id.lookup_html(energy, context=context)
+            except Exception as exc:  # noqa: BLE001 — never crash the fit window
+                html = f"Isotope ID failed: {exc}"
+            finally:
+                QApplication.restoreOverrideCursor()
+            self._iso_cache[key] = html
+        button.setToolTip(html)
+        QToolTip.showText(button.mapToGlobal(button.rect().center()), html, button)
 
     def _set_header_tooltips(self, tips):
         """Attach tooltips to header sections by column index."""
@@ -856,6 +952,25 @@ class FitWindow(QDialog):
             self.send_to_calibration.emit(pairs, dlg.selected_units())
             self.lbl_status.setText(
                 f"Sent {len(pairs)} centroid(s) to the Calibration tab.")
+            self._mark_sent(self.btn_to_cal, "✓  Sent to Calibration")
+
+    def _emit_to_efficiency(self):
+        """Hand the current peak fit to the Efficiency tab."""
+        if self.last_fit is None or not getattr(self.last_fit, "peak_info", None):
+            return
+        n = len(self.last_fit.peak_info)
+        self.send_to_efficiency.emit(self.last_fit)
+        self.lbl_status.setText(f"Sent fit ({n} peak(s)) to the Efficiency tab.")
+        self._mark_sent(self.btn_to_eff, "✓  Sent to Efficiency")
+
+    def _emit_to_resolution(self):
+        """Hand the current peak fit to the Resolution tab."""
+        if self.last_fit is None or not getattr(self.last_fit, "peak_info", None):
+            return
+        n = len(self.last_fit.peak_info)
+        self.send_to_resolution.emit(self.last_fit)
+        self.lbl_status.setText(f"Sent fit ({n} peak(s)) to the Resolution tab.")
+        self._mark_sent(self.btn_to_res, "✓  Sent to Resolution")
 
     def _show_fit_details(self):
         fit = self.last_fit

@@ -140,6 +140,21 @@ class SpectrumCanvas(FigureCanvas):
         self.nav_toolbar = None   # set by the page; its view history is reset on redraw
         self._span = None         # Drag-and-Fit ROI selector
         self._roi_active = False
+        # Isotope-ID hover: show the likely isotopes for the peak under the cursor
+        # as a themed HTML tooltip (a child QLabel, so colours are easy and it
+        # needs no canvas redraw).
+        self._iso_on = False
+        self._iso_info = {}       # {round(peak_x, 3): HTML candidate text}
+        self._iso_hover = None    # peak key currently shown (None = nothing)
+        self._iso_label = QLabel(self)
+        self._iso_label.setObjectName("iso_tooltip")
+        self._iso_label.setTextFormat(Qt.RichText)
+        self._iso_label.setAttribute(Qt.WA_TransparentForMouseEvents, True)
+        self._iso_label.setStyleSheet(
+            f"QLabel#iso_tooltip {{ background: {T.BG_PANEL}; color: {T.TEXT_PRIMARY};"
+            f" border: 1px solid {T.ACCENT_GREEN}; border-radius: 6px; padding: 6px 9px;"
+            f" font-family: {T.MONO_FAMILY}; font-size: 13px; }}")
+        self._iso_label.hide()
         self.mpl_connect("motion_notify_event", self._on_move)
         self.mpl_connect("button_press_event", self._on_click)
         self.draw_empty()
@@ -196,8 +211,71 @@ class SpectrumCanvas(FigureCanvas):
         self._show_peaks = show
         self._redraw()
 
+    def peak_xs(self):
+        """X positions (energies, if calibrated) of the current peak markers."""
+        return [p[0] for p in self._peaks]
+
     def set_manual(self, on):
         self._manual = on
+
+    # ── Isotope-ID hover ──────────────────────────────────────────────────────
+    def set_isotope_id(self, on, info=None):
+        """Enable the hover-to-identify overlay. ``info`` maps ``round(peak_x, 3)``
+        to the HTML candidate text shown when that peak is hovered."""
+        self._iso_on = bool(on)
+        self._iso_info = dict(info) if info else {}
+        if not self._iso_on:
+            self._iso_hover = None
+            self._iso_label.hide()
+
+    def _update_iso_hover(self, event):
+        """Show/hide the isotope-ID annotation as the cursor nears a peak line."""
+        if (not self._iso_on or not self._show_peaks or not self._peaks
+                or event.inaxes != self.ax or event.x is None):
+            self._hide_iso_annot()
+            return
+        # Nearest peak in screen-x (peaks are vertical lines, so y is ignored).
+        best_x, best_y, best_d = None, 0.0, 1e9
+        for px, py, _lbl in self._peaks:
+            disp = self.ax.transData.transform((px, 0))[0]
+            d = abs(disp - event.x)
+            if d < best_d:
+                best_d, best_x, best_y = d, px, py
+        if best_x is None or best_d > 12:           # not hovering a peak
+            self._hide_iso_annot()
+            return
+        key = round(best_x, 3)
+        if key == self._iso_hover:                  # already showing this one
+            return
+        text = self._iso_info.get(key)
+        if not text:
+            self._hide_iso_annot()
+            return
+        self._iso_hover = key
+        self._show_iso_annot(best_x, best_y, text)
+
+    def _show_iso_annot(self, px, py, html):
+        lbl = self._iso_label
+        lbl.setText(html)
+        lbl.adjustSize()
+        # Place the tooltip just above-right of the peak. transData gives display
+        # pixels (origin bottom-left, physical); convert to the widget's logical
+        # top-left coordinates and clamp inside the canvas.
+        disp = self.ax.transData.transform((px, py))
+        dpr = self.devicePixelRatioF() or 1.0
+        x = disp[0] / dpr + 14
+        y = (self.figure.bbox.height - disp[1]) / dpr - lbl.height() - 14
+        x = int(min(max(0, x), max(0, self.width() - lbl.width())))
+        y = int(min(max(0, y), max(0, self.height() - lbl.height())))
+        lbl.move(x, y)
+        lbl.show()
+        lbl.raise_()
+
+    def _hide_iso_annot(self):
+        if self._iso_hover is None:
+            return
+        self._iso_hover = None
+        self._iso_label.hide()
 
     # ── Drag-and-Fit ROI selection ───────────────────────────────────────────
     def enable_roi(self):
@@ -271,6 +349,11 @@ class SpectrumCanvas(FigureCanvas):
         ax = self.ax
         xlim, ylim = (ax.get_xlim(), ax.get_ylim()) if keep_zoom else (None, None)
         ax.clear()
+        # Peak positions may have moved; hide the isotope-ID tooltip until the
+        # next hover repositions it.
+        self._iso_hover = None
+        if getattr(self, "_iso_label", None) is not None:
+            self._iso_label.hide()
         ax.set_facecolor(T.BG_PLOT)
         ax.patch.set_visible(True)
         # Drop any previous SNR twin axis before (maybe) recreating it.
@@ -360,9 +443,10 @@ class SpectrumCanvas(FigureCanvas):
         self.ax2.patch.set_visible(False)
 
     def _on_move(self, event):
-        if event.inaxes != self.ax:
-            return
-        self.cursor_moved.emit(event.xdata or 0.0, event.ydata or 0.0)
+        if event.inaxes == self.ax:
+            self.cursor_moved.emit(event.xdata or 0.0, event.ydata or 0.0)
+        if self._iso_on:
+            self._update_iso_hover(event)
 
     def _on_click(self, event):
         if (self._manual and event.inaxes == self.ax
@@ -522,6 +606,11 @@ class SpectrumOptions(QScrollArea):
         self.cb_peaks = QCheckBox("Show Peaks"); self.cb_peaks.setChecked(True)
         self.cb_peaks.setToolTip("Show or hide the peak markers on the plot")
         lay.addWidget(self.cb_peaks)
+        self.cb_isotope_id = QCheckBox("Isotope ID")
+        self.cb_isotope_id.setToolTip(
+            "Hover a found peak to see the most likely isotope from each nuclear "
+            "database, with a probability.\nNeeds a calibrated spectrum with found peaks.")
+        lay.addWidget(self.cb_isotope_id)
         self.btn_fit = QPushButton("Drag and Fit"); self.btn_fit.setObjectName("fit_btn")
         self.btn_fit.setCheckable(True)
         self.btn_fit.setToolTip(

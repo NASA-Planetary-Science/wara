@@ -156,8 +156,9 @@ class TestPeakFitTable:
         window.set_roi(1106, 1214)   # cebr is calibrated in keV
         n = window.table.columnCount()
         headers = [window.table.horizontalHeaderItem(c).text() for c in range(n)]
+        # A calibrated spectrum also gets a trailing "ID" (isotope-ID) column.
         assert headers == ["Centroid (keV)", "Area", "FWHM (keV)",
-                           "FWTM (keV)", "FWTM/FWHM", "Asym"]
+                           "FWTM (keV)", "FWTM/FWHM", "Asym", "ID"]
 
     def test_area_is_raw_counts_despite_livetime(self, hpge_search, hpge_window):
         """Regression: peak area is net counts (not counts/sec) even when the
@@ -269,12 +270,12 @@ class TestEnrichedTable:
 
     def test_area_method_resets_columns(self, window):
         window.show()
-        window.set_roi(1106, 1214)            # peak fit -> 6 columns
-        assert window.table.columnCount() == 6
+        window.set_roi(1106, 1214)            # peak fit -> 6 cols + ID (calibrated)
+        assert window.table.columnCount() == 7
         window.method.setCurrentIndex(1)       # net area -> 3 columns
         assert window.table.columnCount() == 3
-        window.method.setCurrentIndex(0)       # back -> 6 columns
-        assert window.table.columnCount() == 6
+        window.method.setCurrentIndex(0)       # back -> 6 cols + ID
+        assert window.table.columnCount() == 7
 
 
 # ---------------------------------------------------------------------------
@@ -402,3 +403,74 @@ class TestNuclearLinePickerMemory:
         assert p2.db_combo.currentText() == "TALYS 14 MeV"
         assert p2.ed_element.text() == "56Fe"
         assert p2.table.model().rowCount() > 0      # opens pre-populated
+
+
+class TestSendButtonStates:
+    """The 'Send to Calibration / Efficiency' buttons flip to a bright '✓ Sent'
+    look on a successful send, and reset when a new fit is computed."""
+
+    def test_send_to_efficiency_marks_sent(self, window):
+        window.show()
+        window.set_roi(1106, 1214)
+        assert window.btn_to_eff.objectName() == "fit_btn"
+        window._emit_to_efficiency()
+        assert window.btn_to_eff.objectName() == "sent_btn"
+        assert "Sent" in window.btn_to_eff.text()
+
+    def test_new_fit_resets_sent_state(self, window):
+        window.show()
+        window.set_roi(1106, 1214)
+        window._emit_to_efficiency()
+        assert window.btn_to_eff.objectName() == "sent_btn"
+        window.set_roi(1100, 1220)                       # a new fit
+        assert window.btn_to_eff.objectName() == "fit_btn"
+        assert window.btn_to_eff.text() == "📈  Send to Efficiency"
+
+    def test_mark_and_reset_calibration_button(self, window):
+        window.show()
+        window.set_roi(1106, 1214)
+        window._mark_sent(window.btn_to_cal, "✓  Sent to Calibration")
+        assert window.btn_to_cal.objectName() == "sent_btn"
+        window._reset_send_buttons()
+        assert window.btn_to_cal.objectName() == "yellow_btn"
+        assert window.btn_to_cal.text() == "📐  Send centroids to Calibration"
+
+
+class TestIsotopeIdColumn:
+    """The Drag-and-Fit results table offers per-line isotope ID (a 🧬 button)
+    when the spectrum is calibrated, identifying the precise fitted centroid."""
+
+    def test_id_column_present_when_calibrated(self, window):
+        window.show()
+        window.set_roi(1106, 1214)
+        headers = [window.table.horizontalHeaderItem(i).text()
+                   for i in range(window.table.columnCount())]
+        assert headers[-1] == "ID"
+        btn = window.table.cellWidget(0, window.table.columnCount() - 1)
+        assert btn is not None and btn.text() == "⚛"
+
+    def test_clicking_id_button_identifies_centroid(self, window):
+        window.show()
+        window.set_roi(1106, 1214)
+        col = window.table.columnCount() - 1
+        btn = window.table.cellWidget(0, col)
+        centroid = float(window.last_fit.peak_info[0]["mean"])
+        window._identify_centroid(centroid, btn)
+        assert "keV" in btn.toolTip()                      # colored HTML popup text
+        assert round(centroid, 3) in window._iso_cache     # cached for re-hover
+
+    def test_no_id_column_when_uncalibrated(self, qapp):
+        import numpy as np
+        from wara import spectrum as sp
+        from wara.peaksearch import PeakSearch
+        ch = np.arange(4096)
+        counts = np.full_like(ch, 5.0, dtype=float)
+        counts += 6000.0 * np.exp(-0.5 * ((ch - 2000) / 3.0) ** 2)
+        spect = sp.Spectrum(counts=counts)                 # channel axis, no energy
+        w = FitWindow(None, PeakSearch(spect, ref_x=2000, ref_fwhm=3,
+                                       fwhm_at_0=1.0, min_snr=4))
+        w.set_roi(1960, 2040)
+        headers = [w.table.horizontalHeaderItem(i).text()
+                   for i in range(w.table.columnCount())]
+        assert "ID" not in headers
+        w.close()

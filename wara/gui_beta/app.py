@@ -36,6 +36,8 @@ from .io import load_spectrum_file, OPEN_FILTER
 from .nuclear import NuclearDatabaseDialog
 from .fitting import FitWindow
 from .calibration import CalibrationOptions, CalibrationPage, CalibrationController
+from .efficiency import EfficiencyOptions, EfficiencyPage, EfficiencyController
+from .resolution import ResolutionOptions, ResolutionPage, ResolutionController
 
 LOGO_PATH = str(files("wara").joinpath("ui/wara-logo.png"))
 
@@ -183,6 +185,8 @@ class WaraBetaApp(QMainWindow):
         self._active_visible = True
         self._overlays = []          # kept spectra: list of dicts (spect/name/visible)
         self._opt_collapsed = False
+        self._iso_key = None         # peak-energy signature the iso-ID cache was built for
+        self._iso_info_cache = None
 
         central = QWidget(); self.setCentralWidget(central)
         root = QHBoxLayout(central)
@@ -199,6 +203,10 @@ class WaraBetaApp(QMainWindow):
         self._wire_spectrum_tab()
         self.calibration = CalibrationController(
             self, self.calibration_opts, self.calibration_page)
+        self.efficiency = EfficiencyController(
+            self, self.efficiency_opts, self.efficiency_page)
+        self.resolution = ResolutionController(
+            self, self.resolution_opts, self.resolution_page)
         self._rebuild_spectra_list()
         self.statusBar().showMessage("  Ready  ·  open a spectrum file to begin")
 
@@ -262,11 +270,17 @@ class WaraBetaApp(QMainWindow):
         self.opt_stack = QStackedWidget()
         self.spectrum_opts = SpectrumOptions()
         self.calibration_opts = CalibrationOptions()
+        self.efficiency_opts = EfficiencyOptions()
+        self.resolution_opts = ResolutionOptions()
         for name, _c in NAV_SECTIONS:
             if name == "Spectrum":
                 self.opt_stack.addWidget(self.spectrum_opts)
             elif name == "Calibration":
                 self.opt_stack.addWidget(self.calibration_opts)
+            elif name == "Efficiency":
+                self.opt_stack.addWidget(self.efficiency_opts)
+            elif name == "Resolution":
+                self.opt_stack.addWidget(self.resolution_opts)
             else:
                 self.opt_stack.addWidget(PlaceholderOptions(name))
         outer.addWidget(self.opt_stack, stretch=1)
@@ -301,11 +315,17 @@ class WaraBetaApp(QMainWindow):
         self.stack = QStackedWidget()
         self.spectrum_page = SpectrumPage()
         self.calibration_page = CalibrationPage()
+        self.efficiency_page = EfficiencyPage()
+        self.resolution_page = ResolutionPage()
         for name, _c in NAV_SECTIONS:
             if name == "Spectrum":
                 self.stack.addWidget(self.spectrum_page)
             elif name == "Calibration":
                 self.stack.addWidget(self.calibration_page)
+            elif name == "Efficiency":
+                self.stack.addWidget(self.efficiency_page)
+            elif name == "Resolution":
+                self.stack.addWidget(self.resolution_page)
             else:
                 self.stack.addWidget(PlaceholderPage(name))
         return self.stack
@@ -354,6 +374,7 @@ class WaraBetaApp(QMainWindow):
         pf.btn_clear.clicked.connect(self._clear_peaks)
         pf.detector.currentTextChanged.connect(self._apply_detector_preset)
         opts.cb_peaks.toggled.connect(self.spectrum_page.canvas.set_show_peaks)
+        opts.cb_isotope_id.toggled.connect(self._toggle_isotope_id)
         pf.cb_snr.toggled.connect(self._toggle_snr)
         opts.cb_manual.toggled.connect(self._toggle_manual)
         # Entering zoom/pan takes over canvas clicks — drop manual peak mode.
@@ -527,8 +548,11 @@ class WaraBetaApp(QMainWindow):
         h.addWidget(swatch)
         name_btn = QPushButton()
         name_btn.setObjectName("spectrum_name_active" if active else "spectrum_name")
-        name_btn.setMaximumWidth(200)
-        name_btn.setText(name_btn.fontMetrics().elidedText(name, Qt.ElideMiddle, 190))
+        # Elide a long file name to a width that fits the fixed options panel
+        # (a longer cap pushed the row past the panel and clipped the buttons on
+        # the right). The full name stays available in the tooltip.
+        name_btn.setMaximumWidth(150)
+        name_btn.setText(name_btn.fontMetrics().elidedText(name, Qt.ElideMiddle, 140))
         name_btn.setToolTip(name + ("  (active)" if active else "  ·  click to make active"))
         if on_activate is not None:
             name_btn.setCursor(Qt.PointingHandCursor)
@@ -683,6 +707,8 @@ class WaraBetaApp(QMainWindow):
         self._update_cursor_units()
         c = self.spect.counts
         self.spectrum_opts.set_stats(len(c), c.max(), c.sum())
+        # Peaks were just cleared; drop the isotope-ID overlay until they return.
+        self._refresh_isotope_id()
 
     def _update_cursor_units(self):
         """Remember the active spectrum's x-axis label for the cursor readout."""
@@ -786,6 +812,7 @@ class WaraBetaApp(QMainWindow):
         self.spectrum_page.canvas.set_peaks(peaks)
         if self.spectrum_opts.pf_panel.cb_snr.isChecked():
             self._draw_snr()
+        self._refresh_isotope_id()
         self.statusBar().showMessage(f"  Found {len(peaks)} peaks")
 
     def _toggle_snr(self, checked):
@@ -827,6 +854,7 @@ class WaraBetaApp(QMainWindow):
         self.spectrum_opts.cb_peaks.setChecked(True)
         self.spectrum_page.canvas.add_peak(px, py, f"{px:.1f}")
         self._inject_manual_peak(idx)
+        self._refresh_isotope_id()
         self.statusBar().showMessage(f"  Added peak at {px:.1f}")
 
     def _ensure_search(self):
@@ -862,7 +890,74 @@ class WaraBetaApp(QMainWindow):
         self.search = None
         self.spectrum_page.canvas.clear_snr()
         self.spectrum_page.canvas.set_peaks([])
+        self._refresh_isotope_id()
         self.statusBar().showMessage("  Peaks cleared")
+
+    # ── Isotope ID (hover to identify) ────────────────────────────────────────
+    @staticmethod
+    def _iso_tol(energy):
+        from . import isotope_id
+        return isotope_id.default_tol(energy)
+
+    def _toggle_isotope_id(self, checked):
+        if not checked:
+            self.spectrum_page.canvas.set_isotope_id(False)
+            self.statusBar().showMessage("  Isotope ID off")
+            return
+        self._refresh_isotope_id(announce=True)
+
+    def _refresh_isotope_id(self, announce=False):
+        """(Re)build the hover-identification overlay. Active only when the box is
+        ticked, the spectrum is calibrated, and a peak search has found lines."""
+        opts = self.spectrum_opts
+        if not opts.cb_isotope_id.isChecked():
+            self.spectrum_page.canvas.set_isotope_id(False)
+            return
+        calibrated = self.spect is not None and getattr(self.spect, "energies", None) is not None
+        has_peaks = (self.search is not None
+                     and getattr(self.search, "peaks_idx", None) is not None
+                     and len(self.search.peaks_idx) > 0
+                     and bool(self.spectrum_page.canvas.peak_xs()))
+        if not (calibrated and has_peaks):
+            self.spectrum_page.canvas.set_isotope_id(False)
+            if announce:
+                self.statusBar().showMessage(
+                    "  Isotope ID needs a calibrated spectrum with found peaks")
+            return
+        QApplication.setOverrideCursor(Qt.WaitCursor)
+        try:
+            info = self._compute_isotope_info()
+        finally:
+            QApplication.restoreOverrideCursor()
+        self.spectrum_page.canvas.set_isotope_id(True, info)
+        if announce:
+            self.statusBar().showMessage("  Isotope ID on  ·  hover a peak to see candidates")
+
+    def _compute_isotope_info(self):
+        """Identify every found-peak energy across all databases; cache the
+        per-peak hover text keyed by the peak position."""
+        from . import isotope_id   # lazy: pulls in the heavy identifier
+        energies = [float(x) for x in self.spectrum_page.canvas.peak_xs()]
+        key = tuple(round(e, 3) for e in energies)
+        if key == self._iso_key and self._iso_info_cache is not None:
+            return self._iso_info_cache
+        try:
+            results = isotope_id.identify(energies)
+            escapes = isotope_id.escape_relations(energies)
+        except Exception as exc:  # noqa: BLE001 — surface, don't crash the GUI
+            self.statusBar().showMessage(f"  Isotope ID failed: {exc}")
+            return {}
+        info = {round(e, 3): isotope_id.format_html(e, results, escapes.get(e))
+                for e in energies}
+        self._iso_key = key
+        self._iso_info_cache = info
+        return info
+
+    @staticmethod
+    def _format_iso_text(energy, results):
+        """Colored HTML hover text (shared with the Drag-and-Fit ID popup)."""
+        from . import isotope_id
+        return isotope_id.format_html(energy, results)
 
     # ── Drag and Fit ─────────────────────────────────────────────────────────
     def _toggle_drag_fit(self):
@@ -902,6 +997,8 @@ class WaraBetaApp(QMainWindow):
             self._fit_window.finished.connect(self._on_fit_window_closed)
             self._fit_window.roi_changed.connect(self._on_fit_roi_changed)
             self._fit_window.send_to_calibration.connect(self.calibration.add_centroids)
+            self._fit_window.send_to_efficiency.connect(self.efficiency.receive_fit)
+            self._fit_window.send_to_resolution.connect(self.resolution.receive_fit)
         self._fit_window.set_search(self.search)
         # Tell the fit window whether the Calibration tab has already locked its
         # energy units, so its "send centroids" dialog can honour that.
