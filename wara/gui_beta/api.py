@@ -81,8 +81,8 @@ TYPE_RAW, TYPE_CAL, TYPE_SIMS = "raw", "calibrated", "sims"
 # Send-to-Spectrum button: resting label vs the green "Sent" confirmation. Kept
 # short (and the same length) so the button fits the original-width options panel
 # without forcing it wider; the green styling is the "sent" signal.
-SEND_DEFAULT_TEXT = "Send spectrum"
-SEND_SENT_TEXT = "Spectrum sent"
+SEND_DEFAULT_TEXT = "Send to spectrum"
+SEND_SENT_TEXT = "Sent to spectrum"
 
 
 class ApiFilterDialog(QDialog):
@@ -738,12 +738,42 @@ class ApiController:
             self.xkey, self.ykey, self._chan_key = "X2", "Y2", "energy_orig"
             self.xyplane = (-0.9, 0.9, -0.9, 0.9)
             chan_range = [0, 2 ** 16]
+        # Fit the X-Y extent to where the hits actually land instead of the
+        # detector's full physical plane. Most runs illuminate only a central
+        # patch, so the fixed plane left the map floating in empty space (and the
+        # cursor reporting coordinates out there). The hardcoded plane above stays
+        # as the fallback for empty/degenerate data.
+        self.xyplane = self._fit_xyplane(self.df_current, self.xkey, self.ykey,
+                                         fallback=self.xyplane)
         if self.e_units is not None and "energy_cal" in self.df_current.columns:
             self.ekey = "energy_cal"
             self.erange = [0.0, float(self.df_current["energy_cal"].max())]
         else:
             self.ekey = self._chan_key
             self.erange = chan_range
+
+    @staticmethod
+    def _fit_xyplane(df, xkey, ykey, fallback, pad=0.06):
+        """Square X-Y extent that snugly bounds the hit positions (plus a small
+        margin) so the map fills its panel. Bounds come from the 0.2–99.8
+        percentiles, so a handful of stray edge events from position
+        reconstruction can't blow the view back out to the full plane. Returns
+        *fallback* when the data is empty or has no spread."""
+        if df is None or df.shape[0] == 0 or xkey not in df or ykey not in df:
+            return fallback
+        x = df[xkey].to_numpy(dtype=float); y = df[ykey].to_numpy(dtype=float)
+        m = np.isfinite(x) & np.isfinite(y)
+        x, y = x[m], y[m]
+        if x.size == 0:
+            return fallback
+        xlo, xhi = np.percentile(x, [0.2, 99.8])
+        ylo, yhi = np.percentile(y, [0.2, 99.8])
+        cx, cy = (xlo + xhi) / 2.0, (ylo + yhi) / 2.0
+        half = max(xhi - xlo, yhi - ylo) / 2.0
+        if half <= 0:
+            return fallback
+        half *= (1.0 + pad)
+        return (cx - half, cx + half, cy - half, cy + half)
 
     def _initialize_plots(self):
         self.page.build_axes(flood_field=self.flood_field)
@@ -859,6 +889,11 @@ class ApiController:
         mappable = ax.collections[-1] if ax.collections else None
         spacing = (self.xyplane[1] - self.xyplane[0]) / self.hexbins
         self.page.set_xy_lookup(mappable, log, spacing ** 2)
+        # Pin the axes to the hexbin extent. Otherwise hexbin autoscales with a
+        # 5% margin, so the axis range runs wider than the drawn hexagons and a
+        # black band (no hexagon → cursor reads no intensity) rings the map.
+        ax.set_xlim(self.xyplane[0], self.xyplane[1])
+        ax.set_ylim(self.xyplane[2], self.xyplane[3])
         ax.set_xlabel("X"); ax.set_ylabel("Y")
         self.page._style(ax, grid=False)
         self.page.canvas.draw_idle()
