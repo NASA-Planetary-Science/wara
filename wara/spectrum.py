@@ -142,7 +142,7 @@ class Spectrum:
         Spectrum
             A new Spectrum object with copied data and metadata.
         """
-        return Spectrum(
+        new = Spectrum(
             counts=self.counts.copy(),
             counts_err=self.counts_err.copy(),
             energies=self.energies.copy() if self.energies is not None else None,
@@ -155,6 +155,11 @@ class Spectrum:
             description=self.description,
             label=self.label,
         )
+        # Preserve a non-default channel axis. __init__ resets channels to 0..N
+        # indices, but spectra sent from the API tab carry their real channel
+        # values; losing them would break a follow-up calibration.
+        new.channels = self.channels.copy()
+        return new
 
     def smooth(self, num=4):
         """

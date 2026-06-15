@@ -120,6 +120,13 @@ class TestCopy:
         assert copy.livetime == spec_no_cal.livetime
         assert copy.label == spec_no_cal.label
 
+    def test_copy_preserves_custom_channels(self, spec_no_cal):
+        # API spectra carry real channel values (not 0..N indices); copy() must
+        # keep them so a follow-up calibration fits against the true channels.
+        spec_no_cal.channels = spec_no_cal.channels + 1000.0
+        copy = spec_no_cal.copy()
+        assert np.array_equal(copy.channels, spec_no_cal.channels)
+
 
 # ---------------------------------------------------------------------------
 # smooth()

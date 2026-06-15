@@ -957,6 +957,11 @@ class CalibrationController:
             description=spect.description,
             label=spect.label,
         )
+        # Preserve the original channel axis. Spectrum.__init__ resets channels to
+        # 0..N indices, but API spectra carry their *real* channel values (set in
+        # the API tab's _send_to_spectrum). Dropping them would make a follow-up
+        # calibration fit/predict against indices instead of the true channels.
+        new.channels = spect.channels.copy()
         app = self.app
         app.spect = new
         app._spect_orig = new.copy()

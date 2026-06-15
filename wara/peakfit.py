@@ -414,8 +414,12 @@ class PeakFit:
         if spect.energies is None:
             correct_f = 1.0
         else:
-            che = self.chan[maskx]
-            correct_f = float(np.diff(spect.energies[che]).mean())
+            # Mean bin width in x-units (energy/bin) across the ROI. self.x is
+            # the energy axis here, so index it positionally with maskx — do NOT
+            # use channel *values* as indices (they are only 0..N positional
+            # indices for spectra that haven't carried a real channel axis, e.g.
+            # API-sent spectra, where energies[channel_value] is out of range).
+            correct_f = float(np.diff(self.x[maskx]).mean())
 
         for i in range(npeaks):
             mean0 = fit0.best_values[f"g{i+1}_center"]

@@ -1145,3 +1145,40 @@ class TestPeakConstraintsRealData:
         s = fit.summary().sort_values("mean")
         lo, hi = s.iloc[0], s.iloc[1]
         assert hi["area"] / lo["area"] == pytest.approx(0.70, rel=1e-4)
+
+
+# ---------------------------------------------------------------------------
+# Calibrated spectrum carrying a real (offset) channel axis
+#
+# Spectra sent from the API tab keep their real channel values on
+# spect.channels (not 0..N indices). A peak fit on such a spectrum after
+# calibration must not index energies/channels positionally with those channel
+# values — see peakfit.gaussians_bkg's bin-width correction factor, which used
+# to crash with "arrays used as indices must be of integer type" / IndexError.
+# ---------------------------------------------------------------------------
+
+from wara import spectrum as _sp  # noqa: E402
+
+
+class TestCalibratedOffsetChannels:
+    @pytest.fixture
+    def offset_search(self):
+        nb = 600
+        ch = np.arange(4000, 4000 + nb, dtype=float)   # real ADC channels
+        counts = 50 + 800 * np.exp(-0.5 * ((ch - 4300) / 4) ** 2)
+        counts = np.random.default_rng(0).poisson(counts).astype(float)
+        # Build like the API "send to Spectrum" + Calibration "apply" flow:
+        # energies present, but channels are the real offset values.
+        spect = _sp.Spectrum(counts=counts, energies=0.5 * ch, e_units="keV")
+        spect.channels = ch.copy()
+        return ps.PeakSearch(spect, ref_x=300.0, ref_fwhm=3.0, fwhm_at_0=1.0,
+                             min_snr=2, method="fast")
+
+    def test_fit_does_not_crash_and_locates_peak(self, offset_search):
+        fit = adv.MultiProfilePeakFit(offset_search, [2140.0, 2160.0],
+                                      bkg="poly1", profile="gauss",
+                                      shared_sigma=True)
+        s = fit.summary()
+        # peak at channel 4300 → energy 2150 keV; area ~ counts under the peak
+        assert s.iloc[0]["mean"] == pytest.approx(2150.0, abs=1.0)
+        assert s.iloc[0]["area"] > 5000
