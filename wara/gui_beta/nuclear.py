@@ -147,8 +147,8 @@ class NuclearDatabaseDialog(QDialog):
         super().__init__(parent)
         self.setWindowTitle("Nuclear Database")
         self.setStyleSheet(T.STYLESHEET)
-        self.setMinimumSize(640, 560)
-        self.resize(780, 580)
+        self.setMinimumSize(640, 600)
+        self.resize(780, 760)
         self._df = pd.DataFrame()
         self._color = T.REF_LINE
 

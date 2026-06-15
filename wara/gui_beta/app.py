@@ -38,6 +38,7 @@ from .fitting import FitWindow
 from .calibration import CalibrationOptions, CalibrationPage, CalibrationController
 from .efficiency import EfficiencyOptions, EfficiencyPage, EfficiencyController
 from .resolution import ResolutionOptions, ResolutionPage, ResolutionController
+from .api import ApiOptions, ApiPage, ApiController
 
 LOGO_PATH = str(files("wara").joinpath("ui/wara-logo.png"))
 
@@ -152,7 +153,8 @@ class SpectrumPage(QWidget):
 
 
 class WaraBetaApp(QMainWindow):
-    OPT_W = 270
+    OPT_W = 270   # shared by every tab's options panel (original design width)
+    _FILE_LABEL_MAXW = 280   # px; longer spectrum names are elided (full name on hover)
 
     def __init__(self, file_name=None, cli_opts=None):
         super().__init__()
@@ -198,6 +200,7 @@ class WaraBetaApp(QMainWindow):
         # Permanent file-name readout on the right of the status bar.
         self._file_label = QLabel("")
         self._file_label.setStyleSheet(f"color: {T.TEXT_DIM}; padding-right: 12px;")
+        self._file_label.setMaximumWidth(self._FILE_LABEL_MAXW + 24)
         self.statusBar().addPermanentWidget(self._file_label)
 
         self._wire_spectrum_tab()
@@ -207,6 +210,7 @@ class WaraBetaApp(QMainWindow):
             self, self.efficiency_opts, self.efficiency_page)
         self.resolution = ResolutionController(
             self, self.resolution_opts, self.resolution_page)
+        self.api = ApiController(self, self.api_opts, self.api_page)
         self._rebuild_spectra_list()
         self.statusBar().showMessage("  Ready  ·  open a spectrum file to begin")
 
@@ -272,6 +276,7 @@ class WaraBetaApp(QMainWindow):
         self.calibration_opts = CalibrationOptions()
         self.efficiency_opts = EfficiencyOptions()
         self.resolution_opts = ResolutionOptions()
+        self.api_opts = ApiOptions()
         for name, _c in NAV_SECTIONS:
             if name == "Spectrum":
                 self.opt_stack.addWidget(self.spectrum_opts)
@@ -281,6 +286,8 @@ class WaraBetaApp(QMainWindow):
                 self.opt_stack.addWidget(self.efficiency_opts)
             elif name == "Resolution":
                 self.opt_stack.addWidget(self.resolution_opts)
+            elif name == "API":
+                self.opt_stack.addWidget(self.api_opts)
             else:
                 self.opt_stack.addWidget(PlaceholderOptions(name))
         outer.addWidget(self.opt_stack, stretch=1)
@@ -317,6 +324,7 @@ class WaraBetaApp(QMainWindow):
         self.calibration_page = CalibrationPage()
         self.efficiency_page = EfficiencyPage()
         self.resolution_page = ResolutionPage()
+        self.api_page = ApiPage()
         for name, _c in NAV_SECTIONS:
             if name == "Spectrum":
                 self.stack.addWidget(self.spectrum_page)
@@ -326,6 +334,8 @@ class WaraBetaApp(QMainWindow):
                 self.stack.addWidget(self.efficiency_page)
             elif name == "Resolution":
                 self.stack.addWidget(self.resolution_page)
+            elif name == "API":
+                self.stack.addWidget(self.api_page)
             else:
                 self.stack.addWidget(PlaceholderPage(name))
         return self.stack
@@ -438,6 +448,16 @@ class WaraBetaApp(QMainWindow):
         except Exception as exc:  # noqa: BLE001 — surface any read error to the user
             QMessageBox.critical(self, "Load Error", str(exc))
             return
+        self._set_active_spectrum(new_spect, os.path.basename(path))
+        c = self.spect.counts
+        n_over = len(self._overlays)
+        extra = f"  ·  {n_over} overlaid" if n_over else ""
+        self.statusBar().showMessage(
+            f"  Loaded  ·  {len(c):,} channels  ·  {int(c.sum()):,} total counts{extra}")
+
+    def _set_active_spectrum(self, new_spect, name):
+        """Make *new_spect* the active spectrum and refresh the Spectrum tab.
+        Shared by file loads and spectra handed in from other tabs (e.g. API)."""
         # Overlay handling: if "Keep spectrum visible" is on, freeze the current
         # spectrum as an overlay before the new one becomes active.
         if self.spectrum_opts.cb_keep.isChecked():
@@ -451,7 +471,10 @@ class WaraBetaApp(QMainWindow):
             self._overlays = []
 
         self.spect = new_spect
-        self._active_name = os.path.basename(path)
+        # Keep names unique among the held spectra: a same-named spectrum (e.g.
+        # "API energy spectrum" sent twice, or the same file reloaded with "keep
+        # visible" on) gets a " 2", " 3", … suffix.
+        self._active_name = self._unique_name(name)
         self._active_visible = True
         self._remove_cal = False
         self._xlabel = self._ylabel = None
@@ -462,12 +485,37 @@ class WaraBetaApp(QMainWindow):
         self._update_overlays()
         self._rebuild_spectra_list()
         self._refresh()
-        self._file_label.setText(f"📄 {self._active_name}")
-        c = self.spect.counts
-        n_over = len(self._overlays)
-        extra = f"  ·  {n_over} overlaid" if n_over else ""
-        self.statusBar().showMessage(
-            f"  Loaded  ·  {len(c):,} channels  ·  {int(c.sum()):,} total counts{extra}")
+        self._set_file_label(f"📄 {self._active_name}")
+
+    def _unique_name(self, name):
+        """Return *name*, or *name* with a numeric suffix if another currently
+        held spectrum (an overlay) already uses it."""
+        existing = {rec["name"] for rec in self._overlays}
+        if name not in existing:
+            return name
+        i = 2
+        while f"{name} {i}" in existing:
+            i += 1
+        return f"{name} {i}"
+
+    def _set_file_label(self, text):
+        """Show the active spectrum name in the status bar, elided to a maximum
+        width with the full name available on hover."""
+        if not text:
+            self._file_label.setText("")
+            self._file_label.setToolTip("")
+            return
+        fm = self._file_label.fontMetrics()
+        self._file_label.setText(fm.elidedText(text, Qt.ElideMiddle, self._FILE_LABEL_MAXW))
+        self._file_label.setToolTip(text)
+
+    def load_external_spectrum(self, spect, name, switch_tab=True):
+        """Receive a Spectrum built by another tab (API "send to Spectrum") and
+        make it active. Optionally switch to the Spectrum tab."""
+        self._set_active_spectrum(spect, name)
+        if switch_tab:
+            self.nav_group.button(0).setChecked(True)
+            self._on_nav(0)
 
     def _apply_cli_opts(self, opts):
         """Apply CLI options (--labr, --hpge, --min_snr, etc.) after loading."""
@@ -595,7 +643,7 @@ class WaraBetaApp(QMainWindow):
         self.spectrum_page.canvas.set_active_visible(self._active_visible)
         self._reset_customize_checks()
         self._sync_cps_checkbox()
-        self._file_label.setText(f"📄 {self._active_name}")
+        self._set_file_label(f"📄 {self._active_name}")
         self._update_overlays()
         self._rebuild_spectra_list()
         self._refresh()
@@ -681,7 +729,7 @@ class WaraBetaApp(QMainWindow):
         self.spectrum_page.canvas.set_active_visible(True)
         self._reset_customize_checks()
         self._sync_cps_checkbox()
-        self._file_label.setText(f"∑ {label}")
+        self._set_file_label(f"∑ {label}")
         self._update_overlays()
         self._rebuild_spectra_list()
         self._refresh()
@@ -737,7 +785,7 @@ class WaraBetaApp(QMainWindow):
         self._cursor_xlabel = "X"
         self.spectrum_page.readout.setText("")
         self._rebuild_spectra_list()
-        self._file_label.setText("")
+        self._set_file_label("")
         self.statusBar().showMessage("  Cleared")
 
     def _on_cursor(self, x, y):

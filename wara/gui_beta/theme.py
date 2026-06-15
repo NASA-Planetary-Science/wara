@@ -43,7 +43,7 @@ NAV_SECTIONS = [
 ]
 
 # Tabs with a real/mocked options column. Others collapse the column.
-TABS_WITH_OPTIONS = {"Spectrum", "Calibration", "Efficiency", "Resolution"}
+TABS_WITH_OPTIONS = {"Spectrum", "Calibration", "Efficiency", "Resolution", "API"}
 
 
 def apply_mpl_theme():

@@ -794,6 +794,27 @@ class CalibrationController:
         self._smart_dialog.raise_()
         self._smart_dialog.activateWindow()
 
+    def current_calibration(self):
+        """The active calibration as ``(coeffs_ascending, units)``, or ``None``
+        when no calibration is set. Coefficients are read from the equation boxes,
+        which mirror both the auto-fit and the 'set from equation' paths. Used by
+        other tabs (e.g. the API tab's 'Retrieve calibration')."""
+        if self.predicted is None:
+            return None
+        coeffs = []
+        for ed in (self.opts.coef_a, self.opts.coef_b,
+                   self.opts.coef_c, self.opts.coef_d):
+            txt = ed.text().strip()
+            try:
+                coeffs.append(float(txt) if txt else 0.0)
+            except ValueError:
+                coeffs.append(0.0)
+        while len(coeffs) > 2 and coeffs[-1] == 0.0:   # trim unused high-order terms
+            coeffs.pop()
+        if all(c == 0.0 for c in coeffs):
+            return None
+        return coeffs, self.opts.units.currentText()
+
     def set_smart_results(self, pairs, units="keV"):
         """Replace the points table with auto-matched (channel, energy) pairs.
 

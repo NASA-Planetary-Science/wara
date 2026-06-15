@@ -120,7 +120,13 @@ class SpectrumCanvas(FigureCanvas):
     roi_selected = pyqtSignal(float, float)    # Drag-and-Fit region selected
 
     def __init__(self):
-        self.fig = Figure(figsize=(10, 5), tight_layout=True, facecolor=T.BG_PLOT)
+        # NB: no tight_layout=True here. That installs the *dynamic* layout
+        # engine, which re-fits the axes box on every draw — including the
+        # SpanSelector's blit-background capture and the post-selection redraw —
+        # making the spectrum visibly shift at the start/end of a drag-and-fit.
+        # We apply tight layout explicitly instead (see _tighten), only when the
+        # content actually changes (_redraw / draw_empty) and on resize.
+        self.fig = Figure(figsize=(10, 5), facecolor=T.BG_PLOT)
         self.ax = self.fig.add_subplot(111)
         super().__init__(self.fig)
         self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
@@ -157,6 +163,19 @@ class SpectrumCanvas(FigureCanvas):
         self._iso_label.hide()
         self.mpl_connect("motion_notify_event", self._on_move)
         self.mpl_connect("button_press_event", self._on_click)
+
+    def _tighten(self):
+        """Apply tight layout once, here rather than via the always-on layout
+        engine, so plain draws (blit-background capture, post-selection redraw)
+        leave the axes box exactly where it was — no shift on drag start/end."""
+        try:
+            self.fig.tight_layout()
+        except Exception:  # noqa: BLE001 — layout is best-effort, never fatal
+            pass
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self._tighten()
         self.draw_empty()
 
     def draw_empty(self):
@@ -179,6 +198,7 @@ class SpectrumCanvas(FigureCanvas):
         self.ax.set_xticks([]); self.ax.set_yticks([])
         for sp in self.ax.spines.values():
             sp.set_color(T.BORDER)
+        self._tighten()
         self.draw_idle()
 
     def plot_spectrum(self, spect, log_y=False, label=None, xlabel=None, ylabel=None,
@@ -299,6 +319,12 @@ class SpectrumCanvas(FigureCanvas):
                 self._span.disconnect_events()
             except Exception:  # noqa: BLE001
                 pass
+        # useblit=False: with the dynamic tight_layout engine removed (see the
+        # Figure() comment), full redraws keep a stable axes box, so dragging an
+        # edge no longer makes the opposite one wobble. Staying off the blit path
+        # also means the span is always rendered into the Agg buffer — no stale
+        # ghost when the always-on-top fit window overlaps the plot, and no
+        # blit↔full-draw "refresh" shift at the start/end of a drag.
         self._span = SpanSelector(
             self.ax, self._on_span, "horizontal", interactive=True, useblit=False,
             props=dict(alpha=0.18, facecolor=T.LOGO_GREEN))
@@ -422,6 +448,7 @@ class SpectrumCanvas(FigureCanvas):
             ax.set_ylim(ylim)
         if self._roi_active:
             self._make_span()
+        self._tighten()
         self.draw_idle()
 
     def _draw_snr_overlay(self):
