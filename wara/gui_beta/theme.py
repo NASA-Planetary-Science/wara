@@ -1,8 +1,8 @@
 """Palette, fonts, stylesheet, and small paint helpers for the beta GUI."""
 import matplotlib
-from PyQt5.QtCore import Qt, QSize
-from PyQt5.QtGui import QColor, QPixmap, QPainter, QIcon, QBrush
-from PyQt5.QtWidgets import QHeaderView
+from PyQt5.QtCore import Qt, QSize, QRectF
+from PyQt5.QtGui import QColor, QPixmap, QPainter, QIcon, QBrush, QLinearGradient, QPen
+from PyQt5.QtWidgets import QHeaderView, QPushButton
 
 # ── Palette ─────────────────────────────────────────────────────────────────
 BG_DARK      = "#0a0a0f"
@@ -38,8 +38,7 @@ NAV_SECTIONS = [
     ("Efficiency",  "#5cf04a"),
     ("Resolution",  "#ff5577"),
     ("API",         "#b388ff"),
-    ("Diagnostics", "#ff8a3d"),
-    ("PNG",         "#4d9bff"),
+    ("Planetary",   "#ff8a3d"),
 ]
 
 # Tabs with a real/mocked options column. Others collapse the column.
@@ -80,6 +79,29 @@ def dot_icon(color, size=14):
     p.setPen(Qt.NoPen); p.setBrush(QBrush(QColor(color)))
     p.drawEllipse(1, 1, size - 2, size - 2); p.end()
     return QIcon(pm)
+
+
+class PlanetaryNavButton(QPushButton):
+    """Nav button with a left-to-right rainbow gradient border.
+
+    The stylesheet paints the normal button background/text; this class draws
+    the gradient border on top so all hover/checked background transitions
+    from the stylesheet still work unchanged."""
+
+    _EDGE_COLORS = ["#00e5ff", "#ffb300", "#5cf04a", "#ff5577", "#b388ff", "#ff8a3d"]
+
+    def paintEvent(self, event):
+        super().paintEvent(event)
+        p = QPainter(self)
+        p.setRenderHint(QPainter.Antialiasing)
+        grad = QLinearGradient(0, 0, self.width(), 0)
+        n = len(self._EDGE_COLORS)
+        for i, c in enumerate(self._EDGE_COLORS):
+            grad.setColorAt(i / (n - 1), QColor(c))
+        p.setPen(QPen(QBrush(grad), 2))
+        p.setBrush(Qt.NoBrush)
+        p.drawRoundedRect(QRectF(1, 1, self.width() - 2, self.height() - 2), 6, 6)
+        p.end()
 
 
 def recolor_toolbar_icons(toolbar, color):

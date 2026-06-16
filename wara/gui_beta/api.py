@@ -51,6 +51,7 @@ from matplotlib.figure import Figure
 from matplotlib import cm
 from matplotlib.colors import LinearSegmentedColormap, to_rgba
 from matplotlib.patches import Patch
+from matplotlib.lines import Line2D
 from matplotlib.widgets import SpanSelector, RectangleSelector
 from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
 from matplotlib.backends.backend_qt5agg import NavigationToolbar2QT as NavToolbar
@@ -318,7 +319,8 @@ class ShiftsDialog(QDialog):
         self.ax_raw[kind] = fig.add_subplot(211)
         # Share the x-axis so zooming/panning the raw overlay moves the aligned
         # one in lockstep (they are the same axis, before vs after correction).
-        self.ax_aligned[kind] = fig.add_subplot(212, sharex=self.ax_raw[kind])
+        self.ax_aligned[kind] = fig.add_subplot(212, sharex=self.ax_raw[kind],
+                                                       sharey=self.ax_raw[kind])
         canvas = FigureCanvas(fig)
         canvas.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         canvas.setMinimumWidth(540)
@@ -480,6 +482,13 @@ class ShiftsDialog(QDialog):
         ax.tick_params(colors=T.TEXT_DIM, which="both", length=3, labelsize=8)
         for sp_ in ax.spines.values():
             sp_.set_color(T.BORDER)
+        handles = [
+            Line2D([0], [0], color=cm.viridis(0.0), lw=1.5, label="earlier"),
+            Line2D([0], [0], color=cm.viridis(1.0), lw=1.5, label="later"),
+        ]
+        ax.legend(handles=handles, loc="upper right", fontsize=7,
+                  facecolor=API_PLOT_BG, edgecolor=T.BORDER,
+                  labelcolor=T.TEXT_DIM, framealpha=0.7)
 
     def _apply_segments(self, kind):
         nseg, method, xr = self._params(kind)
@@ -714,6 +723,19 @@ class ApiOptions(QScrollArea):
             "Make sure your data path is set up correctly in data-path.txt.")
         lay.addWidget(self.btn_load)
 
+        self.btn_interactive = QPushButton("Interactive cuts")
+        self.btn_interactive.setObjectName("action_btn")
+        self.btn_interactive.setCheckable(True)
+        self.btn_interactive.setCursor(Qt.PointingHandCursor)
+        self.btn_interactive.setToolTip(
+            "Enable dragging spans/rectangles on the plots to cut events interactively")
+        self.btn_reset = QPushButton("Reset"); self.btn_reset.setObjectName("danger_btn")
+        self.btn_reset.setCursor(Qt.PointingHandCursor)
+        qr = QHBoxLayout(); qr.setContentsMargins(0, 0, 0, 0); qr.setSpacing(6)
+        qr.addWidget(self.btn_interactive, 1); qr.addWidget(self.btn_reset, 0)
+        qrw = QWidget(); qrw.setLayout(qr)
+        lay.addWidget(qrw)
+
         # ── Run info readout ─────────────────────────────────────────
         lay.addWidget(hsep()); lay.addWidget(header("RUN INFO"))
         self.lbl_info = QLabel("—")
@@ -846,9 +868,6 @@ class ApiOptions(QScrollArea):
             "Bake the active energy calibration and time shift into the dataframe "
             "as energy_cal and dt_cal columns, preserving every other column")
         lay.addWidget(self.btn_apply_data)
-        self.btn_reset = QPushButton("Reset"); self.btn_reset.setObjectName("danger_btn")
-        self.btn_reset.setCursor(Qt.PointingHandCursor)
-        lay.addWidget(self.btn_reset)
 
         lay.addStretch(1)
         self.setWidget(inner)
@@ -888,6 +907,7 @@ class ApiController:
         # snapshots the energy-cut dataframe at creation time.
         self.selections = []
         self._arming_selection = False
+        self._arm_temp_selector = False
         self._sel_color_idx = 0
         # Energy calibration: the channel column the histogram is binned from
         # (set in _configure_keys), the polynomial coeffs retrieved from the
@@ -930,6 +950,7 @@ class ApiController:
         o.btn_send.clicked.connect(self._send_to_spectrum)
         o.btn_3d.clicked.connect(self._open_3d)
         o.btn_apply_data.clicked.connect(self._apply_to_data)
+        o.btn_interactive.toggled.connect(self._toggle_interactive)
         o.btn_filters.clicked.connect(self._open_filters)
         o.btn_add_sel.clicked.connect(self._arm_selection)
         o.btn_plot_sel.clicked.connect(self._plot_selections)
@@ -942,6 +963,20 @@ class ApiController:
         o.ed_vmax.returnPressed.connect(self._apply_vmax)
         for ed in (o.ed_ebins, o.ed_tbins, o.ed_xybins):
             ed.returnPressed.connect(self._apply_bins)
+
+    def _toggle_interactive(self, checked):
+        b = self.opts.btn_interactive
+        if checked:
+            b.setStyleSheet(
+                f"background-color:{T.ACCENT_AMBER}; color:{T.BG_DARK}; "
+                f"border:2px solid {T.ACCENT_AMBER}; border-radius:5px; "
+                f"padding:8px 13px; font-size:14px; font-weight:800;")
+            self._attach_selectors()
+            self._status("Interactive cuts enabled — drag on any panel to filter")
+        else:
+            b.setStyleSheet("")
+            self._detach_selectors()
+            self._status("Interactive cuts disabled")
 
     def _status(self, msg):
         self.app.statusBar().showMessage(f"  {msg}")
@@ -1135,7 +1170,8 @@ class ApiController:
             self._plot_energy(self.df_current)
             self._plot_time(self.df_current)
             self._replot_xy()
-            self._attach_selectors()
+            if self.opts.btn_interactive.isChecked():
+                self._attach_selectors()
         self.page.reset_nav()
         self.page.canvas.draw_idle()
 
@@ -1306,11 +1342,9 @@ class ApiController:
     def _on_energy_span(self, xmin, xmax):
         if xmax <= xmin:
             return
-        # When "Add selection" is armed, an energy drag tags a labeled band
-        # instead of filtering the data.
         if self._arming_selection:
             self._create_selection(round(xmin, 4), round(xmax, 4))
-        else:
+        elif self.opts.btn_interactive.isChecked():
             self.apply_energy_filter(round(xmin, 4), round(xmax, 4))
 
     def _on_time_span(self, tmin, tmax):
@@ -1420,6 +1454,13 @@ class ApiController:
         if self.df_current is None or self.page.ax_spe is None:
             self._status("Load an API file with an energy panel first")
             return
+        if not self.opts.btn_interactive.isChecked():
+            self._detach_selectors()
+            self._selectors.append(SpanSelector(
+                self.page.ax_spe, self._on_energy_span, "horizontal",
+                useblit=True, interactive=True,
+                props=dict(alpha=0.3, facecolor=T.ACCENT_AMBER)))
+            self._arm_temp_selector = True
         self._arming_selection = True
         self._set_add_armed(True)
         self._status("Drag a band on the energy spectrum to add a selection…")
@@ -1440,6 +1481,9 @@ class ApiController:
     def _create_selection(self, emin, emax):
         self._arming_selection = False
         self._set_add_armed(False)
+        if self._arm_temp_selector:
+            self._arm_temp_selector = False
+            self._detach_selectors()
         if self.df_current is None:
             return
         mask = (self.df_current[self.ekey] > emin) & (self.df_current[self.ekey] < emax)

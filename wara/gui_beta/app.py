@@ -28,7 +28,7 @@ from matplotlib.backends.backend_qt5agg import NavigationToolbar2QT as NavToolba
 
 from wara import peaksearch as ps
 from . import theme as T
-from .theme import NAV_SECTIONS, TABS_WITH_OPTIONS, STYLESHEET, dot_icon, recolor_toolbar_icons
+from .theme import NAV_SECTIONS, TABS_WITH_OPTIONS, STYLESHEET, dot_icon, recolor_toolbar_icons, PlanetaryNavButton
 from .widgets import (
     SpectrumCanvas, SpectrumOptions, PlaceholderOptions, PlaceholderPage, header, hsep,
 )
@@ -242,7 +242,9 @@ class WaraBetaApp(QMainWindow):
         lay.addWidget(header("ANALYSIS"))
         self.nav_group = QButtonGroup(self); self.nav_group.setExclusive(True)
         for idx, (name, color) in enumerate(NAV_SECTIONS):
-            btn = QPushButton("   " + name); btn.setObjectName("nav_btn")
+            btn = (PlanetaryNavButton("   " + name) if name == "Planetary"
+                   else QPushButton("   " + name))
+            btn.setObjectName("nav_btn")
             btn.setCheckable(True); btn.setCursor(Qt.PointingHandCursor)
             btn.setToolTip(f"{name} tab")
             btn.setIcon(dot_icon(color)); btn.setIconSize(QSize(14, 14))
