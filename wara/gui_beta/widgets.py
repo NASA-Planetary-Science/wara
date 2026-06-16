@@ -176,7 +176,16 @@ class SpectrumCanvas(FigureCanvas):
     def resizeEvent(self, event):
         super().resizeEvent(event)
         self._tighten()
-        self.draw_empty()
+        # Only show the placeholder when there is genuinely nothing loaded.
+        # draw_empty() nulls self._spect, so calling it unconditionally here
+        # destroyed the active spectrum on every resize — and because _redraw()
+        # short-circuits when _spect is None, the visibility toggle could not
+        # bring it back. Keep the existing artists and just repaint at the new
+        # size when a spectrum is present.
+        if self._spect is None:
+            self.draw_empty()
+        else:
+            self.draw_idle()
 
     def draw_empty(self):
         self._spect = None

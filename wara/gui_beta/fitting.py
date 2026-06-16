@@ -936,11 +936,12 @@ class FitWindow(QDialog):
         if not means:
             return
         # Calibration is built against channels, so map the fitted centroids
-        # (in the spectrum's x-units) back to channel positions. For an
-        # uncalibrated spectrum x == channels and this is a no-op.
+        # (in the spectrum's x-units) back to channel positions. Use cal_channels
+        # so API spectra resolve to their real channel space; for an ordinary
+        # uncalibrated spectrum x == channels == cal_channels and this is a no-op.
         spect = self._search.spectrum
         calibrated = spect.energies is not None
-        channels = [float(np.interp(m, spect.x, spect.channels)) for m in means]
+        channels = [float(np.interp(m, spect.x, spect.cal_channels)) for m in means]
         default_units = spect.e_units if (calibrated and spect.e_units) else "keV"
         dlg = CentroidEnergyDialog(
             self, channels, calibrated=calibrated, default_units=default_units,

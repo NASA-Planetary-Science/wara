@@ -889,7 +889,7 @@ class CalibrationController:
         units = self.opts.units.currentText()
         try:
             cal = ec.EnergyCalibration(mean_vals=chans, erg=ergs,
-                                       channels=self.app.spect.channels, n=n, e_units=units)
+                                       channels=self.app.spect.cal_channels, n=n, e_units=units)
         except Exception as exc:  # noqa: BLE001 — surface fit errors to the user
             self.predicted = None
             self._set_result("—")
@@ -908,7 +908,10 @@ class CalibrationController:
     def _calibrate_equation(self):
         if not self.app._guard():
             return
-        ch = self.app.spect.channels.astype(float)
+        # Evaluate the user's polynomial in the spectrum's real channel space
+        # (cal_channels) so manually-entered coefficients map the same axis the
+        # fit uses and the dataframe's raw channel column.
+        ch = self.app.spect.cal_channels.astype(float)
         units = self.opts.units.currentText()
         coeffs, terms = [], []
         for i, ed in enumerate((self.opts.coef_a, self.opts.coef_b,
@@ -957,11 +960,11 @@ class CalibrationController:
             description=spect.description,
             label=spect.label,
         )
-        # Preserve the original channel axis. Spectrum.__init__ resets channels to
-        # 0..N indices, but API spectra carry their *real* channel values (set in
-        # the API tab's _send_to_spectrum). Dropping them would make a follow-up
-        # calibration fit/predict against indices instead of the true channels.
-        new.channels = spect.channels.copy()
+        # Carry the real ADC channel coordinate so a follow-up calibration still
+        # fits/predicts against the true channels (cal_channels). `channels`
+        # itself stays 0..N indices, which is correct for the new Spectrum.
+        if spect.adc_channels is not None:
+            new.adc_channels = spect.adc_channels.copy()
         app = self.app
         app.spect = new
         app._spect_orig = new.copy()

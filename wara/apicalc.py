@@ -15,6 +15,9 @@ from matplotlib.colors import LinearSegmentedColormap
 import dateparser
 from wara.read_parquet_api import get_data_path
 from wara import read_parquet_api
+import matplotlib.cm as cm
+from scipy.signal import correlate
+from wara import spectrum as sp
 
 
 def test_limits(df, elog=True, Vmax=None, ekey="energy", tkey="dt", xkey="X", ykey="Y"):
@@ -350,6 +353,327 @@ def approximate_fa(L=30, S=10):
     sample_area = L_alpha * L_alpha
     fa = sample_area / alpha_area
     return min(fa, 1.0)
+
+class GainShift:
+    """
+    Splits a list-mode DataFrame into N time segments and corrects drift in one
+    axis by aligning each segment onto the first, writing the corrected values
+    back as a new column.
+
+    The axis is configurable so the same machinery serves both the energy axis
+    (the default, ``energy_orig`` → ``energy_cal``) and the time axis
+    (``col="dt"``, ``out_col="dt_cal"``).
+
+    Parameters
+    ----------
+    df : pd.DataFrame
+        Must contain the ``col`` column. Rows are assumed to be in time order
+        (list mode).
+    n_segments : int
+        Number of equal-length time segments (split by row count).
+    bins : int
+        Number of histogram bins used when building spectra.
+    erange : (float, float)
+        (min, max) range of the ``col`` axis for histogramming.
+    col : str
+        Source column to align (the drifting axis). Default ``"energy_orig"``.
+    out_col : str
+        Column the corrected values are written to. Default ``"energy_cal"``.
+    """
+
+    def __init__(
+        self,
+        df: pd.DataFrame,
+        n_segments: int = 10,
+        bins: int = 2**12,
+        erange: tuple[float, float] = (0, 2**16),
+        col: str = "energy_orig",
+        out_col: str = "energy_cal",
+    ) -> None:
+        if col not in df.columns:
+            raise ValueError(f"DataFrame must contain a {col!r} column.")
+
+        self.df         = df.copy()
+        self.n_segments = n_segments
+        self.bins       = bins
+        self.erange     = erange
+        self.col        = col
+        self.out_col    = out_col
+
+        self._seg_idx: list[np.ndarray] = np.array_split(np.arange(len(self.df)), n_segments)
+        self._segments: list[pd.DataFrame] = [self.df.iloc[i] for i in self._seg_idx]
+        self._spectra:  list[sp.Spectrum]  = self._build_spectra()
+
+        # One calibration dict (or None) per segment.
+        # dict keys: segment, channels_fit, energies_kev, slope, intercept
+        self._cal_params: list[dict | None] = [None] * n_segments
+        # Aligned (gain-corrected) spectra, filled by align().
+        self._aligned_spectra: list[sp.Spectrum] | None = None
+
+    # ── Internal ──────────────────────────────────────────────────────────────
+
+    def _build_spectra(self) -> list[sp.Spectrum]:
+        spectra = []
+        for seg in self._segments:
+            cts, edges = np.histogram(
+                seg[self.col], bins=self.bins, range=self.erange
+            )
+            x = (edges[1:] + edges[:-1]) / 2
+            spectra.append(sp.Spectrum(counts=cts, energies=x))
+        return spectra
+
+    @staticmethod
+    def _apply_cal(energy_orig: pd.Series, cal: dict) -> pd.Series:
+        """
+        Apply one calibration dict to a raw-channel Series.
+
+        Handles both linear and quadratic calibrations transparently.
+        """
+        if cal.get("quadratic"):
+            ch = energy_orig.values.astype(float)
+            result = cal["intercept"] + cal["slope"] * ch + cal["curvature"] * ch ** 2
+            return pd.Series(result, index=energy_orig.index)
+        return cal["intercept"] + cal["slope"] * energy_orig
+
+    # ── Alignment ─────────────────────────────────────────────────────────────
+
+    def align(
+        self,
+        reference: int = 0,
+        method: str = "shift",
+        xrange: tuple[float, float] | None = None,
+        n_windows: int = 8,
+    ):
+        """Gain-correct every segment onto the reference segment.
+
+        Each segment is mapped onto the reference (default segment 0 — the
+        earliest in time, i.e. the left-most band in :meth:`plot_overlay`) with
+        an affine correction ``energy_cal = intercept + slope * energy_orig``,
+        written back to ``self.df["energy_cal"]``. The per-segment coefficients
+        land in ``self._cal_params`` and aligned spectra are cached for
+        :meth:`plot_aligned`.
+
+        Two models are available:
+
+        ``"shift"`` (default)
+            Pure additive slide (``slope = 1``); the shift is the
+            cross-correlation lag between the segment and reference histograms,
+            refined to sub-bin precision. Matches wara's gain-shift convention
+            (:meth:`wara.spectrum.Spectrum.gain_shift`). Robust even with a
+            single peak.
+
+        ``"linear"``
+            Slope **and** offset. The local cross-correlation shift is measured
+            in ``n_windows`` channel windows across the axis; under an affine
+            gain drift that shift is linear in channel, so a (count-weighted)
+            straight-line fit through the per-window shifts gives the slope and
+            offset. Needs structure spread across the axis (≥2 windows with
+            signal); with too little it falls back to a pure shift for that
+            segment.
+
+        Parameters
+        ----------
+        reference : int
+            Index of the segment every other segment is aligned to. Default 0.
+        method : {"shift", "linear"}
+            Correction model (see above). Default "shift".
+        xrange : (xmin, xmax) or None
+            Restrict the correlation to this raw-channel window. None uses the
+            full axis.
+        n_windows : int
+            Number of channel windows used to estimate the slope when
+            ``method="linear"``. Ignored for ``method="shift"``.
+
+        Returns
+        -------
+        list of dict
+            Per-segment calibration dicts with ``slope`` and ``intercept`` (the
+            coefficients of ``energy_cal = intercept + slope * energy_orig``).
+        """
+        method = method.lower()
+        if method not in ("shift", "linear"):
+            raise ValueError("method must be 'shift' or 'linear'")
+
+        x = self._spectra[reference].energies
+        binwidth = float(x[1] - x[0])
+        mask = (np.ones(len(x), dtype=bool) if xrange is None
+                else (x >= xrange[0]) & (x <= xrange[1]))
+        ref = self._spectra[reference].counts.astype(float)
+
+        raw = self.df[self.col].to_numpy(dtype=float)
+        corrected = raw.copy()
+        self._cal_params = [None] * self.n_segments
+        for i, (pos, spe) in enumerate(zip(self._seg_idx, self._spectra)):
+            seg = spe.counts.astype(float)
+            if method == "shift":
+                slope, intercept = self._fit_shift(ref, seg, mask, binwidth)
+            else:
+                slope, intercept = self._fit_linear(
+                    ref, seg, x, mask, binwidth, n_windows)
+            corrected[pos] = intercept + slope * raw[pos]
+            self._cal_params[i] = {"segment": i, "slope": slope,
+                                   "intercept": intercept}
+
+        self.df[self.out_col] = corrected
+        self._aligned_spectra = self._build_aligned_spectra()
+        return self._cal_params
+
+    def _fit_shift(self, ref, seg, mask, binwidth):
+        """Pure additive shift: (slope=1, intercept=shift) from the global lag."""
+        r, s = ref[mask], seg[mask]
+        if r.std() == 0 or s.std() == 0:
+            return 1.0, 0.0
+        lag = self._xcorr_lag(r - r.mean(), s - s.mean())
+        return 1.0, lag * binwidth
+
+    def _fit_linear(self, ref, seg, x, mask, binwidth, n_windows):
+        """Slope + offset from per-window local shifts.
+
+        Under an affine drift energy_cal = a + b·ch, the shift at channel ch is
+        a + (b-1)·ch — linear in ch. Measure it in several windows and fit a
+        line; b = 1 + p1, a = p0. Falls back to a pure shift when fewer than two
+        windows carry usable signal.
+        """
+        idx = np.flatnonzero(mask)
+        centers, shifts, weights = [], [], []
+        for chunk in np.array_split(idx, n_windows):
+            if chunk.size < 4:
+                continue
+            r, s = ref[chunk], seg[chunk]
+            if r.std() == 0 or s.std() == 0:
+                continue
+            lag = self._xcorr_lag(r - r.mean(), s - s.mean())
+            centers.append(float(x[chunk].mean()))
+            shifts.append(lag * binwidth)
+            weights.append(float(min(r.sum(), s.sum())))   # signal in the window
+
+        if len(centers) < 2 or np.ptp(centers) == 0:
+            return self._fit_shift(ref, seg, mask, binwidth)   # can't get a slope
+
+        w = np.sqrt(np.clip(weights, 0, None))
+        p1, p0 = np.polyfit(centers, shifts, 1, w=w)   # shift = p1·center + p0
+        return 1.0 + p1, p0
+
+    @staticmethod
+    def _xcorr_lag(ref: np.ndarray, seg: np.ndarray) -> float:
+        """Channel shift (in bins) to add to *seg* so it lines up with *ref*.
+
+        Positive means seg's features sit at lower channels than ref and must be
+        moved up; the value is refined to sub-bin precision with a 3-point
+        parabolic fit around the cross-correlation peak.
+        """
+        corr = correlate(ref, seg, mode="full")
+        lags = np.arange(-len(seg) + 1, len(ref))
+        j = int(np.argmax(corr))
+        lag = float(lags[j])
+        # Sub-bin refinement: vertex of the parabola through the 3 peak samples.
+        if 0 < j < len(corr) - 1:
+            y0, y1, y2 = corr[j - 1], corr[j], corr[j + 1]
+            denom = y0 - 2.0 * y1 + y2
+            if denom != 0:
+                lag += 0.5 * (y0 - y2) / denom
+        return lag
+
+    def _build_aligned_spectra(self) -> list[sp.Spectrum]:
+        spectra = []
+        corrected = self.df[self.out_col].to_numpy(dtype=float)
+        for pos in self._seg_idx:
+            cts, edges = np.histogram(corrected[pos], bins=self.bins, range=self.erange)
+            xc = (edges[1:] + edges[:-1]) / 2
+            spectra.append(sp.Spectrum(counts=cts, energies=xc))
+        return spectra
+
+    # ── Plotting — raw ────────────────────────────────────────────────────────
+
+    def _overlay(
+        self,
+        spectra: list[sp.Spectrum],
+        title: str,
+        xlabel: str,
+        xrange: list[float] | None = None,
+        yscale: str = "log",
+        ax: plt.Axes | None = None,
+        figsize: tuple[float, float] = (14, 6),
+    ) -> plt.Figure:
+        """Overlay a list of segment spectra, coloured by time order (viridis)."""
+        fig = None
+        if ax is None:
+            fig, ax = plt.subplots(figsize=figsize)
+
+        colors = cm.viridis(np.linspace(0, 1, self.n_segments))
+        for i, spe in enumerate(spectra):
+            label = f"seg {i}" if self.n_segments <= 12 else None
+            ax.step(spe.energies, spe.counts, where="mid",
+                    color=colors[i], alpha=0.75, lw=1.2, label=label)
+
+        ax.set_xlabel(xlabel)
+        ax.set_ylabel("Counts")
+        ax.set_yscale(yscale)
+        ax.set_title(title)
+        if xrange is not None:
+            ax.set_xlim(xrange)
+        if self.n_segments <= 12:
+            ax.legend(fontsize=8, ncol=2)
+
+        fig = fig or ax.figure
+        sm = plt.cm.ScalarMappable(
+            cmap="viridis", norm=plt.Normalize(0, self.n_segments - 1)
+        )
+        sm.set_array([])
+        fig.colorbar(sm, ax=ax, label="Segment index  (time →)")
+        plt.tight_layout()
+        return fig
+
+    def plot_overlay(
+        self,
+        xrange: list[float] | None = None,
+        yscale: str = "log",
+        ax: plt.Axes | None = None,
+        figsize: tuple[float, float] = (14, 6),
+    ) -> plt.Figure:
+        """
+        Overlay all N raw spectra, coloured by time order (viridis).
+
+        Parameters
+        ----------
+        xrange : [xmin, xmax] or None
+            X-axis limits in raw channel units.
+        yscale : "log" or "linear"
+        ax : existing Axes to draw on, or None to create a new figure.
+        figsize : figure size when a new figure is created.
+        """
+        return self._overlay(
+            self._spectra,
+            title=f"Raw energy overlay  —  {self.n_segments} segments",
+            xlabel="Raw channel (energy_orig)",
+            xrange=xrange, yscale=yscale, ax=ax, figsize=figsize,
+        )
+
+    def plot_aligned(
+        self,
+        xrange: list[float] | None = None,
+        yscale: str = "log",
+        ax: plt.Axes | None = None,
+        figsize: tuple[float, float] = (14, 6),
+    ) -> plt.Figure:
+        """
+        Overlay the gain-corrected spectra after :meth:`align`. Each segment has
+        been slid onto the reference, so the bands should now sit on top of one
+        another instead of drifting with time.
+
+        Raises
+        ------
+        RuntimeError
+            If :meth:`align` has not been called yet.
+        """
+        if self._aligned_spectra is None:
+            raise RuntimeError("Call align() before plot_aligned().")
+        return self._overlay(
+            self._aligned_spectra,
+            title=f"Gain-aligned overlay  —  {self.n_segments} segments",
+            xlabel="Aligned channel (energy_cal)",
+            xrange=xrange, yscale=yscale, ax=ax, figsize=figsize,
+        )
 
 
 def create_directory(directory):

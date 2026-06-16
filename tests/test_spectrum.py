@@ -120,12 +120,33 @@ class TestCopy:
         assert copy.livetime == spec_no_cal.livetime
         assert copy.label == spec_no_cal.label
 
-    def test_copy_preserves_custom_channels(self, spec_no_cal):
-        # API spectra carry real channel values (not 0..N indices); copy() must
-        # keep them so a follow-up calibration fits against the true channels.
-        spec_no_cal.channels = spec_no_cal.channels + 1000.0
+    def test_copy_preserves_adc_channels(self, spec_no_cal):
+        # API spectra carry real ADC channel values on adc_channels (a pure
+        # coordinate); copy() must keep them so a follow-up calibration fits
+        # against the true channels via cal_channels.
+        spec_no_cal.adc_channels = spec_no_cal.channels + 1000.0
         copy = spec_no_cal.copy()
+        assert np.array_equal(copy.adc_channels, spec_no_cal.adc_channels)
+        # channels itself stays the 0..N index axis.
         assert np.array_equal(copy.channels, spec_no_cal.channels)
+
+    def test_cal_channels_falls_back_to_indices(self, spec_no_cal):
+        # Without adc_channels, cal_channels is just the index axis.
+        assert spec_no_cal.adc_channels is None
+        assert np.array_equal(spec_no_cal.cal_channels, spec_no_cal.channels)
+
+    def test_cal_channels_uses_adc_when_set(self, spec_no_cal):
+        spec_no_cal.adc_channels = spec_no_cal.channels + 1000.0
+        assert np.array_equal(spec_no_cal.cal_channels, spec_no_cal.adc_channels)
+
+    def test_adc_channels_do_not_move_display_axis(self, spec_no_cal):
+        # The display/interaction axis (x) must stay on the index channels even
+        # when real ADC channels are carried, so a drag on the plot (which reads
+        # x) selects the same range the fit masks against (channels). Diverging
+        # the two silently broke drag-and-fit for API spectra.
+        spec_no_cal.adc_channels = spec_no_cal.channels + 1000.0
+        copy = spec_no_cal.copy()
+        assert np.array_equal(copy.x, copy.channels)
 
 
 # ---------------------------------------------------------------------------

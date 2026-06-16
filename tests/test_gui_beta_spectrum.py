@@ -58,6 +58,27 @@ def test_plain_refresh_resets_zoom(app):
     assert ax.get_xlim()[0] < 50           # reset well beyond the zoomed window
 
 
+def test_resize_keeps_active_spectrum(app):
+    """Resizing the window must not blank the active spectrum.
+
+    resizeEvent used to call draw_empty() unconditionally, which nulls
+    canvas._spect; afterwards the visibility toggle (_redraw) could not restore
+    it because _redraw short-circuits when _spect is None. Regression: the
+    spectrum survives a resize and the axes still hold its line.
+    """
+    from PyQt5.QtCore import QSize
+    from PyQt5.QtGui import QResizeEvent
+    canvas = app.spectrum_page.canvas
+    assert canvas._spect is not None
+    canvas.resizeEvent(QResizeEvent(QSize(640, 480), QSize(800, 600)))
+    assert canvas._spect is not None          # spectrum not destroyed
+    assert canvas.ax.lines or canvas.ax.collections   # its artists are still drawn
+    # And the visibility toggle still round-trips (it relies on _spect).
+    canvas.set_active_visible(False)
+    canvas.set_active_visible(True)
+    assert canvas._spect is not None
+
+
 def test_readout_label_exists_below_plot(app):
     assert hasattr(app.spectrum_page, "readout")
 

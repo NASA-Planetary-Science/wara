@@ -10,6 +10,7 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
 from wara.apicalc import (
+    GainShift,
     calc_own_pos,
     compute_fft,
     dfe,
@@ -274,3 +275,137 @@ class TestApiXyzNoMutation:
         dt_original = df["dt"].copy()
         api_xyz(df, toffset=10.0)
         pd.testing.assert_series_equal(df["dt"], dt_original)
+
+
+# ---------------------------------------------------------------------------
+# GainShift.align — gain-drift correction across time segments
+# ---------------------------------------------------------------------------
+
+class TestGainShiftAlign:
+    @staticmethod
+    def _drifting_df(n_seg=8, per=5000, peak0=30000.0, total_drift=700.0, seed=0):
+        """List-mode frame whose peak drifts linearly up by total_drift over the
+        run (segment 0 at peak0, the last at peak0 + total_drift)."""
+        rng = np.random.default_rng(seed)
+        drifts = np.linspace(0, total_drift, n_seg)
+        parts = [pd.DataFrame({"energy_orig": rng.normal(peak0 + d, 300, per)})
+                 for d in drifts]
+        return pd.concat(parts, ignore_index=True), drifts
+
+    def _seg_means(self, cal):
+        ecal = cal.df["energy_cal"].to_numpy()
+        return np.array([ecal[pos].mean() for pos in cal._seg_idx])
+
+    def test_align_writes_energy_cal_and_removes_drift(self):
+        df, _ = self._drifting_df()
+        cal = GainShift(df, n_segments=8, bins=2**12, erange=(0, 2**16))
+        cal.align()
+        assert "energy_cal" in cal.df.columns
+        means = self._seg_means(cal)
+        # Every segment's corrected peak collapses onto the reference: the spread
+        # of per-segment means shrinks from ~700 ch (raw drift) to a few bins.
+        assert means.max() - means.min() < 60        # raw spread was ~700
+        assert abs(means.mean() - 30000.0) < 60
+
+    def test_reference_segment_has_zero_shift(self):
+        df, _ = self._drifting_df()
+        cal = GainShift(df, n_segments=8, bins=2**12, erange=(0, 2**16))
+        params = cal.align(reference=0)
+        assert params[0]["intercept"] == pytest.approx(0.0, abs=1e-6)
+        # Shifts grow more negative for later (higher-drift) segments.
+        intercepts = [p["intercept"] for p in params]
+        assert intercepts[-1] < intercepts[1] < 0
+
+    def test_align_is_not_cumulative(self):
+        df, _ = self._drifting_df()
+        cal = GainShift(df, n_segments=8, bins=2**12, erange=(0, 2**16))
+        first = [p["intercept"] for p in cal.align()]
+        second = [p["intercept"] for p in cal.align()]   # re-run from energy_orig
+        np.testing.assert_allclose(first, second)
+
+    def test_align_with_xrange_window(self):
+        df, _ = self._drifting_df()
+        cal = GainShift(df, n_segments=8, bins=2**12, erange=(0, 2**16))
+        cal.align(xrange=(28000, 32000))                 # focus on the peak band
+        means = self._seg_means(cal)
+        assert means.max() - means.min() < 60
+
+    def test_plot_aligned_requires_align_first(self):
+        df, _ = self._drifting_df()
+        cal = GainShift(df, n_segments=8, bins=2**12, erange=(0, 2**16))
+        with pytest.raises(RuntimeError, match="align"):
+            cal.plot_aligned()
+        cal.align()
+        fig = cal.plot_aligned()
+        assert fig is not None
+        plt.close(fig)
+
+    def test_shift_method_keeps_slope_one(self):
+        df, _ = self._drifting_df()
+        cal = GainShift(df, n_segments=8, bins=2**12, erange=(0, 2**16))
+        params = cal.align(method="shift")
+        assert all(p["slope"] == 1.0 for p in params)
+
+    def test_invalid_method_raises(self):
+        df, _ = self._drifting_df()
+        cal = GainShift(df, n_segments=8, bins=2**12, erange=(0, 2**16))
+        with pytest.raises(ValueError, match="shift.*linear"):
+            cal.align(method="quadratic")
+
+    # -- linear (slope + offset) ------------------------------------------------
+
+    @staticmethod
+    def _affine_two_peak_df(n_seg=8, per_peak=4000, p1=15000.0, p2=45000.0,
+                            gain_to=1.08, off_to=-300.0, seed=1):
+        """Two peaks whose channels drift affinely over the run:
+        ch_obs = a_i + b_i * ch_true, with b_i ramping 1.0 -> gain_to."""
+        rng = np.random.default_rng(seed)
+        b = np.linspace(1.0, gain_to, n_seg)
+        a = np.linspace(0.0, off_to, n_seg)
+        parts = []
+        for i in range(n_seg):
+            e1 = a[i] + b[i] * rng.normal(p1, 200, per_peak)
+            e2 = a[i] + b[i] * rng.normal(p2, 200, per_peak)
+            parts.append(pd.DataFrame({"energy_orig": np.concatenate([e1, e2])}))
+        return pd.concat(parts, ignore_index=True), b
+
+    @staticmethod
+    def _band_centroids(cal, center, half=6000):
+        ec = cal.df["energy_cal"].to_numpy()
+        out = []
+        for pos in cal._seg_idx:
+            v = ec[pos]; m = (v >= center - half) & (v <= center + half)
+            out.append(v[m].mean() if m.any() else np.nan)
+        return np.array(out)
+
+    def test_linear_recovers_gain_slope(self):
+        df, b = self._affine_two_peak_df()
+        cal = GainShift(df, n_segments=8, bins=2**12, erange=(0, 2**16))
+        params = cal.align(method="linear")
+        # The correction inverts the per-segment gain: slope ≈ 1 / b_i.
+        assert params[0]["slope"] == pytest.approx(1.0, abs=0.02)
+        assert params[-1]["slope"] == pytest.approx(1.0 / b[-1], abs=0.03)
+
+    def test_linear_aligns_both_peaks_better_than_shift(self):
+        df, _ = self._affine_two_peak_df()
+        lin = GainShift(df, n_segments=8, bins=2**12, erange=(0, 2**16))
+        lin.align(method="linear")
+        sh = GainShift(df, n_segments=8, bins=2**12, erange=(0, 2**16))
+        sh.align(method="shift")
+        # The low peak is what a single shift cannot also fix once the gain has
+        # stretched the axis; the linear model should align it markedly better.
+        lo_lin = np.nanmax(self._band_centroids(lin, 15000)) - \
+            np.nanmin(self._band_centroids(lin, 15000))
+        lo_sh = np.nanmax(self._band_centroids(sh, 15000)) - \
+            np.nanmin(self._band_centroids(sh, 15000))
+        assert lo_lin < lo_sh
+
+    def test_linear_falls_back_to_shift_with_single_peak(self):
+        # One peak gives no leverage on the slope, so linear degrades to a pure
+        # shift (slope ≈ 1) rather than fitting noise.
+        df, _ = self._drifting_df()
+        cal = GainShift(df, n_segments=8, bins=2**12, erange=(0, 2**16))
+        params = cal.align(method="linear")
+        assert all(p["slope"] == pytest.approx(1.0, abs=1e-9) for p in params)
+        means = self._seg_means(cal)
+        assert means.max() - means.min() < 60        # still removes the drift

@@ -48,6 +48,7 @@ import time
 import numpy as np
 
 from matplotlib.figure import Figure
+from matplotlib import cm
 from matplotlib.colors import LinearSegmentedColormap, to_rgba
 from matplotlib.patches import Patch
 from matplotlib.widgets import SpanSelector, RectangleSelector
@@ -57,7 +58,8 @@ from matplotlib.backends.backend_qt5agg import NavigationToolbar2QT as NavToolba
 from PyQt5.QtWidgets import (
     QWidget, QLabel, QPushButton, QVBoxLayout, QHBoxLayout, QScrollArea,
     QLineEdit, QRadioButton, QButtonGroup, QCheckBox, QSizePolicy, QDialog,
-    QGridLayout, QMessageBox, QColorDialog, QDialogButtonBox,
+    QGridLayout, QMessageBox, QColorDialog, QDialogButtonBox, QTabWidget,
+    QComboBox,
 )
 from PyQt5.QtGui import QColor
 from PyQt5.QtCore import Qt, QSize, QTimer, QUrl
@@ -267,6 +269,254 @@ class Api3DDialog(QDialog):
             return cast(self.fields[attr].text().strip())
         except (ValueError, KeyError):
             return None
+
+
+class ShiftsDialog(QDialog):
+    """Drift-correction window: gain-shift the energy axis and shift/align the
+    time axis, independently. Two tabs (Energy, Time), each showing the raw
+    segment overlay above the aligned overlay (Preview), with controls to apply
+    the correction to the API dataframe via the controller."""
+
+    def __init__(self, controller):
+        super().__init__(controller.app)
+        self.c = controller
+        self.setWindowTitle("Drift correction — shifts")
+        self.setStyleSheet(T.STYLESHEET)
+        self.setWindowFlag(Qt.WindowMaximizeButtonHint, True)
+        self.setWindowFlag(Qt.WindowMinimizeButtonHint, True)
+        self.resize(1000, 700)
+
+        # Per-tab widget handles, keyed by "energy"/"time".
+        self.ax_raw = {}
+        self.ax_aligned = {}
+        self.canvas = {}
+        self.toolbar = {}
+        self.fig = {}
+        self.f_nseg = {}
+        self.f_method = {}
+        self.f_xmin = {}
+        self.f_xmax = {}
+        self.lbl_state = {}
+        self.btn_clear = {}
+
+        lay = QVBoxLayout(self)
+        self.tabs = QTabWidget()
+        lay.addWidget(self.tabs)
+        self.tabs.addTab(self._build_tab("energy"), "Energy")
+        self.tabs.addTab(self._build_tab("time"), "Time")
+
+    # ── construction ──────────────────────────────────────────────────────────
+    def _build_tab(self, kind):
+        tab = QWidget()
+        row = QHBoxLayout(tab); row.setContentsMargins(8, 8, 8, 8); row.setSpacing(8)
+
+        fig = Figure(figsize=(6, 6), facecolor=API_PLOT_BG)
+        self.fig[kind] = fig
+        self.ax_raw[kind] = fig.add_subplot(211)
+        # Share the x-axis so zooming/panning the raw overlay moves the aligned
+        # one in lockstep (they are the same axis, before vs after correction).
+        self.ax_aligned[kind] = fig.add_subplot(212, sharex=self.ax_raw[kind])
+        canvas = FigureCanvas(fig)
+        canvas.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        canvas.setMinimumWidth(540)
+        self.canvas[kind] = canvas
+        # Pan/zoom toolbar above the plot — styled to match the API page's.
+        toolbar = NavToolbar(canvas, self)
+        toolbar.setObjectName("plot_toolbar")
+        toolbar.setIconSize(QSize(22, 22))
+        T.recolor_toolbar_icons(toolbar, T.TEXT_PRIMARY)
+        self.toolbar[kind] = toolbar
+        plot_col = QVBoxLayout(); plot_col.setContentsMargins(0, 0, 0, 0); plot_col.setSpacing(2)
+        plot_col.addWidget(toolbar)
+        plot_col.addWidget(canvas, 1)
+        plot_w = QWidget(); plot_w.setLayout(plot_col)
+        row.addWidget(plot_w, 1)
+
+        side = QVBoxLayout(); side.setSpacing(6)
+        axis = "energy channels" if kind == "energy" else "time (dt)"
+        side.addWidget(header(f"{kind.upper()} DRIFT"))
+        note = QLabel(f"Split the run into time segments and align each segment's "
+                      f"{axis} onto the first (earliest) one.")
+        note.setObjectName("stat_key"); note.setWordWrap(True)
+        side.addWidget(note)
+
+        nseg = QLineEdit("20"); nseg.setFixedWidth(70)
+        r, _ = labeled_row("Segments", nseg); side.addWidget(r)
+        self.f_nseg[kind] = nseg
+
+        method = QComboBox(); method.addItems(["shift", "linear"])
+        method.setToolTip("shift: additive slide (robust, single peak ok)\n"
+                          "linear: slope + offset (true gain drift; needs ≥2 peaks)")
+        r, _ = labeled_row("Method", method); side.addWidget(r)
+        self.f_method[kind] = method
+
+        xmin = QLineEdit(); xmin.setPlaceholderText("min"); xmin.setFixedWidth(70)
+        xmax = QLineEdit(); xmax.setPlaceholderText("max"); xmax.setFixedWidth(70)
+        xr = QHBoxLayout(); xr.setContentsMargins(0, 0, 0, 0)
+        xr.addWidget(QLabel("Window")); xr.addWidget(xmin); xr.addWidget(xmax)
+        xrw = QWidget(); xrw.setLayout(xr); side.addWidget(xrw)
+        xmin.setToolTip("Optional: restrict the alignment to this axis window")
+        self.f_xmin[kind] = xmin; self.f_xmax[kind] = xmax
+
+        btn_prev = QPushButton("Preview"); btn_prev.setObjectName("action_btn")
+        btn_prev.setCursor(Qt.PointingHandCursor)
+        btn_prev.clicked.connect(lambda _=False, k=kind: self._preview(k))
+        side.addWidget(btn_prev)
+
+        btn_apply = QPushButton("Apply alignment"); btn_apply.setObjectName("open_btn")
+        btn_apply.setCursor(Qt.PointingHandCursor)
+        btn_apply.clicked.connect(lambda _=False, k=kind: self._apply_segments(k))
+        side.addWidget(btn_apply)
+
+        if kind == "time":
+            # The Time axis additionally keeps the simple manual constant shift.
+            side.addWidget(hsep())
+            side.addWidget(header("CONSTANT SHIFT"))
+            const = QLineEdit(); const.setPlaceholderText("Δt (ns)"); const.setFixedWidth(70)
+            r, b = labeled_row("Δt (ns)", const, apply_btn=True)
+            const.setToolTip("Add a constant to every dt value (negative shifts left)")
+            b.clicked.connect(self._apply_constant)
+            const.returnPressed.connect(self._apply_constant)
+            self.f_const = const
+            side.addWidget(r)
+
+        side.addWidget(hsep())
+        clear = QPushButton("Clear correction"); clear.setObjectName("mini_btn")
+        clear.setCursor(Qt.PointingHandCursor); clear.setEnabled(False)
+        clear.clicked.connect(lambda _=False, k=kind: self._clear(k))
+        self.btn_clear[kind] = clear
+        side.addWidget(clear)
+
+        state = QLabel("Not applied"); state.setObjectName("stat_key")
+        state.setWordWrap(True); self.lbl_state[kind] = state
+        side.addWidget(state)
+        side.addStretch(1)
+
+        holder = QWidget(); holder.setFixedWidth(250); holder.setLayout(side)
+        row.addWidget(holder, 0)
+        return tab
+
+    # ── parameter reading ──────────────────────────────────────────────────────
+    def _params(self, kind):
+        """Return (n_segments, method, xrange) from the tab controls."""
+        try:
+            nseg = max(2, int(float(self.f_nseg[kind].text().strip())))
+        except ValueError:
+            nseg = 20
+        method = self.f_method[kind].currentText()
+        try:
+            xr = (float(self.f_xmin[kind].text()), float(self.f_xmax[kind].text()))
+            if xr[0] >= xr[1]:
+                xr = None
+        except ValueError:
+            xr = None
+        return nseg, method, xr
+
+    def _axis_cfg(self, kind):
+        """(base column, out column, bins, base erange) for the tab's axis."""
+        c = self.c
+        if kind == "energy":
+            return (c._chan_base or "energy_orig", "energy_drift",
+                    c.ebins, c._chan_erange())
+        return ("dt", "dt_cal", c.tbins, c._dt_erange())
+
+    def _segment_spectra(self, col, n_segments, bins, erange):
+        """Per-segment histograms of *col* (no alignment, nothing committed)."""
+        gs = apicalc.GainShift(self.c.df_api, n_segments=n_segments, bins=bins,
+                               erange=erange, col=col, out_col="_preview_tmp")
+        return gs._spectra
+
+    # ── actions ─────────────────────────────────────────────────────────────────
+    def _preview(self, kind):
+        """Redraw the tab: raw segments on top; on the bottom the *committed*
+        correction (constant or segment) when one is applied, otherwise a
+        prospective segment alignment for the current controls."""
+        c = self.c
+        if c.df_api is None:
+            return
+        nseg, method, xr = self._params(kind)
+        base, out_col, bins, base_erange = self._axis_cfg(kind)
+        applied = c._dt_corrected if kind == "time" else c._egain_applied
+        try:
+            raw_spectra = self._segment_spectra(base, nseg, bins, base_erange)
+            if applied and out_col in c.df_api.columns:
+                vals = c.df_api[out_col].astype(float)
+                erange = (float(vals.min()), float(vals.max()))
+                bottom = self._segment_spectra(out_col, nseg, bins, erange)
+                bottom_title = "Corrected"
+            else:
+                gs = apicalc.GainShift(c.df_api, n_segments=nseg, bins=bins,
+                                       erange=base_erange, col=base, out_col=out_col)
+                gs.align(method=method, xrange=xr)
+                bottom = gs._aligned_spectra
+                bottom_title = f"Aligned ({method})"
+        except Exception as exc:  # noqa: BLE001 — surface to the state label
+            self.lbl_state[kind].setText(f"Preview failed: {exc}")
+            return
+        xlabel = "Raw channel" if kind == "energy" else "dt (ns)"
+        yscale = "log" if kind == "energy" else "linear"
+        self._draw_overlay(self.ax_raw[kind], raw_spectra, nseg,
+                           f"Raw segments ({nseg})", xlabel, yscale)
+        self._draw_overlay(self.ax_aligned[kind], bottom, nseg,
+                           bottom_title, xlabel, yscale)
+        self.fig[kind].tight_layout()
+        self.canvas[kind].draw_idle()
+        # Reset the pan/zoom history so "Home" returns to this fresh view.
+        self.toolbar[kind].update()
+
+    def _draw_overlay(self, ax, spectra, n_seg, title, xlabel, yscale="log"):
+        ax.clear()
+        colors = cm.viridis(np.linspace(0, 1, n_seg))
+        for i, spe in enumerate(spectra):
+            ax.step(spe.energies, spe.counts, where="mid",
+                    color=colors[i], lw=0.8, alpha=0.8)
+        ax.set_yscale(yscale)
+        ax.set_title(title, color=T.TEXT_PRIMARY, fontsize=10)
+        ax.set_xlabel(xlabel, color=T.TEXT_DIM, fontsize=9)
+        ax.set_facecolor(API_PLOT_BG)
+        ax.tick_params(colors=T.TEXT_DIM, which="both", length=3, labelsize=8)
+        for sp_ in ax.spines.values():
+            sp_.set_color(T.BORDER)
+
+    def _apply_segments(self, kind):
+        nseg, method, xr = self._params(kind)
+        if kind == "energy":
+            self.c.apply_energy_gainshift(nseg, method=method, xrange=xr)
+        else:
+            self.c.apply_dt_gainshift(nseg, method=method, xrange=xr)
+        self._preview(kind)
+
+    def _apply_constant(self):
+        txt = self.f_const.text().strip()
+        try:
+            shift = float(txt)
+        except ValueError:
+            self.lbl_state["time"].setText("Constant shift must be a number (ns)")
+            return
+        self.c.apply_dt_shift(shift)
+        self._preview("time")
+
+    def _clear(self, kind):
+        if kind == "energy":
+            self.c.clear_energy_gainshift()
+        else:
+            self.c._clear_dt_shift()
+        self._preview(kind)
+
+    # ── state sync (called by the controller) ───────────────────────────────────
+    def set_energy_state(self, applied, label):
+        self.lbl_state["energy"].setText(label or "Not applied")
+        self.btn_clear["energy"].setEnabled(applied)
+
+    def set_time_state(self, applied, label):
+        self.lbl_state["time"].setText(label or "Not applied")
+        self.btn_clear["time"].setEnabled(applied)
+
+    def refresh_previews(self):
+        if self.c.df_api is None:
+            return
+        for kind in ("energy", "time"):
+            self._preview(kind)
 
 
 # ── Plot column ───────────────────────────────────────────────────────────────
@@ -528,6 +778,21 @@ class ApiOptions(QScrollArea):
         self.lbl_cal.setObjectName("stat_key"); self.lbl_cal.setWordWrap(True)
         lay.addWidget(self.lbl_cal)
 
+        # ── Drift correction (time + energy shifts) ──────────────────
+        lay.addWidget(hsep()); lay.addWidget(header("DRIFT CORRECTION"))
+        shift_note = QLabel(
+            "Correct gain/time drift over the run: split into time segments and "
+            "align them, or shift dt by a constant — independently for the "
+            "energy and time axes.")
+        shift_note.setObjectName("stat_key"); shift_note.setWordWrap(True)
+        lay.addWidget(shift_note)
+        self.btn_shifts = QPushButton("Shifts…")
+        self.btn_shifts.setObjectName("action_btn")
+        self.btn_shifts.setCursor(Qt.PointingHandCursor)
+        self.btn_shifts.setToolTip(
+            "Open the energy gain-shift and time-shift correction window")
+        lay.addWidget(self.btn_shifts)
+
         # ── Energy selections ────────────────────────────────────────
         lay.addWidget(hsep()); lay.addWidget(header("ENERGY SELECTIONS"))
         snote = QLabel("Arm “Add selection”, then drag a band on the "
@@ -613,10 +878,30 @@ class ApiController:
         # Calibration tab, and the energy units once calibrated (None ⇒ raw
         # channels).
         self._chan_key = None
+        self._chan_base = None      # pristine raw-channel column for the data type
         self._cal_coeffs = None
         self.e_units = None
+        # Gain-shift drift correction (Shifts… window): when applied, the
+        # corrected channels live on the df_api "energy_drift" column and
+        # _chan_key points at it (so it layers under the polynomial calibration).
+        self._egain_applied = False
+        self._egain_label = ""
+        # Time correction (Shifts… window): a constant added to ``dt`` or a
+        # segment alignment, both writing the ``dt_cal`` column. _dt_shift holds
+        # the constant (float) when that mode is used; _dt_segments_applied marks
+        # the segment-alignment mode. Either makes _dt_key switch to "dt_cal".
+        self._dt_shift = None
+        self._dt_segments_applied = False
+        self._dt_label = "No time shift"
+        self._dt_key = "dt"
+        self._shifts_dlg = None
         self._wire()
         self._refresh_sel_list()
+
+    @property
+    def _dt_corrected(self):
+        """True when any time correction (constant or segment) is active."""
+        return self._dt_shift is not None or self._dt_segments_applied
 
     def _wire(self):
         o = self.opts
@@ -630,6 +915,7 @@ class ApiController:
         o.btn_clear_sel.clicked.connect(self._clear_selections)
         o.btn_retrieve_cal.clicked.connect(self._retrieve_calibration)
         o.btn_clear_cal.clicked.connect(self._clear_calibration)
+        o.btn_shifts.clicked.connect(self._open_shifts)
         o.cb_spe_log.toggled.connect(self._toggle_spe_log)
         o.cb_xy_log.toggled.connect(lambda *_: self._replot_xy())
         o.btn_vmax.clicked.connect(self._apply_vmax)
@@ -709,6 +995,14 @@ class ApiController:
         self.e_units = None
         self.opts.lbl_cal.setText("Uncalibrated (channels)")
         self.opts.btn_clear_cal.setEnabled(False)
+        # …and any drift corrections: the fresh dataframe has no derived columns.
+        self._dt_shift = None
+        self._dt_segments_applied = False
+        self._dt_label = "No time shift"
+        self._dt_key = "dt"
+        self._egain_applied = False
+        self._egain_label = ""
+        self._refresh_shift_labels()
 
         self._configure_keys(dtype)
         self._initialize_plots()
@@ -719,25 +1013,35 @@ class ApiController:
     def _configure_keys(self, dtype):
         """Set the X/Y/energy column keys and plot ranges for the data type.
 
-        ``_chan_key`` is the raw channel column the energy histogram is binned
-        from (and the source for smart calibration). When a calibration has been
-        applied, the energy panel switches to the derived ``energy_cal`` column.
+        Channel axis layering (low → high):
+        ``_chan_base`` is the pristine raw channel column for the data type
+        ("energy_orig"/"energy"). When a gain-shift drift correction is applied,
+        ``_chan_key`` switches to the corrected ``energy_drift`` column so the
+        histogram, send-to-spectrum and the polynomial calibration all read the
+        drift-corrected channels. ``ekey`` is then ``energy_cal`` once a
+        polynomial calibration is applied, else ``_chan_key``.
         """
         df = self.df_current
         if dtype == TYPE_SIMS:
-            self.xkey, self.ykey, self._chan_key = "X", "Y", "energy"
+            self.xkey, self.ykey, self._chan_base = "X", "Y", "energy"
             self.xyplane = (-0.2, 0.2, -0.2, 0.2)
             chan_range = [0, float(df["energy"].max())]
         elif dtype == TYPE_CAL:
             self.df_current = apicalc.calc_own_pos(self.df_current)
-            self.xkey, self.ykey, self._chan_key = "X2", "Y2", "energy"
+            self.xkey, self.ykey, self._chan_base = "X2", "Y2", "energy"
             self.xyplane = (-0.9, 0.9, -0.9, 0.9)
             chan_range = [0, float(self.df_current["energy"].max())]
         else:  # raw
             self.df_current = apicalc.calc_own_pos(self.df_current)
-            self.xkey, self.ykey, self._chan_key = "X2", "Y2", "energy_orig"
+            self.xkey, self.ykey, self._chan_base = "X2", "Y2", "energy_orig"
             self.xyplane = (-0.9, 0.9, -0.9, 0.9)
             chan_range = [0, 2 ** 16]
+        # Gain-shift drift correction layers under everything: the corrected
+        # channels become the working channel axis when present.
+        if self._egain_applied and "energy_drift" in self.df_current.columns:
+            self._chan_key = "energy_drift"
+        else:
+            self._chan_key = self._chan_base
         # Fit the X-Y extent to where the hits actually land instead of the
         # detector's full physical plane. Most runs illuminate only a central
         # patch, so the fixed plane left the map floating in empty space (and the
@@ -751,6 +1055,13 @@ class ApiController:
         else:
             self.ekey = self._chan_key
             self.erange = chan_range
+        # Time axis: read the corrected column when a time correction (constant
+        # shift or segment alignment) is active and present. Mirrors the energy
+        # path so it survives Reset (which keeps dt_cal on the rebuilt frame).
+        if self._dt_corrected and "dt_cal" in self.df_current.columns:
+            self._dt_key = "dt_cal"
+        else:
+            self._dt_key = "dt"
 
     @staticmethod
     def _fit_xyplane(df, xkey, ykey, fallback, pad=0.06):
@@ -825,15 +1136,26 @@ class ApiController:
         self.opts.lbl_info.setText("<br>".join(lines))
 
     # -- panel drawing ---------------------------------------------------------
-    def _plot_energy(self, df):
-        ax = self.page.ax_spe
-        if ax is None:
-            return
+    def _compute_energy_hist(self, df):
+        """Bin *df* into the energy histogram (self.gam / self.gam_x).
+
+        Kept separate from drawing so "Send to spectrum" never depends on the
+        energy panel having been drawn first — otherwise the first click can
+        find self.gam still None (no draw yet) and silently do nothing.
+        """
         self.gam, edg = np.histogram(df[self.ekey], bins=self.ebins, range=self.erange)
         self.gam_x = (edg[1:] + edg[:-1]) / 2
+
+    def _plot_energy(self, df):
+        # Always (re)compute the histogram, even if the axis isn't ready yet, so
+        # Send has data to work with regardless of draw timing.
+        self._compute_energy_hist(df)
         # The energy histogram just changed — clear any "✓ Sent" confirmation so
         # the button reflects that this spectrum hasn't been sent yet.
         self._reset_send_button()
+        ax = self.page.ax_spe
+        if ax is None:
+            return
         ax.plot(self.gam_x, self.gam, color=T.LOGO_GREEN, linewidth=0.9)
         ax.set_yscale("log" if self.opts.cb_spe_log.isChecked() else "linear")
         ax.set_xlabel(self._energy_xlabel())
@@ -851,12 +1173,25 @@ class ApiController:
         ax = self.page.ax_dt
         if ax is None or df.shape[0] == 0:
             return
-        low, high = np.percentile(df["dt"], [0.2, 99.5])
+        low, high = np.percentile(df[self._dt_key], [0.2, 99.5])
+        corrected = self._dt_corrected and self._dt_key != "dt" and "dt" in df.columns
+        if corrected:
+            # Show the raw dt faintly behind the corrected spectrum, over a
+            # combined range, so a constant offset (which otherwise just re-ranges
+            # the panel) is clearly visible as the peak moving off the raw one.
+            rlow, rhigh = np.percentile(df["dt"], [0.2, 99.5])
+            low, high = min(low, rlow), max(high, rhigh)
+            ax.hist(df["dt"], bins=self.tbins, range=(low, high),
+                    color=T.TEXT_DIM, alpha=0.35, label="raw")
         # Dark bin edges (as in the legacy plot) separate the bars on the cyan fill.
-        ax.hist(df["dt"], bins=self.tbins, range=(low, high),
-                color=T.ACCENT_CYAN, alpha=0.8, edgecolor=API_PLOT_BG, linewidth=0.4)
-        ax.set_xlabel("dt (ns)")
+        ax.hist(df[self._dt_key], bins=self.tbins, range=(low, high),
+                color=T.ACCENT_CYAN, alpha=0.8, edgecolor=API_PLOT_BG, linewidth=0.4,
+                label="corrected" if corrected else None)
+        ax.set_xlabel("dt (ns, shifted)" if self._dt_corrected else "dt (ns)")
         ax.set_ylabel("Counts")
+        if corrected:
+            ax.legend(loc="upper right", fontsize=8, facecolor=API_PLOT_BG,
+                      edgecolor=T.BORDER, labelcolor=T.TEXT_PRIMARY)
         self.page._style(ax)
 
     def _replot_xy(self):
@@ -974,12 +1309,12 @@ class ApiController:
         if self.df_current is None:
             return
         if self.dt_flag == 0:
-            mask = (self.df_current["dt"] > tmin) & (self.df_current["dt"] < tmax)
+            mask = (self.df_current[self._dt_key] > tmin) & (self.df_current[self._dt_key] < tmax)
             self.df_previous = self.df_current.copy()
             self.df_current = self.df_current[mask]
             self.dt_flag = 1
         else:
-            mask = (self.df_previous["dt"] > tmin) & (self.df_previous["dt"] < tmax)
+            mask = (self.df_previous[self._dt_key] > tmin) & (self.df_previous[self._dt_key] < tmax)
             self.df_current = self.df_previous[mask]
         self.df_current = self.df_current.reset_index(drop=True)
         if self.page.ax_spe is not None:
@@ -1151,14 +1486,12 @@ class ApiController:
         self._status(f"Plotted {len(self.selections)} selection(s)")
 
     def _plot_energy_overlays(self):
+        self._compute_energy_hist(self.df_current)
+        self._reset_send_button()
         ax = self.page.ax_spe
         if ax is None:
             return
         ax.clear()
-        self.gam, edg = np.histogram(
-            self.df_current[self.ekey], bins=self.ebins, range=self.erange)
-        self.gam_x = (edg[1:] + edg[:-1]) / 2
-        self._reset_send_button()
         # Full spectrum dim/gray, each selection's band filled in its colour.
         ax.plot(self.gam_x, self.gam, color=T.TEXT_DIM, linewidth=0.9, alpha=0.7)
         for sel in self.selections:
@@ -1181,12 +1514,12 @@ class ApiController:
         if base.shape[0] == 0:
             self.page._style(ax)
             return
-        low, high = np.percentile(base["dt"], [0.2, 99.5])
+        low, high = np.percentile(base[self._dt_key], [0.2, 99.5])
         # Gray base histogram, each selection overlaid as a coloured outline.
-        ax.hist(base["dt"], bins=self.tbins, range=(low, high),
+        ax.hist(base[self._dt_key], bins=self.tbins, range=(low, high),
                 color=T.TEXT_DIM, alpha=0.30, edgecolor=API_PLOT_BG, linewidth=0.3)
         for sel in self.selections:
-            d = sel["df"]["dt"]
+            d = sel["df"][self._dt_key]
             if len(d) == 0:
                 continue
             ax.hist(d, bins=self.tbins, range=(low, high), histtype="step",
@@ -1310,6 +1643,138 @@ class ApiController:
         self.opts.btn_clear_cal.setEnabled(False)
         self.opts.lbl_cal.setText("Uncalibrated (channels)")
         self._status("Calibration cleared — back to raw channels")
+
+    # -- drift correction (Shifts… window) -------------------------------------
+    def _rebuild_from_master(self):
+        """Re-derive the working frames from df_api and redraw (reset-style)."""
+        self.df_current = self.df_api.copy()
+        self.df_previous = self.df_api.copy()
+        self.en_flag = self.dt_flag = self.xy_flag = 0
+        self.vmax = None
+        self.opts.ed_vmax.clear()
+        self._reset_selections()
+        self._configure_keys(self._data_type())
+        self._initialize_plots()
+
+    def _chan_erange(self):
+        """Histogram range for the raw channel axis of the current data type."""
+        base = self._chan_base or "energy_orig"
+        if base == "energy_orig":
+            return (0.0, float(2 ** 16))
+        return (0.0, float(self.df_api[base].max()))
+
+    def _dt_erange(self):
+        dt = self.df_api["dt"].astype(float)
+        return (float(dt.min()), float(dt.max()))
+
+    # energy gain shift ........................................................
+    def apply_energy_gainshift(self, n_segments, method="shift", xrange=None):
+        """Drift-correct the energy channels: split into time segments and align
+        each onto the first, writing corrected channels to ``energy_drift``.
+        ``_chan_key`` then reads that column, so the histogram, send-to-spectrum
+        and any polynomial calibration all layer on the corrected channels. The
+        column lives on df_api, so it survives Reset."""
+        if self.df_api is None:
+            self._status("Load an API file first")
+            return
+        base = self._chan_base or "energy_orig"
+        gs = apicalc.GainShift(self.df_api, n_segments=int(n_segments),
+                               bins=self.ebins, erange=self._chan_erange(),
+                               col=base, out_col="energy_drift")
+        gs.align(method=method, xrange=xrange)
+        self.df_api = gs.df
+        self._egain_applied = True
+        self._egain_label = f"Gain-shift: {int(n_segments)} seg · {method}"
+        self._rebuild_from_master()
+        # Keep any polynomial calibration consistent with the corrected channels.
+        if self._cal_coeffs is not None:
+            self.apply_calibration(self._cal_coeffs, self.e_units)
+        self._refresh_shift_labels()
+        self._status(f"Applied energy gain-shift ({int(n_segments)} seg, {method})")
+
+    def clear_energy_gainshift(self):
+        if not self._egain_applied:
+            self._status("No energy gain-shift applied")
+            return
+        if self.df_api is not None and "energy_drift" in self.df_api.columns:
+            self.df_api = self.df_api.drop(columns=["energy_drift"])
+        self._egain_applied = False
+        self._egain_label = ""
+        self._rebuild_from_master()
+        if self._cal_coeffs is not None:
+            self.apply_calibration(self._cal_coeffs, self.e_units)
+        self._refresh_shift_labels()
+        self._status("Energy gain-shift cleared")
+
+    # time correction ..........................................................
+    def apply_dt_shift(self, shift):
+        """Constant time shift: dt_cal = dt + shift (from the original dt, so
+        re-applying is not cumulative). Replaces any segment alignment. The
+        column lives on df_api so it survives Reset; independent of the energy
+        correction."""
+        if self.df_api is None:
+            return
+        shift = float(shift)
+        df = self.df_api.copy()
+        df["dt_cal"] = df["dt"].astype(float) + shift
+        self.df_api = df
+        self._dt_shift = shift
+        self._dt_segments_applied = False
+        self._dt_label = f"Time shifted by {shift:+g} ns"
+        self._rebuild_from_master()
+        self._refresh_shift_labels()
+        self._status(f"Applied time shift {shift:+g} ns")
+
+    def apply_dt_gainshift(self, n_segments, method="shift", xrange=None):
+        """Segment-based time alignment: split dt into time segments and align
+        each onto the first, writing ``dt_cal``. Replaces any constant shift."""
+        if self.df_api is None:
+            self._status("Load an API file first")
+            return
+        gs = apicalc.GainShift(self.df_api, n_segments=int(n_segments),
+                               bins=self.tbins, erange=self._dt_erange(),
+                               col="dt", out_col="dt_cal")
+        gs.align(method=method, xrange=xrange)
+        self.df_api = gs.df
+        self._dt_shift = None
+        self._dt_segments_applied = True
+        self._dt_label = f"Time aligned: {int(n_segments)} seg · {method}"
+        self._rebuild_from_master()
+        self._refresh_shift_labels()
+        self._status(f"Applied time alignment ({int(n_segments)} seg, {method})")
+
+    def _clear_dt_shift(self):
+        """Drop the time correction (constant or segment) and revert to raw dt."""
+        if not self._dt_corrected:
+            self._status("No time correction applied")
+            return
+        if self.df_api is not None and "dt_cal" in self.df_api.columns:
+            self.df_api = self.df_api.drop(columns=["dt_cal"])
+        self._dt_shift = None
+        self._dt_segments_applied = False
+        self._dt_label = "No time shift"
+        self._rebuild_from_master()
+        self._refresh_shift_labels()
+        self._status("Time correction cleared — back to raw dt")
+
+    def _refresh_shift_labels(self):
+        """Push the current correction state into the Shifts dialog if it's open."""
+        dlg = self._shifts_dlg
+        if dlg is None:
+            return
+        dlg.set_energy_state(self._egain_applied, self._egain_label)
+        dlg.set_time_state(self._dt_corrected, self._dt_label)
+
+    def _open_shifts(self):
+        if self.df_api is None:
+            self._status("Load an API file first")
+            return
+        if self._shifts_dlg is None:
+            self._shifts_dlg = ShiftsDialog(self)
+        self._refresh_shift_labels()
+        self._shifts_dlg.refresh_previews()
+        self._shifts_dlg.show()
+        self._shifts_dlg.raise_()
 
     # -- 3D volume -------------------------------------------------------------
     def _open_3d(self):
@@ -1515,8 +1980,14 @@ class ApiController:
 
     def _send_to_spectrum(self):
         if self.gam is None:
-            self._status("Nothing to send — load an API file first")
-            return
+            # Normally populated when the energy panel draws; if no draw has
+            # happened yet, bin it on demand so the first click sends instead of
+            # silently doing nothing (and needing a second press). Flood-field
+            # runs have no energy spectrum, so there is genuinely nothing to send.
+            if self.df_current is None or self.ekey is None or self.flood_field:
+                self._status("Nothing to send — load an API file first")
+                return
+            self._compute_energy_hist(self.df_current)
         dtype = self._data_type()
         # Prefer an energy axis when one exists: a smart calibration we applied,
         # else the native MeV of simulated/calibrated data; raw stays in channels.
@@ -1531,13 +2002,14 @@ class ApiController:
                 spect = sp.Spectrum(counts=self.gam, energies=self.gam_x, e_units=units)
             else:
                 # Uncalibrated: carry the *real* channel values (gam_x bin centres)
-                # as the channel axis instead of 0..nbins indices, so a calibration
-                # built on this spectrum in the Calibration tab is in the same
-                # channel space as the API dataframe's raw energy column — letting
-                # "Retrieve calibration" round-trip correctly.
+                # on adc_channels (a pure coordinate), leaving `channels` as 0..N
+                # indices for the peak-finding/fitting machinery. A calibration
+                # built here fits against spect.cal_channels — i.e. the real
+                # channel space of the API dataframe's raw energy column — so its
+                # coefficients apply to that column directly and "Retrieve
+                # calibration" round-trips correctly.
                 spect = sp.Spectrum(counts=self.gam)
-                spect.channels = np.asarray(self.gam_x, dtype=float)
-                spect.x = spect.channels
+                spect.adc_channels = np.asarray(self.gam_x, dtype=float)
         except Exception as exc:  # noqa: BLE001
             self._status(f"Could not build spectrum: {exc}")
             return

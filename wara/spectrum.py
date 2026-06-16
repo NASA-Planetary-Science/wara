@@ -80,6 +80,13 @@ class Spectrum:
 
         self.counts = np.asarray(counts, dtype=float)
         self.channels = np.asarray(channels, dtype=int)
+        # Real ADC channel values, when the spectrum carries them (e.g. API
+        # spectra). This is a *coordinate only* — never used to index counts.
+        # `channels` always stays 0..N indices so all the peak-finding / fitting
+        # / slicing machinery operates on a clean positional axis. Calibration
+        # reads `cal_channels` (below) so its coefficients land in real channel
+        # space when these are present.
+        self.adc_channels = None
 
         # Per-bin uncertainty: use supplied array or default to Poisson sqrt(N),
         # with a floor of 1 to avoid zero weights in the fitter.
@@ -100,6 +107,19 @@ class Spectrum:
             self.y_label = "Cts"
         self.label = label
         
+    @property
+    def cal_channels(self):
+        """
+        Channel axis a calibration should be built against.
+
+        Returns the real ADC channel values when the spectrum carries them
+        (``adc_channels``), otherwise the 0..N index axis (``channels``). For
+        ordinary spectra the two are identical; for API spectra this is what
+        keeps calibration coefficients in the dataframe's channel space so they
+        can be applied to its raw channel column directly.
+        """
+        return self.adc_channels if self.adc_channels is not None else self.channels
+
     def __repr__(self):
         lt = f"{self.livetime:.3E} s" if self.livetime is not None else "N/A"
         return (
@@ -155,10 +175,11 @@ class Spectrum:
             description=self.description,
             label=self.label,
         )
-        # Preserve a non-default channel axis. __init__ resets channels to 0..N
-        # indices, but spectra sent from the API tab carry their real channel
-        # values; losing them would break a follow-up calibration.
-        new.channels = self.channels.copy()
+        # Carry the real ADC channel coordinate (API spectra); __init__ leaves
+        # it None. `channels` itself is always 0..N indices, so no special
+        # handling is needed for it.
+        if self.adc_channels is not None:
+            new.adc_channels = self.adc_channels.copy()
         return new
 
     def smooth(self, num=4):
@@ -195,6 +216,10 @@ class Spectrum:
         self.counts = new_cts
         self.counts_err = new_err
         self.channels = np.arange(0, len(new_cts), 1)
+        # Average the real ADC coordinate over each combined bin so it stays
+        # aligned 1:1 with the rebinned counts.
+        if self.adc_channels is not None:
+            self.adc_channels = self.adc_channels.reshape((new_size, -1)).mean(axis=1)
 
         if self.energies is not None:
             new_erg = self.energies.reshape((new_size, -1)).mean(axis=1)

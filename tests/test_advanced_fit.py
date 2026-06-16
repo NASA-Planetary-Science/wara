@@ -1148,13 +1148,14 @@ class TestPeakConstraintsRealData:
 
 
 # ---------------------------------------------------------------------------
-# Calibrated spectrum carrying a real (offset) channel axis
+# Calibrated spectrum carrying a real (offset) ADC channel coordinate
 #
 # Spectra sent from the API tab keep their real channel values on
-# spect.channels (not 0..N indices). A peak fit on such a spectrum after
-# calibration must not index energies/channels positionally with those channel
-# values — see peakfit.gaussians_bkg's bin-width correction factor, which used
-# to crash with "arrays used as indices must be of integer type" / IndexError.
+# spect.adc_channels (a pure coordinate); spect.channels stays the 0..N index
+# axis. A peak fit on such a spectrum after calibration must run on the index
+# axis and not break on the offset coordinate — see peakfit.gaussians_bkg's
+# bin-width correction factor, which used to crash with IndexError when the
+# real channel *values* leaked into positional indexing.
 # ---------------------------------------------------------------------------
 
 from wara import spectrum as _sp  # noqa: E402
@@ -1168,9 +1169,10 @@ class TestCalibratedOffsetChannels:
         counts = 50 + 800 * np.exp(-0.5 * ((ch - 4300) / 4) ** 2)
         counts = np.random.default_rng(0).poisson(counts).astype(float)
         # Build like the API "send to Spectrum" + Calibration "apply" flow:
-        # energies present, but channels are the real offset values.
+        # energies present, channels are 0..N indices, and the real offset
+        # values live on the adc_channels coordinate.
         spect = _sp.Spectrum(counts=counts, energies=0.5 * ch, e_units="keV")
-        spect.channels = ch.copy()
+        spect.adc_channels = ch.copy()
         return ps.PeakSearch(spect, ref_x=300.0, ref_fwhm=3.0, fwhm_at_0=1.0,
                              min_snr=2, method="fast")
 

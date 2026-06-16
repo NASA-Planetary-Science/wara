@@ -444,11 +444,27 @@ def test_send_uncalibrated_spectrum_carries_real_channels(api):
     c._send_to_spectrum()
     spect = w.spect
     assert spect is not None
-    # The sent spectrum's channel axis is gam_x (real channels), not 0..nbins-1,
-    # so a calibration built on it round-trips back to the dataframe.
-    np.testing.assert_allclose(spect.channels, c.gam_x)
-    np.testing.assert_allclose(spect.x, c.gam_x)
-    assert spect.channels.max() > len(spect.channels)   # proves real channels
+    # The real channels (gam_x) ride on adc_channels — the coordinate a
+    # calibration fits against (cal_channels) so it round-trips to the dataframe.
+    # Everything the user interacts with (channels, x, drag/fit) stays on the
+    # 0..N index axis so peak-finding and drag-and-fit behave like any file.
+    np.testing.assert_allclose(spect.adc_channels, c.gam_x)
+    np.testing.assert_allclose(spect.cal_channels, c.gam_x)
+    np.testing.assert_array_equal(spect.channels, np.arange(len(spect.counts)))
+    np.testing.assert_array_equal(spect.x, np.arange(len(spect.counts)))
+    assert spect.adc_channels.max() > len(spect.channels)   # proves real channels
+
+
+def test_send_works_without_a_prior_energy_draw(api):
+    # Regression: the first Send used to silently do nothing when the energy
+    # panel hadn't drawn yet (self.gam still None), forcing a second press.
+    # Send must bin the histogram on demand from df_current.
+    w, c = api
+    c._load()
+    c.gam = c.gam_x = None          # simulate "no draw happened yet"
+    c._send_to_spectrum()
+    assert w.spect is not None
+    assert c.gam is not None         # Send populated it on demand
 
 
 def test_apply_calibration_calibrates_dataframe(api):
@@ -549,6 +565,191 @@ def test_calibration_survives_reset(api):
     c._reset()                                   # reset keeps the calibration
     assert c.e_units == "keV" and c.ekey == "energy_cal"
     assert c.df_current.shape[0] == 4000
+
+
+# ── Time (dt) shift ──────────────────────────────────────────────────────────
+
+def test_apply_dt_shift_adds_dt_cal(api):
+    _w, c = api
+    c._load()
+    assert c._dt_key == "dt"
+    raw = c.df_api["dt"].to_numpy().copy()
+    c.apply_dt_shift(12.5)                        # dt_cal = dt + 12.5
+    assert c._dt_shift == 12.5
+    assert c._dt_key == "dt_cal"
+    assert "dt_cal" in c.df_current.columns and "dt_cal" in c.df_api.columns
+    np.testing.assert_allclose(c.df_current["dt_cal"].to_numpy(), raw + 12.5)
+    assert c._dt_corrected
+    assert "shifted" in c._dt_label.lower()
+    assert "shifted" in c.page.ax_dt.get_xlabel().lower()
+
+
+def test_apply_dt_shift_is_not_cumulative(api):
+    _w, c = api
+    c._load()
+    raw = c.df_api["dt"].to_numpy().copy()
+    c.apply_dt_shift(10.0)
+    c.apply_dt_shift(-3.0)                        # recomputed from original dt
+    np.testing.assert_allclose(c.df_current["dt_cal"].to_numpy(), raw - 3.0)
+    assert c._dt_shift == -3.0
+
+
+def test_dt_shift_survives_reset_with_energy_cal(api):
+    # The explicit requirement: Reset remembers BOTH calibrations.
+    _w, c = api
+    c._load()
+    c.apply_calibration([0.0, 0.5], units="keV")
+    c.apply_dt_shift(7.0)
+    raw = c.df_api["dt"].to_numpy().copy()
+    c.apply_t_filter(*np.percentile(c.df_current["dt_cal"], [10, 90]))
+    assert c.df_current.shape[0] < 4000
+    c._reset()
+    assert c.e_units == "keV" and c.ekey == "energy_cal"   # energy cal kept
+    assert c._dt_shift == 7.0 and c._dt_key == "dt_cal"     # time shift kept
+    assert c.df_current.shape[0] == 4000
+    np.testing.assert_allclose(c.df_current["dt_cal"].to_numpy(), raw + 7.0)
+
+
+def test_clear_dt_shift_is_independent_of_energy_cal(api):
+    _w, c = api
+    c._load()
+    c.apply_calibration([0.0, 0.5], units="keV")
+    c.apply_dt_shift(5.0)
+    c._clear_dt_shift()                           # only the shift goes away
+    assert c._dt_shift is None and c._dt_key == "dt"
+    assert not c._dt_corrected
+    assert "dt_cal" not in c.df_current.columns and "dt_cal" not in c.df_api.columns
+    # Energy calibration is untouched.
+    assert c.e_units == "keV" and c.ekey == "energy_cal"
+    assert "energy_cal" in c.df_current.columns
+
+
+def test_clear_calibration_is_independent_of_dt_shift(api):
+    _w, c = api
+    c._load()
+    c.apply_calibration([0.0, 0.5], units="keV")
+    c.apply_dt_shift(5.0)
+    c._clear_calibration()                        # only the energy cal goes away
+    assert c.e_units is None and "energy_cal" not in c.df_current.columns
+    # Time shift is untouched.
+    assert c._dt_shift == 5.0 and c._dt_key == "dt_cal"
+    assert "dt_cal" in c.df_current.columns
+
+
+def test_load_clears_dt_shift(api):
+    _w, c = api
+    c._load()
+    c.apply_dt_shift(9.0)
+    c._load()                                     # a fresh run resets the shift
+    assert c._dt_shift is None and c._dt_key == "dt"
+    assert not c._dt_corrected
+    assert "dt_cal" not in c.df_current.columns
+    assert c._dt_label == "No time shift"
+
+
+# ── Energy gain-shift (drift correction) + Shifts dialog ──────────────────────
+
+def test_energy_gainshift_switches_chan_key(api):
+    _w, c = api
+    c._load()
+    assert c._chan_key == "energy_orig" and not c._egain_applied
+    c.apply_energy_gainshift(4, method="shift")
+    assert c._egain_applied
+    assert c._chan_key == "energy_drift"          # corrected channels are active
+    assert "energy_drift" in c.df_current.columns and "energy_drift" in c.df_api.columns
+    assert c.ekey == "energy_drift"               # uncalibrated → bins on corrected ch
+
+
+def test_energy_gainshift_survives_reset(api):
+    _w, c = api
+    c._load()
+    c.apply_energy_gainshift(4, method="shift")
+    c.apply_energy_filter(*np.percentile(c.df_current["energy_drift"], [10, 90]))
+    assert c.df_current.shape[0] < 4000
+    c._reset()
+    assert c._egain_applied and c._chan_key == "energy_drift"
+    assert c.df_current.shape[0] == 4000
+
+
+def test_clear_energy_gainshift_reverts(api):
+    _w, c = api
+    c._load()
+    c.apply_energy_gainshift(4)
+    c.clear_energy_gainshift()
+    assert not c._egain_applied and c._chan_key == "energy_orig"
+    assert "energy_drift" not in c.df_current.columns
+    assert "energy_drift" not in c.df_api.columns
+
+
+def test_energy_gainshift_layers_under_polynomial_cal(api):
+    _w, c = api
+    c._load()
+    c.apply_energy_gainshift(4, method="shift")
+    c.apply_calibration([0.0, 0.5], units="keV")
+    assert c.ekey == "energy_cal" and c._chan_key == "energy_drift"
+    # energy_cal must derive from the drift-corrected channels, not the raw ones.
+    np.testing.assert_allclose(
+        c.df_current["energy_cal"].to_numpy(),
+        0.5 * c.df_current["energy_drift"].to_numpy())
+
+
+def test_gainshift_after_calibration_reapplies_cal(api):
+    # Applying the gain-shift while a calibration is active must re-derive
+    # energy_cal from the freshly corrected channels (not leave it stale).
+    _w, c = api
+    c._load()
+    c.apply_calibration([0.0, 0.5], units="keV")
+    c.apply_energy_gainshift(4, method="shift")
+    np.testing.assert_allclose(
+        c.df_current["energy_cal"].to_numpy(),
+        0.5 * c.df_current["energy_drift"].to_numpy())
+
+
+def test_dt_gainshift_writes_dt_cal(api):
+    _w, c = api
+    c._load()
+    c.apply_dt_gainshift(4, method="shift")
+    assert c._dt_segments_applied and c._dt_shift is None
+    assert c._dt_corrected and c._dt_key == "dt_cal"
+    assert "dt_cal" in c.df_current.columns
+
+
+def test_constant_and_segment_dt_replace_each_other(api):
+    _w, c = api
+    c._load()
+    c.apply_dt_shift(5.0)
+    assert c._dt_shift == 5.0 and not c._dt_segments_applied
+    c.apply_dt_gainshift(4)
+    assert c._dt_shift is None and c._dt_segments_applied   # segment replaced constant
+    c.apply_dt_shift(2.0)
+    assert c._dt_shift == 2.0 and not c._dt_segments_applied  # constant replaced segment
+
+
+def test_energy_and_time_corrections_independent(api):
+    _w, c = api
+    c._load()
+    c.apply_energy_gainshift(4)
+    c.apply_dt_gainshift(4)
+    assert c._egain_applied and c._dt_segments_applied
+    assert c._chan_key == "energy_drift" and c._dt_key == "dt_cal"
+    c.clear_energy_gainshift()                    # clearing one leaves the other
+    assert not c._egain_applied and c._dt_segments_applied
+    assert "dt_cal" in c.df_current.columns
+
+
+def test_shifts_dialog_opens_and_drives_controller(api):
+    _w, c = api
+    c._load()
+    c._open_shifts()
+    dlg = c._shifts_dlg
+    assert dlg is not None and dlg.tabs.count() == 2
+    dlg._apply_segments("energy")                 # Apply on the Energy tab
+    assert c._egain_applied
+    dlg.f_const.setText("3.0"); dlg._apply_constant()
+    assert c._dt_shift == 3.0
+    dlg._clear("energy")
+    assert not c._egain_applied
+    dlg.close()
 
 
 def test_load_guards_blank_inputs(api):

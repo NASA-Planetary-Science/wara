@@ -271,7 +271,10 @@ class SmartCalibrationDialog(QDialog):
         if s is None or getattr(s, "peaks_idx", None) is None or len(s.peaks_idx) == 0:
             self._info("No peaks on the spectrum yet — run Find Peaks (or add channels manually).")
             return
-        chans = [float(spect.channels[i]) for i in s.peaks_idx]
+        # peaks_idx are positional indices; map them onto the real channel space
+        # (cal_channels) so imported peak channels match the dataframe / fit axis.
+        cal_ch = spect.cal_channels
+        chans = [float(cal_ch[i]) for i in s.peaks_idx]
         existing = set(round(c, 3) for c in self._values(self.lst_ch))
         added = [c for c in chans if round(c, 3) not in existing]
         self._add_values(self.lst_ch, added)
