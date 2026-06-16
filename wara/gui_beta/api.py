@@ -2067,27 +2067,31 @@ class ApiController:
             f"Bins → energy {self.ebins:,} · dt {self.tbins:,} · X-Y {self.hexbins:,}")
 
     def _apply_to_data(self):
-        """Bake the active energy and time corrections into the dataframe as the
-        canonical ``energy_cal`` and ``dt_cal`` columns, preserving every other
-        column. Writes ``energy_cal`` only when a true energy calibration is
-        active (``e_units`` set — a bare gain-shift does not count) and ``dt_cal``
-        only when a time correction is active — so "(if any)" holds. Both land on
-        df_api, so they survive Reset and are picked up by the loader's column
-        priority."""
+        """Bake the active energy and time corrections into the full original
+        dataframe (df_api, before any cuts) as the canonical ``energy_cal`` and
+        ``dt_cal`` columns, preserving every other column.
+
+        Writes ``energy_cal`` when either a polynomial calibration is active
+        (``e_units`` set) or an energy gain-shift has been applied
+        (``_egain_applied``).  In the gain-shift-only case ``self.ekey`` points
+        at ``energy_drift``, so ``energy_cal`` receives the drift-corrected
+        channel values.  Writes ``dt_cal`` when any time correction is active.
+        Always operates on df_api so cuts on df_current do not affect the
+        result."""
         self._flash_button(self.opts.btn_apply_data, bg=T.SNR_PURPLE, fg=T.BG_DARK)
         if self.df_api is None:
             self._status("Load an API file first")
             return
-        energy_changed = self.e_units is not None
+        energy_changed = self.e_units is not None or self._egain_applied
         dt_changed = self._dt_corrected
         if not energy_changed and not dt_changed:
             self._status("No energy or time changes to apply")
             return
         df = self.df_api.copy()
         applied = []
-        # When calibrated, self.ekey is already "energy_cal"; self._dt_key is
-        # "dt_cal" when time-corrected. Copying them under the canonical names is
-        # a no-op in those cases, and keeps the intent explicit.
+        # When calibrated, self.ekey is "energy_cal"; when gain-shift only it is
+        # "energy_drift".  Either way, copying it as "energy_cal" bakes the
+        # active correction into the canonical column.  Same logic for dt_cal.
         if energy_changed and self.ekey in df.columns:
             df["energy_cal"] = df[self.ekey].to_numpy()
             applied.append("energy_cal")

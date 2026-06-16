@@ -699,6 +699,34 @@ def test_apply_to_data_noop_without_changes(api):
     assert "energy_cal" not in c.df_api.columns and "dt_cal" not in c.df_api.columns
 
 
+def test_apply_to_data_energy_cal_from_gainshift_only(api):
+    """Gain-shift alone (no polynomial calibration) should produce energy_cal."""
+    _w, c = api
+    c._load()
+    c.apply_energy_gainshift(4, method="shift")
+    assert "energy_drift" in c.df_api.columns and "energy_cal" not in c.df_api.columns
+    c._apply_to_data()
+    assert "energy_cal" in c.df_api.columns
+    np.testing.assert_array_equal(
+        c.df_api["energy_cal"].to_numpy(), c.df_api["energy_drift"].to_numpy())
+
+
+def test_apply_to_data_ignores_cuts(api):
+    """Apply to data should write to the full df_api regardless of df_current cuts."""
+    _w, c = api
+    c._load()
+    c.apply_calibration([0.0, 0.5], units="keV")
+    c.apply_dt_shift(5.0)
+    full_len = len(c.df_api)
+    # Simulate a dt cut that shrinks df_current.
+    dt_vals = c.df_api["dt_cal"]
+    c.apply_t_filter(float(dt_vals.min()), float(dt_vals.quantile(0.5)))
+    assert len(c.df_current) < full_len
+    c._apply_to_data()
+    assert len(c.df_api) == full_len   # original row count preserved
+    assert "energy_cal" in c.df_api.columns and "dt_cal" in c.df_api.columns
+
+
 def test_load_clears_dt_shift(api):
     _w, c = api
     c._load()
