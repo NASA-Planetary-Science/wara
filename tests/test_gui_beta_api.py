@@ -114,7 +114,6 @@ def api(qapp, monkeypatch):
     c.opts.ed_date.setText("2023-07-02")
     c.opts.ed_run.setText("91")
     c.opts.ed_ch.setText("5")
-    c.opts.rb_raw.setChecked(True)
     yield w, c
     w.close()
 
@@ -138,6 +137,34 @@ def test_load_builds_panels_and_info(api):
     # Values are wrapped in coloured spans; labels are bold.
     assert "<b>" in info and "color:" in info
     assert c.page.ax_xy.get_title() == ""
+
+
+def test_bin_boxes_prepopulated_with_defaults(api):
+    _w, c = api
+    assert c.opts.ed_ebins.text() == str(api_mod.DEFAULT_EBINS)
+    assert c.opts.ed_tbins.text() == str(api_mod.DEFAULT_TBINS)
+    assert c.opts.ed_xybins.text() == str(api_mod.DEFAULT_HEXBINS)
+
+
+def test_apply_bins_rebins_panels(api):
+    _w, c = api
+    c._load()
+    c.opts.ed_ebins.setText("1024")
+    c.opts.ed_tbins.setText("256")
+    c.opts.ed_xybins.setText("40")
+    c._apply_bins()
+    assert (c.ebins, c.tbins, c.hexbins) == (1024, 256, 40)
+    # The energy histogram is rebinned to the new count.
+    assert len(c.gam) == 1024
+
+
+def test_apply_bins_rejects_bad_value(api):
+    _w, c = api
+    c._load()
+    c.opts.ed_ebins.setText("oops")
+    c._apply_bins()
+    # Invalid entry aborts without touching the bin counts.
+    assert c.ebins == api_mod.DEFAULT_EBINS
 
 
 def test_grids_off_and_dt_bin_edges(api):
@@ -634,6 +661,42 @@ def test_clear_calibration_is_independent_of_dt_shift(api):
     # Time shift is untouched.
     assert c._dt_shift == 5.0 and c._dt_key == "dt_cal"
     assert "dt_cal" in c.df_current.columns
+
+
+# ── Apply to data ────────────────────────────────────────────────────────────
+
+def test_apply_to_data_bakes_both_columns(api):
+    _w, c = api
+    c._load()
+    raw_dt = c.df_api["dt"].to_numpy().copy()
+    orig_cols = set(c.df_api.columns)
+    c.apply_calibration([0.0, 0.5], units="keV")  # energy_cal = 0.5 * energy_orig
+    c.apply_dt_shift(7.0)                          # dt_cal = dt + 7
+    c._apply_to_data()
+    # Both canonical columns exist on the master frame…
+    assert "energy_cal" in c.df_api.columns and "dt_cal" in c.df_api.columns
+    np.testing.assert_allclose(
+        c.df_api["energy_cal"].to_numpy(), 0.5 * c.df_api["energy_orig"].to_numpy())
+    np.testing.assert_allclose(c.df_api["dt_cal"].to_numpy(), raw_dt + 7.0)
+    # …and every original column is preserved.
+    assert orig_cols.issubset(set(c.df_api.columns))
+
+
+def test_apply_to_data_only_dt_when_no_energy_change(api):
+    _w, c = api
+    c._load()
+    c.apply_dt_shift(3.0)
+    c._apply_to_data()
+    assert "dt_cal" in c.df_api.columns
+    # No energy calibration was applied, so no energy_cal column is created.
+    assert "energy_cal" not in c.df_api.columns
+
+
+def test_apply_to_data_noop_without_changes(api):
+    _w, c = api
+    c._load()
+    c._apply_to_data()
+    assert "energy_cal" not in c.df_api.columns and "dt_cal" not in c.df_api.columns
 
 
 def test_load_clears_dt_shift(api):

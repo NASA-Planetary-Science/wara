@@ -57,7 +57,7 @@ from matplotlib.backends.backend_qt5agg import NavigationToolbar2QT as NavToolba
 
 from PyQt5.QtWidgets import (
     QWidget, QLabel, QPushButton, QVBoxLayout, QHBoxLayout, QScrollArea,
-    QLineEdit, QRadioButton, QButtonGroup, QCheckBox, QSizePolicy, QDialog,
+    QLineEdit, QCheckBox, QSizePolicy, QDialog,
     QGridLayout, QMessageBox, QColorDialog, QDialogButtonBox, QTabWidget,
     QComboBox,
 )
@@ -72,13 +72,16 @@ from .widgets import hsep, header, labeled_row
 
 API_PLOT_BG = T.BG_PLOT
 COLORMAP = "plasma"
+# Default histogram bin counts (energy spectrum, dt histogram, X-Y hexbin grid).
+# Shown pre-filled in the Display "bins" boxes; high-resolution channels bump the
+# energy bins at load (see _load_file).
+DEFAULT_EBINS = 2 ** 12
+DEFAULT_TBINS = 512
+DEFAULT_HEXBINS = 80
 # Faint gray density map for the *base* X-Y hexbin when colored energy
 # selections are overlaid on top: low counts fade into the plot background, high
 # counts brighten to a dim gray so the selections stay the focus.
 GRAY_CMAP = LinearSegmentedColormap.from_list("api_gray", [API_PLOT_BG, T.TEXT_DIM])
-
-# Data-type choices (mutually exclusive — see ApiOptions radios).
-TYPE_RAW, TYPE_CAL, TYPE_SIMS = "raw", "calibrated", "sims"
 
 # Send-to-Spectrum button: resting label vs the green "Sent" confirmation. Kept
 # short (and the same length) so the button fits the original-width options panel
@@ -702,28 +705,13 @@ class ApiOptions(QScrollArea):
         for lbl, ed in [("Date", self.ed_date), ("Run", self.ed_run), ("Channel", self.ed_ch)]:
             row, _ = labeled_row(lbl, ed); ed.setFixedWidth(104)
             lay.addWidget(row)
-        self.ed_path = QLineEdit()
-        self.ed_path.setPlaceholderText("optional data path (else data-path.txt)")
-        lay.addWidget(self.ed_path)
 
-        # ── Data type (mutually exclusive) ───────────────────────────
-        lay.addWidget(hsep()); lay.addWidget(header("DATA TYPE"))
-        self.type_group = QButtonGroup(self); self.type_group.setExclusive(True)
-        self.rb_raw = QRadioButton("Raw")
-        self.rb_cal = QRadioButton("Calibrated")
-        self.rb_sims = QRadioButton("Simulated")
-        self.rb_raw.setToolTip("Experimental raw data")
-        self.rb_cal.setToolTip("Calibrated and time-shifted experimental data")
-        self.rb_sims.setToolTip("Simulated data")
-        self.rb_raw.setChecked(True)
-        for rb in (self.rb_raw, self.rb_cal, self.rb_sims):
-            self.type_group.addButton(rb); lay.addWidget(rb)
-        note = QLabel("Raw / Calibrated are experimental data.")
-        note.setObjectName("stat_key"); note.setWordWrap(True)
-        lay.addWidget(note)
-
+        lay.addWidget(hsep())
         self.btn_load = QPushButton("Load API file"); self.btn_load.setObjectName("open_btn")
         self.btn_load.setCursor(Qt.PointingHandCursor)
+        self.btn_load.setToolTip(
+            "Loads the API file for the selected run.\n"
+            "Make sure your data path is set up correctly in data-path.txt.")
         lay.addWidget(self.btn_load)
 
         # ── Run info readout ─────────────────────────────────────────
@@ -744,13 +732,49 @@ class ApiOptions(QScrollArea):
         self.cb_xy_log.setToolTip("Logarithmic color scale on the X-Y map")
         lay.addWidget(self.cb_xy_log)
         self.ed_vmax = QLineEdit(); self.ed_vmax.setPlaceholderText("vmax")
-        vrow, self.btn_vmax = labeled_row("vmax", self.ed_vmax, apply_btn=True)
+        vrow, _ = labeled_row("vmax", self.ed_vmax)
         self.ed_vmax.setFixedWidth(70)
-        self.ed_vmax.setToolTip("Cap the X-Y color scale at this count (forces linear scale)")
+        self.ed_vmax.setToolTip("Cap the X-Y color scale at this count (forces "
+                                "linear scale) — press Enter to apply")
         lay.addWidget(vrow)
+
+        # ── Histogram bins ───────────────────────────────────────────
+        # Pre-populated with the controller's defaults (see ApiController).
+        self.ed_ebins = QLineEdit(str(DEFAULT_EBINS))
+        self.ed_tbins = QLineEdit(str(DEFAULT_TBINS))
+        self.ed_xybins = QLineEdit(str(DEFAULT_HEXBINS))
+        self.ed_ebins.setToolTip("Number of bins on the energy spectrum")
+        self.ed_tbins.setToolTip("Number of bins on the dt (time) histogram")
+        self.ed_xybins.setToolTip("Hexbin grid size on the X-Y map")
+        for lbl, ed in [("Energy bins", self.ed_ebins),
+                        ("dt bins", self.ed_tbins),
+                        ("X-Y bins", self.ed_xybins)]:
+            ed.setFixedWidth(70)
+            ed.setToolTip(f"{ed.toolTip()} — press Enter to apply")
+            row, _ = labeled_row(lbl, ed)
+            lay.addWidget(row)
+
         self.btn_filters = QPushButton("Filters…"); self.btn_filters.setObjectName("action_btn")
         self.btn_filters.setCursor(Qt.PointingHandCursor)
         lay.addWidget(self.btn_filters)
+
+        # ── Energy calibration ───────────────────────────────────────
+        # ── Drift correction (time + energy shifts) ──────────────────
+        # Comes before calibration: drift is corrected on the raw channels first,
+        # then the calibration maps the corrected channels to energy.
+        lay.addWidget(hsep()); lay.addWidget(header("DRIFT CORRECTION"))
+        shift_note = QLabel(
+            "Correct gain/time drift over the run: split into time segments and "
+            "align them, or shift dt by a constant — independently for the "
+            "energy and time axes.")
+        shift_note.setObjectName("stat_key"); shift_note.setWordWrap(True)
+        lay.addWidget(shift_note)
+        self.btn_shifts = QPushButton("Shifts…")
+        self.btn_shifts.setObjectName("action_btn")
+        self.btn_shifts.setCursor(Qt.PointingHandCursor)
+        self.btn_shifts.setToolTip(
+            "Open the energy gain-shift and time-shift correction window")
+        lay.addWidget(self.btn_shifts)
 
         # ── Energy calibration ───────────────────────────────────────
         lay.addWidget(hsep()); lay.addWidget(header("ENERGY CALIBRATION"))
@@ -777,21 +801,6 @@ class ApiOptions(QScrollArea):
         self.lbl_cal = QLabel("Uncalibrated (channels)")
         self.lbl_cal.setObjectName("stat_key"); self.lbl_cal.setWordWrap(True)
         lay.addWidget(self.lbl_cal)
-
-        # ── Drift correction (time + energy shifts) ──────────────────
-        lay.addWidget(hsep()); lay.addWidget(header("DRIFT CORRECTION"))
-        shift_note = QLabel(
-            "Correct gain/time drift over the run: split into time segments and "
-            "align them, or shift dt by a constant — independently for the "
-            "energy and time axes.")
-        shift_note.setObjectName("stat_key"); shift_note.setWordWrap(True)
-        lay.addWidget(shift_note)
-        self.btn_shifts = QPushButton("Shifts…")
-        self.btn_shifts.setObjectName("action_btn")
-        self.btn_shifts.setCursor(Qt.PointingHandCursor)
-        self.btn_shifts.setToolTip(
-            "Open the energy gain-shift and time-shift correction window")
-        lay.addWidget(self.btn_shifts)
 
         # ── Energy selections ────────────────────────────────────────
         lay.addWidget(hsep()); lay.addWidget(header("ENERGY SELECTIONS"))
@@ -830,6 +839,13 @@ class ApiOptions(QScrollArea):
         self.btn_3d.setCursor(Qt.PointingHandCursor)
         self.btn_3d.setToolTip("Plotly volume render of the reconstructed X-Y-Z hit cloud")
         lay.addWidget(self.btn_3d)
+        self.btn_apply_data = QPushButton("Apply to data")
+        self.btn_apply_data.setObjectName("action_btn")
+        self.btn_apply_data.setCursor(Qt.PointingHandCursor)
+        self.btn_apply_data.setToolTip(
+            "Bake the active energy calibration and time shift into the dataframe "
+            "as energy_cal and dt_cal columns, preserving every other column")
+        lay.addWidget(self.btn_apply_data)
         self.btn_reset = QPushButton("Reset"); self.btn_reset.setObjectName("danger_btn")
         self.btn_reset.setCursor(Qt.PointingHandCursor)
         lay.addWidget(self.btn_reset)
@@ -854,9 +870,9 @@ class ApiController:
         self.xkey = self.ykey = self.ekey = None
         self.xyplane = (-0.9, 0.9, -0.9, 0.9)
         self.erange = [0, 1]
-        self.ebins = 2 ** 12
-        self.tbins = 512
-        self.hexbins = 80
+        self.ebins = DEFAULT_EBINS
+        self.tbins = DEFAULT_TBINS
+        self.hexbins = DEFAULT_HEXBINS
         self.vmax = None
         self.flood_field = False
         # Static run-settings rows: list of (label, value, value_color).
@@ -879,6 +895,10 @@ class ApiController:
         # channels).
         self._chan_key = None
         self._chan_base = None      # pristine raw-channel column for the data type
+        # Whether the detected channel base is already in physical units: "MeV"
+        # when the data carries an "energy" axis (calibrated/simulated), None when
+        # it carries raw "energy_orig" channels. Drives the send-to-Spectrum units.
+        self._native_units = None
         self._cal_coeffs = None
         self.e_units = None
         # Gain-shift drift correction (Shifts… window): when applied, the
@@ -909,6 +929,7 @@ class ApiController:
         o.btn_reset.clicked.connect(self._reset)
         o.btn_send.clicked.connect(self._send_to_spectrum)
         o.btn_3d.clicked.connect(self._open_3d)
+        o.btn_apply_data.clicked.connect(self._apply_to_data)
         o.btn_filters.clicked.connect(self._open_filters)
         o.btn_add_sel.clicked.connect(self._arm_selection)
         o.btn_plot_sel.clicked.connect(self._plot_selections)
@@ -918,18 +939,12 @@ class ApiController:
         o.btn_shifts.clicked.connect(self._open_shifts)
         o.cb_spe_log.toggled.connect(self._toggle_spe_log)
         o.cb_xy_log.toggled.connect(lambda *_: self._replot_xy())
-        o.btn_vmax.clicked.connect(self._apply_vmax)
         o.ed_vmax.returnPressed.connect(self._apply_vmax)
+        for ed in (o.ed_ebins, o.ed_tbins, o.ed_xybins):
+            ed.returnPressed.connect(self._apply_bins)
 
     def _status(self, msg):
         self.app.statusBar().showMessage(f"  {msg}")
-
-    def _data_type(self):
-        if self.opts.rb_sims.isChecked():
-            return TYPE_SIMS
-        if self.opts.rb_cal.isChecked():
-            return TYPE_CAL
-        return TYPE_RAW
 
     # -- loading ---------------------------------------------------------------
     def _load(self):
@@ -954,11 +969,12 @@ class ApiController:
         except ValueError:
             self._status("Run number must be an integer")
             return
-        data_path = self.opts.ed_path.text().strip() or None
-        dtype = self._data_type()
+        data_path = None  # resolved from data-path.txt
 
-        # Energy binning: the high-resolution channels use more bins.
-        self.ebins = 2 ** 14 if ch_txt in ("6", "7", "10", "11") else 2 ** 12
+        # Energy binning: the high-resolution channels use more bins. Reflect the
+        # chosen value in the Display box so "Apply bins" starts from the truth.
+        self.ebins = 2 ** 14 if ch_txt in ("6", "7", "10", "11") else DEFAULT_EBINS
+        self.opts.ed_ebins.setText(str(self.ebins))
 
         self.flood_field = ch_txt == "9"
         if self.flood_field:
@@ -982,6 +998,9 @@ class ApiController:
             return
         if not self.flood_field:
             df = df.copy()
+            # Time priority: dt_cal is already in ns; raw dt is in seconds and
+            # needs converting. dt_cal (when present) becomes the time axis in
+            # _configure_keys.
             df["dt"] *= 1e9  # s → ns
 
         self.df_api = df
@@ -990,11 +1009,18 @@ class ApiController:
         self.en_flag = self.dt_flag = self.xy_flag = 0
         # A new run invalidates selections snapshotted from the old data.
         self._reset_selections()
-        # …and any calibration: the fresh dataframe has no energy_cal column.
+        # …and any calibration we applied. Energy priority: a file-provided
+        # energy_cal column is already a physical-energy axis (assume MeV); a
+        # GUI calibration would re-populate this later.
         self._cal_coeffs = None
-        self.e_units = None
-        self.opts.lbl_cal.setText("Uncalibrated (channels)")
-        self.opts.btn_clear_cal.setEnabled(False)
+        if "energy_cal" in df.columns:
+            self.e_units = "keV"
+            self.opts.lbl_cal.setText("Calibrated → energy (keV)")
+            self.opts.btn_clear_cal.setEnabled(True)
+        else:
+            self.e_units = None
+            self.opts.lbl_cal.setText("Uncalibrated (channels)")
+            self.opts.btn_clear_cal.setEnabled(False)
         # …and any drift corrections: the fresh dataframe has no derived columns.
         self._dt_shift = None
         self._dt_segments_applied = False
@@ -1004,61 +1030,75 @@ class ApiController:
         self._egain_label = ""
         self._refresh_shift_labels()
 
-        self._configure_keys(dtype)
+        self._configure_keys()
         self._initialize_plots()
         self._load_settings(date, runnr, ch, data_path)
         n = self.df_current.shape[0]
         self._status(f"Loaded run {date}-{runnr} ch {ch}  ·  {n:,} events")
 
-    def _configure_keys(self, dtype):
-        """Set the X/Y/energy column keys and plot ranges for the data type.
+    def _configure_keys(self):
+        """Auto-detect the X/Y/energy/time column keys by priority and set the
+        plot ranges. No explicit data-type choice: the columns present in the
+        dataframe decide everything.
 
-        Channel axis layering (low → high):
-        ``_chan_base`` is the pristine raw channel column for the data type
-        ("energy_orig"/"energy"). When a gain-shift drift correction is applied,
-        ``_chan_key`` switches to the corrected ``energy_drift`` column so the
-        histogram, send-to-spectrum and the polynomial calibration all read the
-        drift-corrected channels. ``ekey`` is then ``energy_cal`` once a
-        polynomial calibration is applied, else ``_chan_key``.
+        Priorities:
+          position : (X2, Y2)  →  (X, Y)
+          energy   : energy_cal  →  energy_orig (raw channels)  →  energy (MeV)
+          time     : dt_cal (already ns)  →  dt
+        The channel/energy range is always ``[0, max]``.
+
+        Channel axis layering (low → high): ``_chan_base`` is the pristine raw
+        channel column ("energy_orig", else "energy"). When a gain-shift drift
+        correction is applied, ``_chan_key`` switches to the corrected
+        ``energy_drift`` column so the histogram, send-to-spectrum and the
+        polynomial calibration all read the drift-corrected channels. ``ekey``
+        is then ``energy_cal`` once a calibration is present, else ``_chan_key``.
         """
+        # Position: reconstruct X2/Y2 from the A/B/C/D quadrants when they are
+        # available, then prefer (X2, Y2) over (X, Y).
+        if ("X2" not in self.df_current.columns
+                and {"A", "B", "C", "D"}.issubset(self.df_current.columns)):
+            self.df_current = apicalc.calc_own_pos(self.df_current)
         df = self.df_current
-        if dtype == TYPE_SIMS:
-            self.xkey, self.ykey, self._chan_base = "X", "Y", "energy"
-            self.xyplane = (-0.2, 0.2, -0.2, 0.2)
-            chan_range = [0, float(df["energy"].max())]
-        elif dtype == TYPE_CAL:
-            self.df_current = apicalc.calc_own_pos(self.df_current)
-            self.xkey, self.ykey, self._chan_base = "X2", "Y2", "energy"
-            self.xyplane = (-0.9, 0.9, -0.9, 0.9)
-            chan_range = [0, float(self.df_current["energy"].max())]
-        else:  # raw
-            self.df_current = apicalc.calc_own_pos(self.df_current)
-            self.xkey, self.ykey, self._chan_base = "X2", "Y2", "energy_orig"
-            self.xyplane = (-0.9, 0.9, -0.9, 0.9)
-            chan_range = [0, 2 ** 16]
+        if {"X2", "Y2"}.issubset(df.columns):
+            self.xkey, self.ykey = "X2", "Y2"
+        else:
+            self.xkey, self.ykey = "X", "Y"
+
+        # Channel base: raw channels (energy_orig) take priority over an already
+        # physical energy axis (energy). _native_units flags which it is.
+        if "energy_orig" in df.columns:
+            self._chan_base, self._native_units = "energy_orig", None
+        elif "energy" in df.columns:
+            self._chan_base, self._native_units = "energy", "MeV"
+        else:
+            self._chan_base, self._native_units = "energy", None
+        chan_range = [0.0, float(df[self._chan_base].max())]
+
         # Gain-shift drift correction layers under everything: the corrected
         # channels become the working channel axis when present.
-        if self._egain_applied and "energy_drift" in self.df_current.columns:
+        if self._egain_applied and "energy_drift" in df.columns:
             self._chan_key = "energy_drift"
         else:
             self._chan_key = self._chan_base
         # Fit the X-Y extent to where the hits actually land instead of the
         # detector's full physical plane. Most runs illuminate only a central
         # patch, so the fixed plane left the map floating in empty space (and the
-        # cursor reporting coordinates out there). The hardcoded plane above stays
-        # as the fallback for empty/degenerate data.
-        self.xyplane = self._fit_xyplane(self.df_current, self.xkey, self.ykey,
-                                         fallback=self.xyplane)
-        if self.e_units is not None and "energy_cal" in self.df_current.columns:
+        # cursor reporting coordinates out there). A generic plane is the
+        # fallback for empty/degenerate data.
+        self.xyplane = self._fit_xyplane(df, self.xkey, self.ykey,
+                                         fallback=(-0.9, 0.9, -0.9, 0.9))
+        # Energy axis: a calibration (energy_cal) wins over the raw channel axis.
+        if self.e_units is not None and "energy_cal" in df.columns:
             self.ekey = "energy_cal"
-            self.erange = [0.0, float(self.df_current["energy_cal"].max())]
+            self.erange = [0.0, float(df["energy_cal"].max())]
         else:
             self.ekey = self._chan_key
             self.erange = chan_range
-        # Time axis: read the corrected column when a time correction (constant
-        # shift or segment alignment) is active and present. Mirrors the energy
-        # path so it survives Reset (which keeps dt_cal on the rebuilt frame).
-        if self._dt_corrected and "dt_cal" in self.df_current.columns:
+        # Time axis: a calibrated time column (already in ns) wins over raw dt.
+        # Covers both a file-provided dt_cal and one written by a GUI time
+        # correction (constant shift or segment alignment).
+        if "dt_cal" in df.columns:
             self._dt_key = "dt_cal"
         else:
             self._dt_key = "dt"
@@ -1614,7 +1654,7 @@ class ApiController:
         self.opts.ed_vmax.clear()
         # Existing selections were cut in the old (channel) axis — drop them.
         self._reset_selections()
-        self._configure_keys(self._data_type())
+        self._configure_keys()
         self._initialize_plots()
         self.opts.btn_clear_cal.setEnabled(True)
         deg = len(coeffs) - 1
@@ -1638,7 +1678,7 @@ class ApiController:
         self.vmax = None
         self.opts.ed_vmax.clear()
         self._reset_selections()
-        self._configure_keys(self._data_type())
+        self._configure_keys()
         self._initialize_plots()
         self.opts.btn_clear_cal.setEnabled(False)
         self.opts.lbl_cal.setText("Uncalibrated (channels)")
@@ -1653,14 +1693,12 @@ class ApiController:
         self.vmax = None
         self.opts.ed_vmax.clear()
         self._reset_selections()
-        self._configure_keys(self._data_type())
+        self._configure_keys()
         self._initialize_plots()
 
     def _chan_erange(self):
-        """Histogram range for the raw channel axis of the current data type."""
+        """Histogram range for the raw channel axis: always [0, max]."""
         base = self._chan_base or "energy_orig"
-        if base == "energy_orig":
-            return (0.0, float(2 ** 16))
         return (0.0, float(self.df_api[base].max()))
 
     def _dt_erange(self):
@@ -1794,12 +1832,12 @@ class ApiController:
         self._api3d_dlg.activateWindow()
 
     def _xyz(self, df=None):
-        """Reconstructed (X, Y, Z) for *df* (default: the current view). Sims
-        carry X/Y/Z directly; experimental data is reconstructed via
-        apicalc.api_xyz (the gamma-detector position is ignored, as in the
-        legacy 3D plot)."""
+        """Reconstructed (X, Y, Z) for *df* (default: the current view). Data
+        that carries a direct X/Y/Z cloud (simulated) is used as-is;
+        reconstructed-position data is mapped via apicalc.api_xyz (the
+        gamma-detector position is ignored, as in the legacy 3D plot)."""
         df = self.df_current if df is None else df
-        if self._data_type() == TYPE_SIMS:
+        if self.xkey == "X" and "Z" in df.columns:
             return df["X"], df["Y"], df["Z"]
         return apicalc.api_xyz(df=df, use_det=False)
 
@@ -1947,6 +1985,75 @@ class ApiController:
         self.opts.cb_xy_log.blockSignals(False)
         self._replot_xy()
 
+    def _apply_bins(self):
+        """Re-bin the three panels from the Display bin boxes and redraw. Each
+        box must be a positive integer; an invalid one aborts without changing
+        anything."""
+        o = self.opts
+        parsed = {}
+        for attr, ed, name in [("ebins", o.ed_ebins, "Energy bins"),
+                               ("tbins", o.ed_tbins, "dt bins"),
+                               ("hexbins", o.ed_xybins, "X-Y bins")]:
+            try:
+                val = int(ed.text().strip())
+            except ValueError:
+                self._status(f"{name} must be a whole number")
+                return
+            if val < 1:
+                self._status(f"{name} must be at least 1")
+                return
+            parsed[attr] = val
+        self.ebins, self.tbins, self.hexbins = (
+            parsed["ebins"], parsed["tbins"], parsed["hexbins"])
+        if self.df_current is None:
+            self._status("Bin counts set — load an API file to apply them")
+            return
+        # Redraw each panel with the new binning (no file re-read), mirroring the
+        # clear-then-plot pattern the filters use.
+        if self.page.ax_spe is not None:
+            self.page.ax_spe.clear()
+            self._plot_energy(self.df_current)
+        if self.page.ax_dt is not None:
+            self.page.ax_dt.clear()
+            self._plot_time(self.df_current)
+        self._replot_xy()
+        self.page.reset_nav()
+        self.page.canvas.draw_idle()
+        self._status(
+            f"Bins → energy {self.ebins:,} · dt {self.tbins:,} · X-Y {self.hexbins:,}")
+
+    def _apply_to_data(self):
+        """Bake the active energy and time corrections into the dataframe as the
+        canonical ``energy_cal`` and ``dt_cal`` columns, preserving every other
+        column. Writes ``energy_cal`` only when a true energy calibration is
+        active (``e_units`` set — a bare gain-shift does not count) and ``dt_cal``
+        only when a time correction is active — so "(if any)" holds. Both land on
+        df_api, so they survive Reset and are picked up by the loader's column
+        priority."""
+        self._flash_button(self.opts.btn_apply_data, bg=T.SNR_PURPLE, fg=T.BG_DARK)
+        if self.df_api is None:
+            self._status("Load an API file first")
+            return
+        energy_changed = self.e_units is not None
+        dt_changed = self._dt_corrected
+        if not energy_changed and not dt_changed:
+            self._status("No energy or time changes to apply")
+            return
+        df = self.df_api.copy()
+        applied = []
+        # When calibrated, self.ekey is already "energy_cal"; self._dt_key is
+        # "dt_cal" when time-corrected. Copying them under the canonical names is
+        # a no-op in those cases, and keeps the intent explicit.
+        if energy_changed and self.ekey in df.columns:
+            df["energy_cal"] = df[self.ekey].to_numpy()
+            applied.append("energy_cal")
+        if dt_changed and self._dt_key in df.columns:
+            df["dt_cal"] = df[self._dt_key].to_numpy()
+            applied.append("dt_cal")
+        self.df_api = df
+        self._rebuild_from_master()
+        self._status(f"Applied to data — created {', '.join(applied)}")
+
     # -- reset / send ----------------------------------------------------------
     def _reset(self):
         self._flash_button(self.opts.btn_reset)
@@ -1962,7 +2069,7 @@ class ApiController:
         self.vmax = None
         self.opts.ed_vmax.clear()
         self._reset_selections()
-        self._configure_keys(self._data_type())
+        self._configure_keys()
         self._initialize_plots()
         self._status("API view reset")
 
@@ -1988,15 +2095,12 @@ class ApiController:
                 self._status("Nothing to send — load an API file first")
                 return
             self._compute_energy_hist(self.df_current)
-        dtype = self._data_type()
         # Prefer an energy axis when one exists: a smart calibration we applied,
-        # else the native MeV of simulated/calibrated data; raw stays in channels.
+        # else the native MeV of physical-energy data; raw channels stay unitless.
         if self.e_units is not None:
             units = self.e_units
-        elif dtype in (TYPE_SIMS, TYPE_CAL):
-            units = "MeV"
         else:
-            units = None
+            units = self._native_units
         try:
             if units is not None:
                 spect = sp.Spectrum(counts=self.gam, energies=self.gam_x, e_units=units)
@@ -2008,8 +2112,7 @@ class ApiController:
                 # channel space of the API dataframe's raw energy column — so its
                 # coefficients apply to that column directly and "Retrieve
                 # calibration" round-trips correctly.
-                spect = sp.Spectrum(counts=self.gam)
-                spect.adc_channels = np.asarray(self.gam_x, dtype=float)
+                spect = sp.Spectrum(counts=self.gam, adc_channels=self.gam_x)
         except Exception as exc:  # noqa: BLE001
             self._status(f"Could not build spectrum: {exc}")
             return

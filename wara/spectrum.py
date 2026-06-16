@@ -25,6 +25,7 @@ class Spectrum:
         energy_cal=None,
         description=None,
         label=None,
+        adc_channels=None,
     ):
         """
         Initialize the spectrum.
@@ -56,6 +57,10 @@ class Spectrum:
             experiment description for record keeping. The default is None.
         label : string, optional
             label experiment for plotting and record keeping. The default is None.
+        adc_channels : numpy array, pandas series, or list, optional
+            real ADC channel values carried alongside the 0..N index axis (e.g.
+            API spectra). A *coordinate only* — never used to index counts;
+            calibration reads it via ``cal_channels``. The default is None.
 
         Returns
         -------
@@ -86,7 +91,8 @@ class Spectrum:
         # / slicing machinery operates on a clean positional axis. Calibration
         # reads `cal_channels` (below) so its coefficients land in real channel
         # space when these are present.
-        self.adc_channels = None
+        self.adc_channels = (None if adc_channels is None
+                             else np.asarray(adc_channels, dtype=float))
 
         # Per-bin uncertainty: use supplied array or default to Poisson sqrt(N),
         # with a floor of 1 to avoid zero weights in the fitter.
@@ -162,7 +168,9 @@ class Spectrum:
         Spectrum
             A new Spectrum object with copied data and metadata.
         """
-        new = Spectrum(
+        # adc_channels is carried through the constructor (it copies the array);
+        # `channels` itself is always 0..N indices, so it needs no handling.
+        return Spectrum(
             counts=self.counts.copy(),
             counts_err=self.counts_err.copy(),
             energies=self.energies.copy() if self.energies is not None else None,
@@ -174,13 +182,8 @@ class Spectrum:
             energy_cal=self.energy_cal,
             description=self.description,
             label=self.label,
+            adc_channels=self.adc_channels,
         )
-        # Carry the real ADC channel coordinate (API spectra); __init__ leaves
-        # it None. `channels` itself is always 0..N indices, so no special
-        # handling is needed for it.
-        if self.adc_channels is not None:
-            new.adc_channels = self.adc_channels.copy()
-        return new
 
     def smooth(self, num=4):
         """
@@ -482,6 +485,9 @@ class Spectrum:
         None.
 
         """
+        # Carry the real ADC channel coordinate (API spectra) through the
+        # re-init so a follow-up calibration still fits against cal_channels —
+        # its true channel space — and not the 0..N index axis.
         self.__init__(
             counts=self.counts,
             counts_err=self.counts_err,
@@ -494,6 +500,7 @@ class Spectrum:
             energy_cal=None,
             description=self.description,
             label=self.label,
+            adc_channels=self.adc_channels,
         )
 
     # ------------------------------------------------------------------

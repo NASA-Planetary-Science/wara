@@ -948,6 +948,9 @@ class CalibrationController:
             return
         spect = self.app.spect
         units = self.opts.units.currentText()
+        # Carry the real ADC channel coordinate so a follow-up calibration still
+        # fits/predicts against the true channels (cal_channels). `channels`
+        # itself stays 0..N indices, which is correct for the new Spectrum.
         new = sp.Spectrum(
             counts=spect.counts,
             energies=self.predicted,
@@ -959,12 +962,8 @@ class CalibrationController:
             energy_cal=self.ecal_eqn,
             description=spect.description,
             label=spect.label,
+            adc_channels=spect.adc_channels,
         )
-        # Carry the real ADC channel coordinate so a follow-up calibration still
-        # fits/predicts against the true channels (cal_channels). `channels`
-        # itself stays 0..N indices, which is correct for the new Spectrum.
-        if spect.adc_channels is not None:
-            new.adc_channels = spect.adc_channels.copy()
         app = self.app
         app.spect = new
         app._spect_orig = new.copy()

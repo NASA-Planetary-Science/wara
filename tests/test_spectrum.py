@@ -135,6 +135,18 @@ class TestCopy:
         assert spec_no_cal.adc_channels is None
         assert np.array_equal(spec_no_cal.cal_channels, spec_no_cal.channels)
 
+    def test_adc_channels_constructor_param(self):
+        # adc_channels can be supplied at construction (it is coerced to a float
+        # array) and feeds cal_channels directly.
+        from wara.spectrum import Spectrum
+        adc = [1000.0, 1001.0, 1002.0, 1003.0]
+        s = Spectrum(counts=[1, 2, 3, 4], adc_channels=adc)
+        assert s.adc_channels.dtype == float
+        assert np.array_equal(s.adc_channels, adc)
+        assert np.array_equal(s.cal_channels, adc)
+        # The display/index axis is untouched.
+        assert np.array_equal(s.channels, np.arange(4))
+
     def test_cal_channels_uses_adc_when_set(self, spec_no_cal):
         spec_no_cal.adc_channels = spec_no_cal.channels + 1000.0
         assert np.array_equal(spec_no_cal.cal_channels, spec_no_cal.adc_channels)
@@ -261,6 +273,17 @@ class TestRemoveCalibration:
     def test_x_units_channels_after(self, spec_with_cal):
         spec_with_cal.remove_calibration()
         assert spec_with_cal.x_units == "Channels"
+
+    def test_preserves_adc_channels(self, spec_with_cal):
+        # Removing the calibration must keep the real ADC channel coordinate
+        # (API spectra) — otherwise cal_channels falls back to the 0..N index
+        # axis and a follow-up calibration is fitted in the wrong channel space.
+        adc = spec_with_cal.channels + 1000.0
+        spec_with_cal.adc_channels = adc
+        spec_with_cal.remove_calibration()
+        assert spec_with_cal.adc_channels is not None
+        assert np.array_equal(spec_with_cal.adc_channels, adc)
+        assert np.array_equal(spec_with_cal.cal_channels, adc)
 
 
 # ---------------------------------------------------------------------------
