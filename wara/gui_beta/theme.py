@@ -82,19 +82,20 @@ def dot_icon(color, size=14):
 
 
 class PlanetaryNavButton(QPushButton):
-    """Nav button with a left-to-right rainbow gradient border.
+    """Nav button with a diagonal rainbow gradient border.
 
     The stylesheet paints the normal button background/text; this class draws
     the gradient border on top so all hover/checked background transitions
     from the stylesheet still work unchanged."""
 
-    _EDGE_COLORS = ["#00e5ff", "#ffb300", "#5cf04a", "#ff5577", "#b388ff", "#ff8a3d"]
+    _EDGE_COLORS = ["#ff5577", "#ffb300", "#5cf04a", "#00e5ff", "#b388ff"]
 
     def paintEvent(self, event):
         super().paintEvent(event)
         p = QPainter(self)
         p.setRenderHint(QPainter.Antialiasing)
-        grad = QLinearGradient(0, 0, self.width(), 0)
+        # Diagonal sweep (top-left → bottom-right) reads better than left-to-right.
+        grad = QLinearGradient(0, 0, self.width(), self.height())
         n = len(self._EDGE_COLORS)
         for i, c in enumerate(self._EDGE_COLORS):
             grad.setColorAt(i / (n - 1), QColor(c))
