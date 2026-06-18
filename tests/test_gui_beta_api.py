@@ -126,6 +126,9 @@ def test_load_builds_panels_and_info(api):
     assert c.xkey == "X2" and c.ykey == "Y2" and c.ekey == "energy_orig"
     assert c.gam is not None and len(c.gam) == c.ebins
     assert c.df_current.shape[0] == 4000
+    # Interactive cuts are off by default — selectors attach only when toggled on.
+    assert len(c._selectors) == 0
+    c.opts.btn_interactive.setChecked(True)
     assert len(c._selectors) == 3
     # No colorbar: the X-Y intensity is read via the hover lookup instead.
     assert c.page.xy_offsets is not None and len(c.page.xy_offsets) > 0
@@ -404,6 +407,7 @@ def test_unarmed_energy_drag_still_filters(api, monkeypatch):
     _w, c = api
     c._load()
     monkeypatch.setattr(api_mod, "EnergySelectionDialog", _StubSelDialog)
+    c.opts.btn_interactive.setChecked(True)  # interactive on but not armed for a selection
     c._on_energy_span(0, 3000)              # not armed → filters as before
     assert c.df_current.shape[0] < 4000
     assert c.en_flag == 1
@@ -449,6 +453,108 @@ def test_load_resets_selections(api, monkeypatch):
     assert len(c.selections) == 1
     c._load()                               # a fresh run clears stale selections
     assert c.selections == []
+
+
+# -- SelectionsDialog ----------------------------------------------------------
+
+def test_selections_dialog_opens_and_holds_list(api, monkeypatch):
+    _w, c = api
+    c._load()
+    monkeypatch.setattr(api_mod, "EnergySelectionDialog", _StubSelDialog)
+    c._arm_selection(); c._on_energy_span(0, 2000)
+    assert len(c.selections) == 1
+    # Dialog not open yet -- count label on the options panel is updated.
+    assert "1 selection" in c.opts.lbl_sel_count.text()
+    # Opening the dialog populates its list.
+    c._open_selections()
+    assert c._sel_dlg is not None
+    # Reusing: opening again just raises the same dialog.
+    dlg = c._sel_dlg
+    c._open_selections()
+    assert c._sel_dlg is dlg
+
+
+def test_selections_dialog_remove_clears_significance(api, monkeypatch):
+    _w, c = api
+    c._load()
+    monkeypatch.setattr(api_mod, "EnergySelectionDialog", _StubSelDialog)
+    c._arm_selection(); c._on_energy_span(500, 2000)
+    c._open_selections()
+    # Force-plant a significance overlay state (no real matplotlib twinx needed).
+    c._sig_active = True
+    c._remove_selection(c.selections[0])
+    assert c.selections == []
+    assert not c._sig_active    # cleared by _reset_selections -> _clear_significance
+
+
+# -- _compute_sig_vs_dt --------------------------------------------------------
+
+def test_compute_sig_vs_dt_returns_array(api, monkeypatch):
+    _w, c = api
+    c._load()
+    monkeypatch.setattr(api_mod, "EnergySelectionDialog", _StubSelDialog)
+    c._arm_selection(); c._on_energy_span(500, 2000)
+    sel = c.selections[0]
+    import numpy as np
+    dt_lo, dt_hi = np.percentile(c.df_current[c._dt_key], [0.2, 99.5])
+    n = 20
+    dt_edges = np.linspace(dt_lo, dt_hi, n + 1)
+    result = c._compute_sig_vs_dt(sel, sideband_w=200, dt_edges=dt_edges,
+                                  sig_threshold=5.0)
+    assert result is not None
+    assert len(result) == n
+    # All values are >= 0 (either S/B or zero).
+    assert (result >= 0).all()
+
+
+def test_compute_sig_vs_dt_zero_sideband_returns_none(api, monkeypatch):
+    _w, c = api
+    c._load()
+    monkeypatch.setattr(api_mod, "EnergySelectionDialog", _StubSelDialog)
+    c._arm_selection(); c._on_energy_span(500, 2000)
+    import numpy as np
+    dt_edges = np.linspace(0, 1e4, 11)
+    result = c._compute_sig_vs_dt(c.selections[0], sideband_w=0,
+                                  dt_edges=dt_edges, sig_threshold=5.0)
+    assert result is None
+
+
+def test_plot_significance_sets_sig_active(api, monkeypatch):
+    _w, c = api
+    c._load()
+    monkeypatch.setattr(api_mod, "EnergySelectionDialog", _StubSelDialog)
+    c._arm_selection(); c._on_energy_span(500, 2000)
+    assert not c._sig_active
+    c._plot_significance(sideband_w=100, dt_slice_w=None, sig_threshold=5.0)
+    assert c._sig_active
+    assert c._ax_sig is not None
+    # A secondary y-axis was added to the dt panel.
+    assert c._ax_sig in c.page.fig.axes
+
+
+def test_clear_significance_restores_dt_panel(api, monkeypatch):
+    _w, c = api
+    c._load()
+    monkeypatch.setattr(api_mod, "EnergySelectionDialog", _StubSelDialog)
+    c._arm_selection(); c._on_energy_span(500, 2000)
+    c._plot_significance(sideband_w=100, dt_slice_w=None, sig_threshold=5.0)
+    n_axes_with_sig = len(c.page.fig.axes)
+    c._clear_significance()
+    assert not c._sig_active
+    assert c._ax_sig is None
+    # The secondary axes was removed.
+    assert len(c.page.fig.axes) == n_axes_with_sig - 1
+
+
+def test_filter_clears_significance(api, monkeypatch):
+    _w, c = api
+    c._load()
+    monkeypatch.setattr(api_mod, "EnergySelectionDialog", _StubSelDialog)
+    c._arm_selection(); c._on_energy_span(500, 2000)
+    c._plot_significance(sideband_w=100, dt_slice_w=None, sig_threshold=5.0)
+    assert c._sig_active
+    c.apply_energy_filter(0, 3000)
+    assert not c._sig_active    # cleared by the filter
 
 
 def test_3d_renders_one_volume_per_selection(api, monkeypatch):

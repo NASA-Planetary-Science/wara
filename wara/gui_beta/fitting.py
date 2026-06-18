@@ -67,7 +67,7 @@ BKG_ARGS = {
 # measured numerically from the fitted profile, so they are meaningful for
 # every line shape (a pure Gaussian has FWTM/FWHM = 1.823 and Asym = 0).
 PEAKFIT_COLS = ["Centroid", "Area", "FWHM", "FWTM", "FWTM/FWHM", "Asym"]
-AREA_COLS = ["Region", "Area", ""]
+AREA_COLS = ["Region", "Area", "S/√B"]
 
 # Match the main Spectrum tab's plot background (pure black).
 FIT_PLOT_BG = T.BG_PLOT
@@ -726,11 +726,20 @@ class FitWindow(QDialog):
         ]
         self.table.setRowCount(len(rows))
         for i, (lbl, val) in enumerate(rows):
-            for c, text in enumerate([lbl, val, ""]):
+            for c, text in enumerate([lbl, val]):
                 item = QTableWidgetItem(text)
                 item.setFlags(Qt.ItemIsEnabled | Qt.ItemIsSelectable)
                 item.setTextAlignment(Qt.AlignCenter)
                 self.table.setItem(i, c, item)
+        # S/√B significance spanning both rows.
+        sig_text = f"{alb.A / np.sqrt(alb.B):.2f} σ" if alb.B > 0 else "—"
+        sig_item = QTableWidgetItem(sig_text)
+        sig_item.setFlags(Qt.ItemIsEnabled | Qt.ItemIsSelectable)
+        sig_item.setTextAlignment(Qt.AlignCenter)
+        sig_item.setToolTip("Peak significance S/√B (σ).  >3 σ: tentative detection;  >5 σ: confirmed.")
+        self.table.setItem(0, 2, sig_item)
+        self.table.setSpan(0, 2, 2, 1)
+        self._set_header_tooltips({2: "S/√B — peak significance in σ (net area / √background area)"})
 
     def _x_unit_label(self):
         """Short x-axis unit for table headers: 'keV'/'MeV'/… or 'ch'."""

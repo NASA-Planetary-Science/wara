@@ -6,8 +6,8 @@ the other beta tabs.
 
 Workflow:
 
-* Enter a run (date, run number, channel) and pick the data type — experimental
-  *raw*, experimental *calibrated/time-shifted*, or *simulated* — then Load. The
+* Enter a run (date, run number, channel) and pick the data type  -- experimental
+  *raw*, experimental *calibrated/time-shifted*, or *simulated*  -- then Load. The
   parquet file is read via :mod:`wara.read_parquet_api`; raw/calibrated data get
   reconstructed X-Y positions through :func:`wara.apicalc.calc_own_pos`.
 * The figure shows three linked panels: the energy spectrum (top-left), the dt
@@ -17,12 +17,12 @@ Workflow:
   The same filters can be entered by hand from the Filters dialog.
 * "Send energy spectrum → Spectrum tab" hands the current energy histogram to the
   Spectrum tab for the full analysis workflow. An uncalibrated spectrum is sent
-  with its *real* channel values (the bin centres) as the channel axis — not
-  0..nbins indices — so a calibration built on it round-trips back here.
+  with its *real* channel values (the bin centres) as the channel axis  -- not
+  0..nbins indices  -- so a calibration built on it round-trips back here.
 * "3D view" pops out a Plotly volume render (:class:`Api3DDialog`) of the
   reconstructed X-Y-Z hit cloud for the current (filtered) events.
 * "Retrieve calibration" pulls the Calibration tab's current calibration curve
-  (or equation) and applies that channel→energy polynomial to the dataframe —
+  (or equation) and applies that channel→energy polynomial to the dataframe  --
   it is applied to the *real* per-event channel values (which run past the bin
   count, e.g. 0–65535). Afterwards every panel and the selections read in
   calibrated energy; "Clear calibration" reverts to the original raw channels.
@@ -92,7 +92,7 @@ SEND_SENT_TEXT = "Sent to spectrum"
 
 
 class ApiFilterDialog(QDialog):
-    """Manual min/max entry for the X-Y, time and energy filters — the typed
+    """Manual min/max entry for the X-Y, time and energy filters  -- the typed
     equivalent of dragging a selector on the plot."""
 
     def __init__(self, parent=None):
@@ -233,7 +233,7 @@ class Api3DDialog(QDialog):
         self.browser = QWebEngineView()
         self.browser.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         self.browser.setMinimumWidth(560)
-        # The QWebEngineView renders white by default — paint the page background
+        # The QWebEngineView renders white by default  -- paint the page background
         # dark so the blank initial page, the load flash, and any margin around
         # the Plotly figure all match the dark theme instead of flashing white.
         self.browser.page().setBackgroundColor(QColor(API_PLOT_BG))
@@ -278,12 +278,12 @@ class Api3DDialog(QDialog):
 class ApplyToDataDialog(QDialog):
     """Ask for the destination run when baking the active calibration/time-shift
     into a new on-disk run. The date defaults to the loaded run's date (editable)
-    and the run number must be entered by the user — writing to a *new* run keeps
+    and the run number must be entered by the user  -- writing to a *new* run keeps
     the source run untouched and avoids the loader concatenating duplicates."""
 
     def __init__(self, date, runnr, parent=None):
         super().__init__(parent)
-        self.setWindowTitle("Apply to data — save calibrated run")
+        self.setWindowTitle("Apply to data  -- save calibrated run")
         self.setStyleSheet(T.STYLESHEET)
         self.setMinimumWidth(340)
 
@@ -329,7 +329,7 @@ class ShiftsDialog(QDialog):
     def __init__(self, controller):
         super().__init__(controller.app)
         self.c = controller
-        self.setWindowTitle("Drift correction — shifts")
+        self.setWindowTitle("Drift correction  -- shifts")
         self.setStyleSheet(T.STYLESHEET)
         self.setWindowFlag(Qt.WindowMaximizeButtonHint, True)
         self.setWindowFlag(Qt.WindowMinimizeButtonHint, True)
@@ -370,7 +370,7 @@ class ShiftsDialog(QDialog):
         canvas.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         canvas.setMinimumWidth(540)
         self.canvas[kind] = canvas
-        # Pan/zoom toolbar above the plot — styled to match the API page's.
+        # Pan/zoom toolbar above the plot  -- styled to match the API page's.
         toolbar = NavToolbar(canvas, self)
         toolbar.setObjectName("plot_toolbar")
         toolbar.setIconSize(QSize(22, 22))
@@ -500,7 +500,7 @@ class ShiftsDialog(QDialog):
                 gs.align(method=method, xrange=xr)
                 bottom = gs._aligned_spectra
                 bottom_title = f"Aligned ({method})"
-        except Exception as exc:  # noqa: BLE001 — surface to the state label
+        except Exception as exc:  # noqa: BLE001  -- surface to the state label
             self.lbl_state[kind].setText(f"Preview failed: {exc}")
             return
         xlabel = "Raw channel" if kind == "energy" else "dt (ns)"
@@ -723,7 +723,7 @@ class ApiPage(QWidget):
             f"<span style='color:{T.ACCENT_CYAN}'>{xlab}: {event.xdata:.4g}</span>",
             f"<span style='color:{T.ACCENT_GREEN}'>{ylab}: {event.ydata:.4g}</span>",
         ]
-        # On the X-Y map, report the hovered hexagon's intensity in amber — this
+        # On the X-Y map, report the hovered hexagon's intensity in amber  -- this
         # stands in for the colorbar the panel no longer carries.
         if ax is self.ax_xy:
             cnt = self.xy_count_at(event.xdata, event.ydata)
@@ -731,6 +731,187 @@ class ApiPage(QWidget):
                 parts.append(
                     f"<span style='color:{T.ACCENT_AMBER}'>Counts: {cnt:,.0f}</span>")
         self.readout.setText("&nbsp;&nbsp;&nbsp;&nbsp;".join(parts))
+
+
+# ── Selections dialog ─────────────────────────────────────────────────────────
+class SelectionsDialog(QDialog):
+    """Non-modal window for managing energy selections and plotting S/B vs dt.
+
+    The dialog holds the full Add / Remove / Clear selection workflow that used
+    to live inline in the options panel, plus the significance-vs-dt controls.
+    Designed to grow: future tabs will add dt and X-Y selection management here.
+    """
+
+    def __init__(self, controller):
+        super().__init__(controller.app)
+        self.c = controller
+        self.setWindowTitle("Energy Selections")
+        self.setStyleSheet(T.STYLESHEET)
+        self.setWindowFlag(Qt.WindowMaximizeButtonHint, True)
+        self.setWindowFlag(Qt.WindowMinimizeButtonHint, True)
+        self.resize(420, 540)
+
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(10, 10, 10, 10)
+        lay.setSpacing(6)
+
+        # ── Selection list ────────────────────────────────────────────
+        lay.addWidget(header("ENERGY SELECTIONS"))
+        self.sel_box = QVBoxLayout()
+        self.sel_box.setSpacing(3)
+        self.sel_box.setContentsMargins(0, 0, 0, 0)
+        sel_holder = QWidget()
+        sel_holder.setLayout(self.sel_box)
+        lay.addWidget(sel_holder)
+
+        btn_row = QHBoxLayout()
+        btn_row.setContentsMargins(0, 0, 0, 0)
+        btn_row.setSpacing(6)
+        self.btn_add = QPushButton("Add selection")
+        self.btn_add.setObjectName("yellow_btn")
+        self.btn_add.setCursor(Qt.PointingHandCursor)
+        self.btn_add.setToolTip(
+            "Arm: then drag a band on the energy spectrum to tag a line")
+        self.btn_clear_sel = QPushButton("Clear all")
+        self.btn_clear_sel.setObjectName("danger_btn")
+        self.btn_clear_sel.setCursor(Qt.PointingHandCursor)
+        btn_row.addWidget(self.btn_add, 1)
+        btn_row.addWidget(self.btn_clear_sel, 0)
+        lay.addLayout(btn_row)
+
+        self.btn_plot_sel = QPushButton("Plot selections")
+        self.btn_plot_sel.setObjectName("open_btn")
+        self.btn_plot_sel.setCursor(Qt.PointingHandCursor)
+        self.btn_plot_sel.setToolTip(
+            "Overlay each selection on the energy, dt and X-Y panels")
+        lay.addWidget(self.btn_plot_sel)
+
+        # ── Significance controls ─────────────────────────────────────
+        lay.addWidget(hsep())
+        lay.addWidget(header("SIGNIFICANCE vs dt"))
+        note = QLabel(
+            "For each dt slice compute S/B (net / background).  "
+            "Points with S/√B below the threshold are set to zero.")
+        note.setObjectName("stat_key")
+        note.setWordWrap(True)
+        lay.addWidget(note)
+
+        self.ed_sideband = QLineEdit("100")
+        self.ed_sideband.setFixedWidth(80)
+        self.ed_sideband.setToolTip(
+            "Width of each sideband region (same units as the energy axis)")
+        srow, _ = labeled_row("Sideband width", self.ed_sideband)
+        lay.addWidget(srow)
+
+        self.ed_dt_slice = QLineEdit("")
+        self.ed_dt_slice.setFixedWidth(80)
+        self.ed_dt_slice.setPlaceholderText("auto")
+        self.ed_dt_slice.setToolTip(
+            "dt slice width (ns).  Leave blank to use the current dt bin width.")
+        drow, _ = labeled_row("dt slice (ns)", self.ed_dt_slice)
+        lay.addWidget(drow)
+
+        self.ed_min_sigma = QLineEdit("5.0")
+        self.ed_min_sigma.setFixedWidth(80)
+        self.ed_min_sigma.setToolTip(
+            "Significance threshold: points with S/√B below this are plotted as zero")
+        sigrow, _ = labeled_row("Min σ", self.ed_min_sigma)
+        lay.addWidget(sigrow)
+
+        sig_btn_row = QHBoxLayout()
+        sig_btn_row.setContentsMargins(0, 0, 0, 0)
+        sig_btn_row.setSpacing(6)
+        self.btn_plot_sig = QPushButton("Plot significance")
+        self.btn_plot_sig.setObjectName("primary_btn")
+        self.btn_plot_sig.setCursor(Qt.PointingHandCursor)
+        self.btn_plot_sig.setToolTip(
+            "Overlay S/B vs dt on the dt histogram (secondary y-axis)")
+        self.btn_clear_sig = QPushButton("Clear")
+        self.btn_clear_sig.setObjectName("mini_btn")
+        self.btn_clear_sig.setCursor(Qt.PointingHandCursor)
+        self.btn_clear_sig.setToolTip("Remove the significance overlay")
+        sig_btn_row.addWidget(self.btn_plot_sig, 1)
+        sig_btn_row.addWidget(self.btn_clear_sig, 0)
+        lay.addLayout(sig_btn_row)
+
+        lay.addStretch(1)
+
+        # ── Wire internal buttons to the controller ───────────────────
+        self.btn_add.clicked.connect(self.c._arm_selection)
+        self.btn_clear_sel.clicked.connect(self.c._clear_selections)
+        self.btn_plot_sel.clicked.connect(self.c._plot_selections)
+        self.btn_plot_sig.clicked.connect(self._on_plot_significance)
+        self.btn_clear_sig.clicked.connect(self.c._clear_significance)
+
+    # ── public API (called by controller) ─────────────────────────────────────
+    def refresh_list(self):
+        """Rebuild the selection rows from the controller's current list."""
+        box = self.sel_box
+        while box.count():
+            item = box.takeAt(0)
+            w = item.widget()
+            if w is not None:
+                w.deleteLater()
+        if not self.c.selections:
+            empty = QLabel("No selections yet.")
+            empty.setObjectName("stat_key")
+            box.addWidget(empty)
+            return
+        for sel in self.c.selections:
+            row_w = QWidget()
+            rl = QHBoxLayout(row_w)
+            rl.setContentsMargins(0, 0, 0, 0)
+            rl.setSpacing(6)
+            dot = QLabel("●")
+            dot.setStyleSheet(f"color:{sel['color']}; font-size:15px;")
+            name = QLabel(f"{sel['label']}  [{sel['emin']:g}–{sel['emax']:g}]")
+            name.setStyleSheet(f"color:{T.TEXT_PRIMARY}; font-size:12px;")
+            btn = QPushButton("✕")
+            btn.setObjectName("mini_btn")
+            btn.setFixedWidth(26)
+            btn.setCursor(Qt.PointingHandCursor)
+            btn.setToolTip("Remove this selection")
+            btn.clicked.connect(lambda _=False, s=sel: self.c._remove_selection(s))
+            rl.addWidget(dot)
+            rl.addWidget(name, 1)
+            rl.addWidget(btn, 0)
+            box.addWidget(row_w)
+
+    def set_add_armed(self, armed):
+        """Reflect the armed/disarmed state on the Add button."""
+        b = self.btn_add
+        if armed:
+            b.setText("Drag energy band...")
+            b.setStyleSheet(
+                f"background-color:{T.ACCENT_AMBER}; color:{T.BG_DARK}; "
+                f"border:2px solid {T.ACCENT_AMBER}; border-radius:5px; "
+                f"padding:8px 13px; font-weight:800;")
+        else:
+            b.setText("Add selection")
+            b.setStyleSheet("")
+
+    # ── internal ──────────────────────────────────────────────────────────────
+    def _on_plot_significance(self):
+        try:
+            sideband_w = float(self.ed_sideband.text().strip())
+        except ValueError:
+            self.c._status("Sideband width must be a number")
+            return
+        dt_slice_txt = self.ed_dt_slice.text().strip()
+        dt_slice_w = None   # None → derive from current tbins
+        if dt_slice_txt:
+            try:
+                dt_slice_w = float(dt_slice_txt)
+                if dt_slice_w <= 0:
+                    raise ValueError
+            except ValueError:
+                self.c._status("dt slice width must be a positive number")
+                return
+        try:
+            min_sigma = float(self.ed_min_sigma.text().strip())
+        except ValueError:
+            min_sigma = 5.0
+        self.c._plot_significance(sideband_w, dt_slice_w, min_sigma)
 
 
 # ── Options column ────────────────────────────────────────────────────────────
@@ -769,12 +950,12 @@ class ApiOptions(QScrollArea):
         lay.addWidget(self.btn_load)
 
         self.btn_interactive = QPushButton("Interactive cuts")
-        self.btn_interactive.setObjectName("action_btn")
+        self.btn_interactive.setObjectName("yellow_btn")
         self.btn_interactive.setCheckable(True)
         self.btn_interactive.setCursor(Qt.PointingHandCursor)
         self.btn_interactive.setToolTip(
             "Enable dragging spans/rectangles on the plots to cut events interactively")
-        self.btn_undo = QPushButton("← Back"); self.btn_undo.setObjectName("action_btn")
+        self.btn_undo = QPushButton("← Back"); self.btn_undo.setObjectName("primary_btn")
         self.btn_undo.setCursor(Qt.PointingHandCursor)
         self.btn_undo.setToolTip("Restore the dataframe to the state before the last cut")
         self.btn_undo.setEnabled(False)
@@ -789,7 +970,7 @@ class ApiOptions(QScrollArea):
 
         # ── Run info readout ─────────────────────────────────────────
         lay.addWidget(hsep()); lay.addWidget(header("RUN INFO"))
-        self.lbl_info = QLabel("—")
+        self.lbl_info = QLabel(" --")
         self.lbl_info.setWordWrap(True)
         self.lbl_info.setTextFormat(Qt.RichText)
         self.lbl_info.setStyleSheet(
@@ -808,7 +989,7 @@ class ApiOptions(QScrollArea):
         vrow, _ = labeled_row("vmax", self.ed_vmax)
         self.ed_vmax.setFixedWidth(70)
         self.ed_vmax.setToolTip("Cap the X-Y color scale at this count (forces "
-                                "linear scale) — press Enter to apply")
+                                "linear scale)  -- press Enter to apply")
         lay.addWidget(vrow)
 
         # ── Histogram bins ───────────────────────────────────────────
@@ -823,11 +1004,11 @@ class ApiOptions(QScrollArea):
                         ("dt bins", self.ed_tbins),
                         ("X-Y bins", self.ed_xybins)]:
             ed.setFixedWidth(70)
-            ed.setToolTip(f"{ed.toolTip()} — press Enter to apply")
+            ed.setToolTip(f"{ed.toolTip()}  -- press Enter to apply")
             row, _ = labeled_row(lbl, ed)
             lay.addWidget(row)
 
-        self.btn_filters = QPushButton("Filters…"); self.btn_filters.setObjectName("action_btn")
+        self.btn_filters = QPushButton("Filters..."); self.btn_filters.setObjectName("action_btn")
         self.btn_filters.setCursor(Qt.PointingHandCursor)
         lay.addWidget(self.btn_filters)
 
@@ -838,12 +1019,12 @@ class ApiOptions(QScrollArea):
         lay.addWidget(hsep()); lay.addWidget(header("DRIFT CORRECTION"))
         shift_note = QLabel(
             "Correct gain/time drift over the run: split into time segments and "
-            "align them, or shift dt by a constant — independently for the "
+            "align them, or shift dt by a constant  -- independently for the "
             "energy and time axes.")
         shift_note.setObjectName("stat_key"); shift_note.setWordWrap(True)
         lay.addWidget(shift_note)
-        self.btn_shifts = QPushButton("Shifts…")
-        self.btn_shifts.setObjectName("action_btn")
+        self.btn_shifts = QPushButton("Shifts...")
+        self.btn_shifts.setObjectName("yellow_btn")
         self.btn_shifts.setCursor(Qt.PointingHandCursor)
         self.btn_shifts.setToolTip(
             "Open the energy gain-shift and time-shift correction window")
@@ -858,7 +1039,7 @@ class ApiOptions(QScrollArea):
         cal_note.setObjectName("stat_key"); cal_note.setWordWrap(True)
         lay.addWidget(cal_note)
         self.btn_retrieve_cal = QPushButton("Retrieve calibration")
-        self.btn_retrieve_cal.setObjectName("action_btn")
+        self.btn_retrieve_cal.setObjectName("primary_btn")
         self.btn_retrieve_cal.setCursor(Qt.PointingHandCursor)
         self.btn_retrieve_cal.setToolTip(
             "Apply the Calibration tab's current calibration curve/equation to "
@@ -877,30 +1058,15 @@ class ApiOptions(QScrollArea):
 
         # ── Energy selections ────────────────────────────────────────
         lay.addWidget(hsep()); lay.addWidget(header("ENERGY SELECTIONS"))
-        snote = QLabel("Arm “Add selection”, then drag a band on the "
-                       "energy spectrum to tag a line. “Plot” overlays "
-                       "each selection in its colour.")
-        snote.setObjectName("stat_key"); snote.setWordWrap(True)
-        lay.addWidget(snote)
-        self.btn_add_sel = QPushButton("Add selection")
-        self.btn_add_sel.setObjectName("action_btn")
-        self.btn_add_sel.setCursor(Qt.PointingHandCursor)
-        lay.addWidget(self.btn_add_sel)
-        # Controller rebuilds this layout into one row per selection.
-        self.sel_box = QVBoxLayout(); self.sel_box.setSpacing(3)
-        self.sel_box.setContentsMargins(0, 0, 0, 0)
-        sel_holder = QWidget(); sel_holder.setLayout(self.sel_box)
-        lay.addWidget(sel_holder)
-        srow = QHBoxLayout(); srow.setContentsMargins(0, 0, 0, 0); srow.setSpacing(6)
-        self.btn_plot_sel = QPushButton("Plot selections")
-        self.btn_plot_sel.setObjectName("open_btn")
-        self.btn_plot_sel.setCursor(Qt.PointingHandCursor)
-        self.btn_clear_sel = QPushButton("Clear")
-        self.btn_clear_sel.setObjectName("danger_btn")
-        self.btn_clear_sel.setCursor(Qt.PointingHandCursor)
-        srow.addWidget(self.btn_plot_sel, 1); srow.addWidget(self.btn_clear_sel, 0)
-        sroww = QWidget(); sroww.setLayout(srow)
-        lay.addWidget(sroww)
+        self.btn_selections = QPushButton("Selections...")
+        self.btn_selections.setObjectName("open_btn")
+        self.btn_selections.setCursor(Qt.PointingHandCursor)
+        self.btn_selections.setToolTip(
+            "Manage energy selections and plot significance vs dt")
+        lay.addWidget(self.btn_selections)
+        self.lbl_sel_count = QLabel("No selections")
+        self.lbl_sel_count.setObjectName("stat_key")
+        lay.addWidget(self.lbl_sel_count)
 
         # ── Actions ──────────────────────────────────────────────────
         lay.addWidget(hsep()); lay.addWidget(header("ACTIONS"))
@@ -908,12 +1074,12 @@ class ApiOptions(QScrollArea):
         self.btn_send.setObjectName("open_btn"); self.btn_send.setCursor(Qt.PointingHandCursor)
         self.btn_send.setToolTip("Hand the current energy histogram to the Spectrum tab")
         lay.addWidget(self.btn_send)
-        self.btn_3d = QPushButton("3D view…"); self.btn_3d.setObjectName("action_btn")
+        self.btn_3d = QPushButton("3D view..."); self.btn_3d.setObjectName("find_btn")
         self.btn_3d.setCursor(Qt.PointingHandCursor)
         self.btn_3d.setToolTip("Plotly volume render of the reconstructed X-Y-Z hit cloud")
         lay.addWidget(self.btn_3d)
         self.btn_apply_data = QPushButton("Apply to data")
-        self.btn_apply_data.setObjectName("action_btn")
+        self.btn_apply_data.setObjectName("yellow_btn")
         self.btn_apply_data.setCursor(Qt.PointingHandCursor)
         self.btn_apply_data.setToolTip(
             "Combine all of the source run's parquet files, bake the active "
@@ -965,6 +1131,9 @@ class ApiController:
         self._arming_selection = False
         self._arm_temp_selector = False
         self._sel_color_idx = 0
+        self._sel_dlg = None        # SelectionsDialog (created lazily)
+        self._sig_active = False    # significance overlay currently shown
+        self._ax_sig = None         # the twinx axes carrying the S/B curves
         # Energy calibration: the channel column the histogram is binned from
         # (set in _configure_keys), the polynomial coeffs retrieved from the
         # Calibration tab, and the energy units once calibrated (None ⇒ raw
@@ -977,12 +1146,12 @@ class ApiController:
         self._native_units = None
         self._cal_coeffs = None
         self.e_units = None
-        # Gain-shift drift correction (Shifts… window): when applied, the
+        # Gain-shift drift correction (Shifts... window): when applied, the
         # corrected channels live on the df_api "energy_drift" column and
         # _chan_key points at it (so it layers under the polynomial calibration).
         self._egain_applied = False
         self._egain_label = ""
-        # Time correction (Shifts… window): a constant added to ``dt`` or a
+        # Time correction (Shifts... window): a constant added to ``dt`` or a
         # segment alignment, both writing the ``dt_cal`` column. _dt_shift holds
         # the constant (float) when that mode is used; _dt_segments_applied marks
         # the segment-alignment mode. Either makes _dt_key switch to "dt_cal".
@@ -1009,9 +1178,7 @@ class ApiController:
         o.btn_apply_data.clicked.connect(self._apply_to_data)
         o.btn_interactive.toggled.connect(self._toggle_interactive)
         o.btn_filters.clicked.connect(self._open_filters)
-        o.btn_add_sel.clicked.connect(self._arm_selection)
-        o.btn_plot_sel.clicked.connect(self._plot_selections)
-        o.btn_clear_sel.clicked.connect(self._clear_selections)
+        o.btn_selections.clicked.connect(self._open_selections)
         o.btn_retrieve_cal.clicked.connect(self._retrieve_calibration)
         o.btn_clear_cal.clicked.connect(self._clear_calibration)
         o.btn_shifts.clicked.connect(self._open_shifts)
@@ -1034,6 +1201,7 @@ class ApiController:
         """Restore the dataframe to the state before the last interactive cut."""
         if self._undo_state is None:
             return
+        self._clear_significance()
         df_cur, df_prev, en_flag, dt_flag, xy_flag = self._undo_state
         self.df_current = df_cur
         self.df_previous = df_prev
@@ -1059,7 +1227,7 @@ class ApiController:
                 f"border:2px solid {T.ACCENT_AMBER}; border-radius:5px; "
                 f"padding:8px 13px; font-size:14px; font-weight:800;")
             self._attach_selectors()
-            self._status("Interactive cuts enabled — drag on any panel to filter")
+            self._status("Interactive cuts enabled  -- drag on any panel to filter")
         else:
             b.setStyleSheet("")
             self._detach_selectors()
@@ -1071,11 +1239,11 @@ class ApiController:
     # -- loading ---------------------------------------------------------------
     def _load(self):
         # Brighten the Load button so the click registers before the (blocking)
-        # file read freezes the UI — purple to match its open_btn identity.
+        # file read freezes the UI  -- purple to match its open_btn identity.
         self._flash_button(self.opts.btn_load, bg=T.SNR_PURPLE, fg=T.BG_DARK)
         try:
             self._load_file()
-        except Exception as exc:  # noqa: BLE001 — surface load errors to the user
+        except Exception as exc:  # noqa: BLE001  -- surface load errors to the user
             traceback.print_exc()
             self._status(f"Could not load API file: {exc}")
 
@@ -1108,7 +1276,7 @@ class ApiController:
                 self._status("Channel must be an integer")
                 return
 
-        self._status(f"Loading run {date}-{runnr} ch {ch}…")
+        self._status(f"Loading run {date}-{runnr} ch {ch}...")
         df = read_parquet_api.read_parquet_file(
             date=date, runnr=runnr, ch=ch,
             flood_field=self.flood_field, data_path_txt=data_path)
@@ -1137,7 +1305,7 @@ class ApiController:
         self.en_flag = self.dt_flag = self.xy_flag = 0
         # A new run invalidates selections snapshotted from the old data.
         self._reset_selections()
-        # …and any calibration we applied. Energy priority: a file-provided
+        # ...and any calibration we applied. Energy priority: a file-provided
         # energy_cal column is already a physical-energy axis (assume MeV); a
         # GUI calibration would re-populate this later.
         self._cal_coeffs = None
@@ -1149,7 +1317,7 @@ class ApiController:
             self.e_units = None
             self.opts.lbl_cal.setText("Uncalibrated (channels)")
             self.opts.btn_clear_cal.setEnabled(False)
-        # …and any drift corrections: the fresh dataframe has no derived columns.
+        # ...and any drift corrections: the fresh dataframe has no derived columns.
         self._dt_shift = None
         self._dt_segments_applied = False
         self._dt_label = "No time shift"
@@ -1255,6 +1423,10 @@ class ApiController:
         return (cx - half, cx + half, cy - half, cy + half)
 
     def _initialize_plots(self):
+        # Axes are about to be rebuilt  -- clear significance state so _ax_sig
+        # doesn't keep a stale reference to the old axes.
+        self._sig_active = False
+        self._ax_sig = None
         self.page.build_axes(flood_field=self.flood_field)
         self._detach_selectors()
         if self.flood_field:
@@ -1280,7 +1452,7 @@ class ApiController:
                 ("Neutron yield (n/s)", f"{nyield:.3E}", T.ACCENT_GREEN),
             ]
             self._settings_error = ""
-        except Exception:  # noqa: BLE001 — settings are best-effort
+        except Exception:  # noqa: BLE001  -- settings are best-effort
             traceback.print_exc()
             self._settings_rows = []
             self._settings_error = "Run-settings file not found"
@@ -1295,7 +1467,7 @@ class ApiController:
             rows.append(("Processed counts",
                          f"{self.df_current.shape[0]:,}", T.SNR_PURPLE))
         if not rows and not self._settings_error:
-            self.opts.lbl_info.setText("—")
+            self.opts.lbl_info.setText(" --")
             return
         lines = [f"<b>{lbl}:</b> "
                  f"<span style='color:{color}; font-weight:700'>{val}</span>"
@@ -1309,7 +1481,7 @@ class ApiController:
         """Bin *df* into the energy histogram (self.gam / self.gam_x).
 
         Kept separate from drawing so "Send to spectrum" never depends on the
-        energy panel having been drawn first — otherwise the first click can
+        energy panel having been drawn first  -- otherwise the first click can
         find self.gam still None (no draw yet) and silently do nothing.
         """
         self.gam, edg = np.histogram(df[self.ekey], bins=self.ebins, range=self.erange)
@@ -1319,7 +1491,7 @@ class ApiController:
         # Always (re)compute the histogram, even if the axis isn't ready yet, so
         # Send has data to work with regardless of draw timing.
         self._compute_energy_hist(df)
-        # The energy histogram just changed — clear any "✓ Sent" confirmation so
+        # The energy histogram just changed  -- clear any "✓ Sent" confirmation so
         # the button reflects that this spectrum hasn't been sent yet.
         self._reset_send_button()
         ax = self.page.ax_spe
@@ -1455,6 +1627,7 @@ class ApiController:
     def apply_energy_filter(self, xmin, xmax):
         if self.df_current is None:
             return
+        self._clear_significance()
         self._save_undo_snapshot()
         if self.en_flag == 0:
             mask = (self.df_current[self.ekey] > xmin) & (self.df_current[self.ekey] < xmax)
@@ -1476,6 +1649,7 @@ class ApiController:
     def apply_t_filter(self, tmin, tmax):
         if self.df_current is None:
             return
+        self._clear_significance()
         self._save_undo_snapshot()
         if self.dt_flag == 0:
             mask = (self.df_current[self._dt_key] > tmin) & (self.df_current[self._dt_key] < tmax)
@@ -1497,6 +1671,7 @@ class ApiController:
     def apply_xy_filter(self, x1, x2, y1, y2):
         if self.df_current is None:
             return
+        self._clear_significance()
         self._save_undo_snapshot()
         xlo, xhi = sorted((x1, x2))
         ylo, yhi = sorted((y1, y2))
@@ -1559,20 +1734,12 @@ class ApiController:
             self._arm_temp_selector = True
         self._arming_selection = True
         self._set_add_armed(True)
-        self._status("Drag a band on the energy spectrum to add a selection…")
+        self._status("Drag a band on the energy spectrum to add a selection...")
 
     def _set_add_armed(self, armed):
-        """Highlight the Add-selection button while a selection drag is armed."""
-        b = self.opts.btn_add_sel
-        if armed:
-            b.setText("Drag energy band…")
-            b.setStyleSheet(
-                f"background-color:{T.ACCENT_AMBER}; color:{T.BG_DARK}; "
-                f"border:2px solid {T.ACCENT_AMBER}; border-radius:5px; "
-                f"padding:8px 13px; font-weight:800;")
-        else:
-            b.setText("Add selection")
-            b.setStyleSheet("")
+        """Reflect the armed/disarmed state on the dialog's Add button (if open)."""
+        if self._sel_dlg is not None:
+            self._sel_dlg.set_add_armed(armed)
 
     def _create_selection(self, emin, emax):
         self._arming_selection = False
@@ -1585,7 +1752,7 @@ class ApiController:
         mask = (self.df_current[self.ekey] > emin) & (self.df_current[self.ekey] < emax)
         sub = self.df_current[mask].copy()
         if sub.shape[0] == 0:
-            self._status(f"No events in [{emin:g}, {emax:g}] — selection not added")
+            self._status(f"No events in [{emin:g}, {emax:g}]  -- selection not added")
             return
         color = T.OVERLAY_COLORS[self._sel_color_idx % len(T.OVERLAY_COLORS)]
         dlg = EnergySelectionDialog(emin, emax, color, sub.shape[0], self.app)
@@ -1601,53 +1768,167 @@ class ApiController:
                      f"[{emin:g}, {emax:g}]")
 
     def _refresh_sel_list(self):
-        """Rebuild the options-panel list: one colored row per selection."""
-        box = self.opts.sel_box
-        while box.count():
-            item = box.takeAt(0)
-            w = item.widget()
-            if w is not None:
-                w.deleteLater()
-        if not self.selections:
-            empty = QLabel("No selections yet."); empty.setObjectName("stat_key")
-            box.addWidget(empty)
-            return
-        for sel in self.selections:
-            row = QWidget()
-            rl = QHBoxLayout(row); rl.setContentsMargins(0, 0, 0, 0); rl.setSpacing(6)
-            dot = QLabel("●")
-            dot.setStyleSheet(f"color:{sel['color']}; font-size:15px;")
-            name = QLabel(f"{sel['label']}  [{sel['emin']:g}–{sel['emax']:g}]")
-            name.setStyleSheet(f"color:{T.TEXT_PRIMARY}; font-size:12px;")
-            btn = QPushButton("✕"); btn.setObjectName("mini_btn")
-            btn.setFixedWidth(26); btn.setCursor(Qt.PointingHandCursor)
-            btn.setToolTip("Remove this selection")
-            btn.clicked.connect(lambda _=False, s=sel: self._remove_selection(s))
-            rl.addWidget(dot); rl.addWidget(name, 1); rl.addWidget(btn, 0)
-            box.addWidget(row)
+        """Update the count label in the options panel and the dialog list if open."""
+        n = len(self.selections)
+        self.opts.lbl_sel_count.setText(
+            f"{n} selection{'s' if n != 1 else ''}" if n else "No selections")
+        if self._sel_dlg is not None:
+            self._sel_dlg.refresh_list()
 
     def _remove_selection(self, sel):
         try:
             self.selections.remove(sel)
         except ValueError:
             return
+        self._clear_significance()
         self._refresh_sel_list()
         self._status(f"Removed selection '{sel['label']}'")
+
+    def _open_selections(self):
+        """Open (or raise) the SelectionsDialog."""
+        if self._sel_dlg is None:
+            self._sel_dlg = SelectionsDialog(self)
+            self._sel_dlg.refresh_list()
+        self._sel_dlg.show()
+        self._sel_dlg.raise_()
+        self._sel_dlg.activateWindow()
 
     def _clear_selections(self):
         if not self.selections:
             return
         self.selections = []
+        self._clear_significance()
         self._refresh_sel_list()
         self._status("Cleared all selections")
 
+    # -- significance vs dt --------------------------------------------------------
+    def _compute_sig_vs_dt(self, sel, sideband_w, dt_edges, sig_threshold):
+        """For each dt bin return S/B; zero where S/√B < *sig_threshold*.
+
+        Background B is estimated from symmetric sidebands of width *sideband_w*
+        on each side of the selection and scaled to the selection width, so it
+        represents the expected background under the peak.
+        """
+        emin, emax = sel["emin"], sel["emax"]
+        ewidth = emax - emin
+        if ewidth <= 0 or sideband_w <= 0:
+            return None
+
+        e = self.df_current[self.ekey].to_numpy(dtype=float)
+        dt = self.df_current[self._dt_key].to_numpy(dtype=float)
+        n_slices = len(dt_edges) - 1
+        s_over_b = np.zeros(n_slices)
+
+        for i in range(n_slices):
+            mask_dt = (dt >= dt_edges[i]) & (dt < dt_edges[i + 1])
+            e_sl = e[mask_dt]
+            if len(e_sl) == 0:
+                continue
+            S_raw = float(np.sum((e_sl >= emin) & (e_sl <= emax)))
+            B_raw = float(np.sum(
+                ((e_sl >= emin - sideband_w) & (e_sl < emin)) |
+                ((e_sl > emax) & (e_sl <= emax + sideband_w))
+            ))
+            if B_raw <= 0:
+                continue
+            B = B_raw * ewidth / (2.0 * sideband_w)
+            if B <= 0:
+                continue
+            S = S_raw - B
+            significance = S / np.sqrt(B)
+            s_over_b[i] = (S / B) if significance >= sig_threshold else 0.0
+
+        return s_over_b
+
+    def _plot_significance(self, sideband_w, dt_slice_w, sig_threshold=5.0):
+        """Overlay S/B vs dt on the dt panel with a secondary y-axis."""
+        if self.df_current is None or self.page.ax_dt is None:
+            self._status("Load an API file first")
+            return
+        if not self.selections:
+            self._status("Add at least one energy selection first")
+            return
+
+        dt_col = self._dt_key
+        dt_lo, dt_hi = np.percentile(self.df_current[dt_col], [0.2, 99.5])
+
+        # Derive dt slice width from current tbins when the user left it blank.
+        if dt_slice_w is None:
+            dt_slice_w = (dt_hi - dt_lo) / max(1, self.tbins)
+
+        n_slices = max(1, int(round((dt_hi - dt_lo) / dt_slice_w)))
+        dt_edges = np.linspace(dt_lo, dt_hi, n_slices + 1)
+        dt_centers = 0.5 * (dt_edges[:-1] + dt_edges[1:])
+
+        # Clear any previous significance overlay first.
+        self._clear_significance()
+
+        ax = self.page.ax_dt
+        ax.clear()
+        # Gray base dt histogram.
+        ax.hist(self.df_current[dt_col], bins=self.tbins, range=(dt_lo, dt_hi),
+                color=T.TEXT_DIM, alpha=0.35, edgecolor=API_PLOT_BG, linewidth=0.3)
+        ax.set_xlabel("dt (ns, shifted)" if self._dt_corrected else "dt (ns)")
+        ax.set_ylabel("Counts", color=T.TEXT_DIM)
+        self.page._style(ax)
+
+        # Secondary y-axis for S/B curves.
+        ax_sig = ax.twinx()
+        ax_sig.set_ylabel("S/B", color=T.TEXT_DIM)
+        ax_sig.tick_params(colors=T.TEXT_DIM, which="both", length=3)
+        ax_sig.spines["right"].set_color(T.BORDER)
+        ax_sig.spines["top"].set_color(T.BORDER)
+        ax_sig.set_facecolor("none")   # transparent so the dt hist shows through
+        ax_sig.set_ylim(bottom=0)
+
+        handles, labels = [], []
+        for sel in self.selections:
+            sb = self._compute_sig_vs_dt(sel, sideband_w, dt_edges, sig_threshold)
+            if sb is None:
+                continue
+            ax_sig.plot(dt_centers, sb, color=sel["color"], lw=1.5,
+                        label=sel["label"], zorder=3)
+            handles.append(
+                Line2D([0], [0], color=sel["color"], lw=1.5, label=sel["label"]))
+            labels.append(sel["label"])
+
+        if handles:
+            ax_sig.legend(handles, labels, loc="upper right", fontsize=8,
+                          facecolor=API_PLOT_BG, edgecolor=T.BORDER,
+                          labelcolor=T.TEXT_PRIMARY)
+
+        self._sig_active = True
+        self._ax_sig = ax_sig
+        self.page.canvas.draw_idle()
+        self._status(
+            f"S/B vs dt  ·  sideband {sideband_w:g}  ·  "
+            f"slice {dt_slice_w:.1f} ns  ·  threshold {sig_threshold:g} σ")
+
+    def _clear_significance(self):
+        """Remove the significance overlay and restore the normal dt histogram."""
+        if not self._sig_active:
+            return
+        self._sig_active = False
+        if self._ax_sig is not None:
+            try:
+                self.page.fig.delaxes(self._ax_sig)
+            except Exception:  # noqa: BLE001  -- axes may already be gone
+                pass
+            self._ax_sig = None
+        ax = self.page.ax_dt
+        if ax is not None and self.df_current is not None:
+            ax.clear()
+            self._plot_time(self.df_current)
+            self.page.canvas.draw_idle()
+
     def _reset_selections(self):
         """Drop all selections (e.g. when a new run is loaded) without a status
-        message — the caller reports the higher-level action."""
+        message  -- the caller reports the higher-level action."""
         self.selections = []
         self._sel_color_idx = 0
         self._arming_selection = False
         self._set_add_armed(False)
+        self._clear_significance()
         self._refresh_sel_list()
 
     def _plot_selections(self):
@@ -1655,9 +1936,10 @@ class ApiController:
             self._status("Load an API file first")
             return
         if not self.selections:
-            self._status("No selections to plot — arm “Add selection” and drag a band")
+            self._status("No selections to plot  -- open Selections and drag a band")
             return
-        self._flash_button(self.opts.btn_plot_sel, bg=T.SNR_PURPLE, fg=T.BG_DARK)
+        if self._sel_dlg is not None:
+            self._flash_button(self._sel_dlg.btn_plot_sel, bg=T.SNR_PURPLE, fg=T.BG_DARK)
         self._plot_energy_overlays()
         self._plot_time_overlays()
         self._plot_xy_overlays()
@@ -1752,14 +2034,14 @@ class ApiController:
         The calibration there is E = f(channel); because the API spectrum is sent
         to the Spectrum tab carrying its *real* channel values (see
         _send_to_spectrum), that polynomial maps the same channel axis as the
-        dataframe's raw energy column — so it applies directly."""
+        dataframe's raw energy column  -- so it applies directly."""
         if self.df_current is None:
             self._status("Load an API file first")
             return
         cal = getattr(self.app, "calibration", None)
         res = cal.current_calibration() if cal is not None else None
         if res is None:
-            self._status("No calibration in the Calibration tab — build one there "
+            self._status("No calibration in the Calibration tab  -- build one there "
                          "first (send this spectrum over, then calibrate)")
             return
         coeffs, units = res
@@ -1792,7 +2074,7 @@ class ApiController:
         self.en_flag = self.dt_flag = self.xy_flag = 0
         self.vmax = None
         self.opts.ed_vmax.clear()
-        # Existing selections were cut in the old (channel) axis — drop them.
+        # Existing selections were cut in the old (channel) axis  -- drop them.
         self._reset_selections()
         self._configure_keys()
         self._initialize_plots()
@@ -1822,9 +2104,9 @@ class ApiController:
         self._initialize_plots()
         self.opts.btn_clear_cal.setEnabled(False)
         self.opts.lbl_cal.setText("Uncalibrated (channels)")
-        self._status("Calibration cleared — back to raw channels")
+        self._status("Calibration cleared  -- back to raw channels")
 
-    # -- drift correction (Shifts… window) -------------------------------------
+    # -- drift correction (Shifts... window) -------------------------------------
     def _rebuild_from_master(self):
         """Re-derive the working frames from df_api and redraw (reset-style)."""
         self.df_current = self.df_api.copy()
@@ -1933,7 +2215,7 @@ class ApiController:
         self._dt_label = "No time shift"
         self._rebuild_from_master()
         self._refresh_shift_labels()
-        self._status("Time correction cleared — back to raw dt")
+        self._status("Time correction cleared  -- back to raw dt")
 
     def _refresh_shift_labels(self):
         """Push the current correction state into the Shifts dialog if it's open."""
@@ -1962,7 +2244,7 @@ class ApiController:
         if self._api3d_dlg is None:
             try:
                 self._api3d_dlg = Api3DDialog(self.app)
-            except Exception as exc:  # noqa: BLE001 — QtWebEngine may be missing
+            except Exception as exc:  # noqa: BLE001  -- QtWebEngine may be missing
                 traceback.print_exc()
                 self._status(f"Could not open the 3D view: {exc}")
                 return
@@ -2014,7 +2296,7 @@ class ApiController:
         # cut dataframes); without, the whole current view as a single volume.
         if not self.selections and (self.df_current is None
                                     or self.df_current.shape[0] == 0):
-            self._set_3d_status("No events to plot — load or relax the filters.")
+            self._set_3d_status("No events to plot  -- load or relax the filters.")
             return
         dlg = self._api3d_dlg
         num_bins = dlg.value("no_bins", int)
@@ -2023,13 +2305,13 @@ class ApiController:
         opacity = dlg.value("opacity", float)
         surfcount = dlg.value("surfcount", int)
         if None in (num_bins, iso_min, iso_max, opacity, surfcount):
-            self._set_3d_status("Check the plot inputs — they must be numbers.")
+            self._set_3d_status("Check the plot inputs  -- they must be numbers.")
             return
         if num_bins < 2 or surfcount < 1:
             self._set_3d_status("Need ≥2 bins and ≥1 surface.")
             return
 
-        self._set_3d_status("Building volume…")
+        self._set_3d_status("Building volume...")
         try:
             import tempfile
             import plotly.graph_objs as go
@@ -2050,7 +2332,7 @@ class ApiController:
                 t = self._volume_trace(go, self.df_current, num_bins, iso_min,
                                        iso_max, opacity, surfcount)
                 if t is None:
-                    self._set_3d_status("Histogram is empty/flat — nothing to render.")
+                    self._set_3d_status("Histogram is empty/flat  -- nothing to render.")
                     return
                 traces.append(t)
                 rendered = f"{self.df_current.shape[0]:,} events"
@@ -2083,7 +2365,7 @@ class ApiController:
             self._cleanup_3d_tmp()
             self._api3d_tmp = path
             self._set_3d_status(f"Rendered {rendered}.")
-        except Exception as exc:  # noqa: BLE001 — surface render errors to the dialog
+        except Exception as exc:  # noqa: BLE001  -- surface render errors to the dialog
             traceback.print_exc()
             self._set_3d_status(f"Could not build the 3D plot: {exc}")
 
@@ -2146,7 +2428,7 @@ class ApiController:
         self.ebins, self.tbins, self.hexbins = (
             parsed["ebins"], parsed["tbins"], parsed["hexbins"])
         if self.df_current is None:
-            self._status("Bin counts set — load an API file to apply them")
+            self._status("Bin counts set  -- load an API file to apply them")
             return
         # Redraw each panel with the new binning (no file re-read), mirroring the
         # clear-then-plot pattern the filters use.
@@ -2167,7 +2449,7 @@ class ApiController:
 
         Re-reads every channel of the source run (all parquet chunks combined),
         adds ``energy_cal`` and/or ``dt_cal`` for the loaded channel's rows
-        (other channels get NaN — they aren't calibrated yet), and writes the
+        (other channels get NaN  -- they aren't calibrated yet), and writes the
         result as a single combined parquet under a user-chosen run number
         (date defaulting to the source run). The new run loads straight back
         through the Date/Run/Channel fields, with the calibration detected
@@ -2205,7 +2487,7 @@ class ApiController:
             return
 
         # Re-read every channel of the source run (dt stays in seconds, the
-        # on-disk convention — the loader scales it to ns at load time).
+        # on-disk convention  -- the loader scales it to ns at load time).
         try:
             full = read_parquet_api.read_parquet_file(
                 date=self._src_date, runnr=self._src_runnr, ch=None,
@@ -2224,7 +2506,7 @@ class ApiController:
         if n != len(self.df_api):
             self._status(
                 f"Row mismatch for ch {self._src_ch} ({n} on disk vs "
-                f"{len(self.df_api)} loaded) — cannot align; aborting")
+                f"{len(self.df_api)} loaded)  -- cannot align; aborting")
             return
 
         applied = []
@@ -2276,7 +2558,7 @@ class ApiController:
         if self.df_api is None:
             self.page.show_empty()
             return
-        # Retrieve the original (loaded) dataframe — no re-read of the file, same
+        # Retrieve the original (loaded) dataframe  -- no re-read of the file, same
         # as the legacy GUI's reset_button_api. df_api is the untouched load; the
         # position columns are re-derived from it below.
         self.df_current = self.df_api.copy()
@@ -2294,7 +2576,7 @@ class ApiController:
     def _flash_button(self, button, bg=T.ACCENT_RED, fg="#ffffff"):
         """Briefly brighten a button so the user sees the click registered, then
         revert to its themed style. ``repaint()`` paints the bright state *now*,
-        before the (blocking) load/reset work freezes the event loop — otherwise
+        before the (blocking) load/reset work freezes the event loop  -- otherwise
         the flash would never reach the screen."""
         button.setStyleSheet(
             f"background-color:{bg}; color:{fg}; "
@@ -2310,7 +2592,7 @@ class ApiController:
             # silently doing nothing (and needing a second press). Flood-field
             # runs have no energy spectrum, so there is genuinely nothing to send.
             if self.df_current is None or self.ekey is None or self.flood_field:
-                self._status("Nothing to send — load an API file first")
+                self._status("Nothing to send  -- load an API file first")
                 return
             self._compute_energy_hist(self.df_current)
         # Prefer an energy axis when one exists: a smart calibration we applied,
@@ -2326,8 +2608,8 @@ class ApiController:
                 # Uncalibrated: carry the *real* channel values (gam_x bin centres)
                 # on adc_channels (a pure coordinate), leaving `channels` as 0..N
                 # indices for the peak-finding/fitting machinery. A calibration
-                # built here fits against spect.cal_channels — i.e. the real
-                # channel space of the API dataframe's raw energy column — so its
+                # built here fits against spect.cal_channels  -- i.e. the real
+                # channel space of the API dataframe's raw energy column  -- so its
                 # coefficients apply to that column directly and "Retrieve
                 # calibration" round-trips correctly.
                 spect = sp.Spectrum(counts=self.gam, adc_channels=self.gam_x)

@@ -17,8 +17,10 @@ Anything beyond the legacy feature set (smart auto-matching, piecewise models,
 Nuclear-Database energy sourcing) is intentionally left out — it will be built
 on top of this baseline.
 """
+import ast
 import io
 import json
+import operator
 import os
 import re
 
@@ -59,6 +61,41 @@ def _safe_filename(name):
     """Turn a user-supplied calibration name into a safe file stem."""
     stem = re.sub(r"[^A-Za-z0-9._ -]", "_", name).strip().strip(".")
     return stem or "calibration"
+
+
+_ARITH_OPS = {
+    ast.Add: operator.add, ast.Sub: operator.sub,
+    ast.Mult: operator.mul, ast.Div: operator.truediv,
+    ast.USub: operator.neg, ast.UAdd: operator.pos,
+}
+
+
+def _parse_energy(text):
+    """Parse *text* as a float, supporting simple arithmetic (e.g. '6129-511').
+
+    Only literal numbers and +−×÷ are allowed; anything else raises ValueError.
+    This lets users enter escape-peak energies as expressions without a
+    calculator.
+    """
+    text = text.strip()
+    try:
+        return float(text)
+    except ValueError:
+        pass
+
+    def _eval(node):
+        if isinstance(node, ast.Constant) and isinstance(node.value, (int, float)):
+            return float(node.value)
+        if isinstance(node, ast.BinOp) and type(node.op) in _ARITH_OPS:
+            return _ARITH_OPS[type(node.op)](_eval(node.left), _eval(node.right))
+        if isinstance(node, ast.UnaryOp) and type(node.op) in _ARITH_OPS:
+            return _ARITH_OPS[type(node.op)](_eval(node.operand))
+        raise ValueError(f"Unsupported expression: {text!r}")
+
+    try:
+        return _eval(ast.parse(text, mode="eval").body)
+    except (SyntaxError, ValueError):
+        raise ValueError(f"Cannot parse energy expression: {text!r}")
 
 
 def list_saved_calibrations():
@@ -482,7 +519,7 @@ class CalibrationController:
         ch_item, e_item = tbl.item(row, CH_COL), tbl.item(row, E_COL)
         try:
             float((ch_item.text() if ch_item else "").strip())
-            float((e_item.text() if e_item else "").strip())
+            _parse_energy((e_item.text() if e_item else "").strip())
         except (AttributeError, ValueError):
             return False
         return True
@@ -627,7 +664,7 @@ class CalibrationController:
         for r in range(o.tbl_points.rowCount()):
             e_item = o.tbl_points.item(r, E_COL)
             try:
-                val = float((e_item.text() if e_item else "").strip())
+                val = _parse_energy((e_item.text() if e_item else "").strip())
             except (AttributeError, ValueError):
                 continue
             o.tbl_points.setItem(r, E_COL, QTableWidgetItem(f"{val * factor:.10g}"))
@@ -683,7 +720,10 @@ class CalibrationController:
         self._status("Calibration reset")
 
     def _read_points(self, used_only=True):
-        """Return (channels, energies) for rows with valid numbers."""
+        """Return (channels, energies) for rows with valid numbers.
+
+        Energy cells may contain arithmetic expressions (e.g. '6129-511') which
+        are evaluated by ``_parse_energy``."""
         o = self.opts
         chans, ergs = [], []
         for r in range(o.tbl_points.rowCount()):
@@ -693,7 +733,7 @@ class CalibrationController:
             ch_item, e_item = o.tbl_points.item(r, CH_COL), o.tbl_points.item(r, E_COL)
             try:
                 ch = float((ch_item.text() if ch_item else "").strip())
-                e = float((e_item.text() if e_item else "").strip())
+                e = _parse_energy((e_item.text() if e_item else "").strip())
             except (AttributeError, ValueError):
                 continue
             chans.append(ch); ergs.append(e)
