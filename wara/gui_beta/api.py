@@ -275,6 +275,51 @@ class Api3DDialog(QDialog):
             return None
 
 
+class ApplyToDataDialog(QDialog):
+    """Ask for the destination run when baking the active calibration/time-shift
+    into a new on-disk run. The date defaults to the loaded run's date (editable)
+    and the run number must be entered by the user — writing to a *new* run keeps
+    the source run untouched and avoids the loader concatenating duplicates."""
+
+    def __init__(self, date, runnr, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Apply to data — save calibrated run")
+        self.setStyleSheet(T.STYLESHEET)
+        self.setMinimumWidth(340)
+
+        lay = QVBoxLayout(self)
+        lay.addWidget(header("SAVE CALIBRATED RUN"))
+        note = QLabel(
+            "Combine all of the source run's parquet files and bake the active "
+            "energy calibration and/or time shift into energy_cal / dt_cal, then "
+            "save as a new run. Pick a new run number so the original run is left "
+            "untouched.")
+        note.setObjectName("stat_key"); note.setWordWrap(True)
+        lay.addWidget(note)
+
+        self.ed_date = QLineEdit(str(date or "")); self.ed_date.setFixedWidth(150)
+        drow, _ = labeled_row("Date", self.ed_date)
+        lay.addWidget(drow)
+        self.ed_run = QLineEdit(); self.ed_run.setFixedWidth(150)
+        self.ed_run.setPlaceholderText("new run number")
+        rrow, _ = labeled_row("Run", self.ed_run)
+        lay.addWidget(rrow)
+
+        bb = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        bb.accepted.connect(self.accept)
+        bb.rejected.connect(self.reject)
+        lay.addWidget(bb)
+
+    def values(self):
+        """Return (date_str, runnr_int). runnr is None if it isn't an integer."""
+        date = self.ed_date.text().strip()
+        try:
+            runnr = int(self.ed_run.text().strip())
+        except ValueError:
+            runnr = None
+        return date, runnr
+
+
 class ShiftsDialog(QDialog):
     """Drift-correction window: gain-shift the energy axis and shift/align the
     time axis, independently. Two tabs (Energy, Time), each showing the raw
@@ -729,11 +774,17 @@ class ApiOptions(QScrollArea):
         self.btn_interactive.setCursor(Qt.PointingHandCursor)
         self.btn_interactive.setToolTip(
             "Enable dragging spans/rectangles on the plots to cut events interactively")
+        self.btn_undo = QPushButton("← Back"); self.btn_undo.setObjectName("action_btn")
+        self.btn_undo.setCursor(Qt.PointingHandCursor)
+        self.btn_undo.setToolTip("Restore the dataframe to the state before the last cut")
+        self.btn_undo.setEnabled(False)
         self.btn_reset = QPushButton("Reset"); self.btn_reset.setObjectName("danger_btn")
         self.btn_reset.setCursor(Qt.PointingHandCursor)
         qr = QHBoxLayout(); qr.setContentsMargins(0, 0, 0, 0); qr.setSpacing(6)
-        qr.addWidget(self.btn_interactive, 1); qr.addWidget(self.btn_reset, 0)
+        qr.addWidget(self.btn_undo, 1)
+        qr.addWidget(self.btn_reset, 1)
         qrw = QWidget(); qrw.setLayout(qr)
+        lay.addWidget(self.btn_interactive)
         lay.addWidget(qrw)
 
         # ── Run info readout ─────────────────────────────────────────
@@ -865,8 +916,9 @@ class ApiOptions(QScrollArea):
         self.btn_apply_data.setObjectName("action_btn")
         self.btn_apply_data.setCursor(Qt.PointingHandCursor)
         self.btn_apply_data.setToolTip(
-            "Bake the active energy calibration and time shift into the dataframe "
-            "as energy_cal and dt_cal columns, preserving every other column")
+            "Combine all of the source run's parquet files, bake the active "
+            "energy calibration and/or time shift into energy_cal / dt_cal, and "
+            "save it as a new run (you choose the run number)")
         lay.addWidget(self.btn_apply_data)
 
         lay.addStretch(1)
@@ -884,6 +936,10 @@ class ApiController:
         self.df_api = None
         self.df_current = None
         self.df_previous = None
+        self._undo_state = None     # snapshot: (df_current, df_previous, en_flag, dt_flag, xy_flag)
+        # Source run identity (set on load); used by "Apply to data".
+        self._src_date = self._src_runnr = self._src_ch = None
+        self._src_data_path = None
         # Filter "used before" flags, mirroring the legacy previous/current scheme.
         self.en_flag = self.dt_flag = self.xy_flag = 0
         self.xkey = self.ykey = self.ekey = None
@@ -947,6 +1003,7 @@ class ApiController:
         o = self.opts
         o.btn_load.clicked.connect(self._load)
         o.btn_reset.clicked.connect(self._reset)
+        o.btn_undo.clicked.connect(self._undo)
         o.btn_send.clicked.connect(self._send_to_spectrum)
         o.btn_3d.clicked.connect(self._open_3d)
         o.btn_apply_data.clicked.connect(self._apply_to_data)
@@ -963,6 +1020,36 @@ class ApiController:
         o.ed_vmax.returnPressed.connect(self._apply_vmax)
         for ed in (o.ed_ebins, o.ed_tbins, o.ed_xybins):
             ed.returnPressed.connect(self._apply_bins)
+
+    def _save_undo_snapshot(self):
+        """Capture the full filter state before a cut so ← Back can restore it."""
+        self._undo_state = (
+            self.df_current.copy(),
+            self.df_previous.copy(),
+            self.en_flag, self.dt_flag, self.xy_flag,
+        )
+        self.opts.btn_undo.setEnabled(True)
+
+    def _undo(self):
+        """Restore the dataframe to the state before the last interactive cut."""
+        if self._undo_state is None:
+            return
+        df_cur, df_prev, en_flag, dt_flag, xy_flag = self._undo_state
+        self.df_current = df_cur
+        self.df_previous = df_prev
+        self.en_flag, self.dt_flag, self.xy_flag = en_flag, dt_flag, xy_flag
+        self._undo_state = None
+        self.opts.btn_undo.setEnabled(False)
+        if self.page.ax_spe is not None:
+            self.page.ax_spe.clear()
+            self._plot_energy(self.df_current)
+        if self.page.ax_dt is not None:
+            self.page.ax_dt.clear()
+            self._plot_time(self.df_current)
+        self._replot_xy()
+        self.page.reset_nav()
+        self.page.canvas.draw_idle()
+        self._status(f"Restored previous state  ·  {self.df_current.shape[0]:,} events")
 
     def _toggle_interactive(self, checked):
         b = self.opts.btn_interactive
@@ -1041,6 +1128,12 @@ class ApiController:
         self.df_api = df
         self.df_current = df.copy()
         self.df_previous = df.copy()
+        # Remember the source run so "Apply to data" can re-read every channel
+        # and write the calibrated result to a new run.
+        self._src_date = date
+        self._src_runnr = runnr
+        self._src_ch = ch
+        self._src_data_path = data_path
         self.en_flag = self.dt_flag = self.xy_flag = 0
         # A new run invalidates selections snapshotted from the old data.
         self._reset_selections()
@@ -1362,6 +1455,7 @@ class ApiController:
     def apply_energy_filter(self, xmin, xmax):
         if self.df_current is None:
             return
+        self._save_undo_snapshot()
         if self.en_flag == 0:
             mask = (self.df_current[self.ekey] > xmin) & (self.df_current[self.ekey] < xmax)
             self.df_previous = self.df_current.copy()
@@ -1382,6 +1476,7 @@ class ApiController:
     def apply_t_filter(self, tmin, tmax):
         if self.df_current is None:
             return
+        self._save_undo_snapshot()
         if self.dt_flag == 0:
             mask = (self.df_current[self._dt_key] > tmin) & (self.df_current[self._dt_key] < tmax)
             self.df_previous = self.df_current.copy()
@@ -1402,6 +1497,7 @@ class ApiController:
     def apply_xy_filter(self, x1, x2, y1, y2):
         if self.df_current is None:
             return
+        self._save_undo_snapshot()
         xlo, xhi = sorted((x1, x2))
         ylo, yhi = sorted((y1, y2))
         if self.xy_flag == 0:
@@ -2067,40 +2163,112 @@ class ApiController:
             f"Bins → energy {self.ebins:,} · dt {self.tbins:,} · X-Y {self.hexbins:,}")
 
     def _apply_to_data(self):
-        """Bake the active energy and time corrections into the full original
-        dataframe (df_api, before any cuts) as the canonical ``energy_cal`` and
-        ``dt_cal`` columns, preserving every other column.
+        """Bake the active energy/time corrections into a *new* on-disk run.
 
-        Writes ``energy_cal`` when either a polynomial calibration is active
-        (``e_units`` set) or an energy gain-shift has been applied
-        (``_egain_applied``).  In the gain-shift-only case ``self.ekey`` points
-        at ``energy_drift``, so ``energy_cal`` receives the drift-corrected
-        channel values.  Writes ``dt_cal`` when any time correction is active.
-        Always operates on df_api so cuts on df_current do not affect the
-        result."""
+        Re-reads every channel of the source run (all parquet chunks combined),
+        adds ``energy_cal`` and/or ``dt_cal`` for the loaded channel's rows
+        (other channels get NaN — they aren't calibrated yet), and writes the
+        result as a single combined parquet under a user-chosen run number
+        (date defaulting to the source run). The new run loads straight back
+        through the Date/Run/Channel fields, with the calibration detected
+        automatically; the source run is left untouched.
+
+        ``energy_cal`` is written when a polynomial calibration is active
+        (``e_units`` set) or an energy gain-shift has been applied; in the
+        gain-shift-only case ``self.ekey`` points at ``energy_drift``, so the
+        drift-corrected channels are baked in. ``dt_cal`` is written when any
+        time correction is active. Time units follow the on-disk convention:
+        raw ``dt`` stays in seconds, ``dt_cal`` is in ns (already so on
+        df_api)."""
         self._flash_button(self.opts.btn_apply_data, bg=T.SNR_PURPLE, fg=T.BG_DARK)
-        if self.df_api is None:
+        if self.df_api is None or self._src_date is None:
             self._status("Load an API file first")
+            return
+        if self.flood_field:
+            self._status("Flood-field runs have no calibration to apply")
             return
         energy_changed = self.e_units is not None or self._egain_applied
         dt_changed = self._dt_corrected
         if not energy_changed and not dt_changed:
             self._status("No energy or time changes to apply")
             return
-        df = self.df_api.copy()
+
+        dlg = ApplyToDataDialog(self._src_date, self._src_runnr, self.app)
+        if dlg.exec_() != QDialog.Accepted:
+            return
+        new_date, new_runnr = dlg.values()
+        if not new_date:
+            self._status("Enter a date for the new run")
+            return
+        if new_runnr is None:
+            self._status("New run number must be an integer")
+            return
+
+        # Re-read every channel of the source run (dt stays in seconds, the
+        # on-disk convention — the loader scales it to ns at load time).
+        try:
+            full = read_parquet_api.read_parquet_file(
+                date=self._src_date, runnr=self._src_runnr, ch=None,
+                data_path_txt=self._src_data_path)
+        except Exception as exc:  # noqa: BLE001
+            traceback.print_exc()
+            self._status(f"Could not re-read source run: {exc}")
+            return
+        if full is None:
+            self._status("Could not re-read the source run's parquet files")
+            return
+
+        # The loaded channel's rows, in load order, line up with df_api's rows.
+        mask = read_parquet_api.channel_mask(full, self._src_ch)
+        n = int(mask.to_numpy().sum())
+        if n != len(self.df_api):
+            self._status(
+                f"Row mismatch for ch {self._src_ch} ({n} on disk vs "
+                f"{len(self.df_api)} loaded) — cannot align; aborting")
+            return
+
         applied = []
-        # When calibrated, self.ekey is "energy_cal"; when gain-shift only it is
-        # "energy_drift".  Either way, copying it as "energy_cal" bakes the
-        # active correction into the canonical column.  Same logic for dt_cal.
-        if energy_changed and self.ekey in df.columns:
-            df["energy_cal"] = df[self.ekey].to_numpy()
+        # When calibrated, self.ekey is "energy_cal"; gain-shift only ⇒
+        # "energy_drift". Either way it becomes the canonical energy_cal column.
+        if energy_changed and self.ekey in self.df_api.columns:
+            full["energy_cal"] = np.nan
+            full.loc[mask, "energy_cal"] = self.df_api[self.ekey].to_numpy()
             applied.append("energy_cal")
-        if dt_changed and self._dt_key in df.columns:
-            df["dt_cal"] = df[self._dt_key].to_numpy()
+        if dt_changed and self._dt_key in self.df_api.columns:
+            full["dt_cal"] = np.nan
+            full.loc[mask, "dt_cal"] = self.df_api[self._dt_key].to_numpy()
             applied.append("dt_cal")
-        self.df_api = df
-        self._rebuild_from_master()
-        self._status(f"Applied to data — created {', '.join(applied)}")
+        if not applied:
+            self._status("No energy or time changes to apply")
+            return
+
+        # Warn before clobbering an existing run.
+        try:
+            run_dir, _, _ = read_parquet_api.run_parquet_path(
+                new_date, new_runnr, self._src_data_path)
+        except Exception as exc:  # noqa: BLE001
+            self._status(f"Bad destination date/run: {exc}")
+            return
+        if run_dir.exists():
+            resp = QMessageBox.question(
+                self.app, "Overwrite run?",
+                f"Run {new_date}-{new_runnr} already exists at:\n{run_dir}\n\n"
+                "Overwrite its combined parquet data?",
+                QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
+            if resp != QMessageBox.Yes:
+                self._status("Apply to data cancelled")
+                return
+
+        try:
+            out = read_parquet_api.save_combined_run(
+                full, new_date, new_runnr, self._src_data_path, overwrite=True)
+        except Exception as exc:  # noqa: BLE001
+            traceback.print_exc()
+            self._status(f"Could not save calibrated run: {exc}")
+            return
+        self._status(
+            f"Saved calibrated run {new_date}-{new_runnr} "
+            f"({', '.join(applied)}) → {out}")
 
     # -- reset / send ----------------------------------------------------------
     def _reset(self):
@@ -2114,6 +2282,8 @@ class ApiController:
         self.df_current = self.df_api.copy()
         self.df_previous = self.df_api.copy()
         self.en_flag = self.dt_flag = self.xy_flag = 0
+        self._undo_state = None
+        self.opts.btn_undo.setEnabled(False)
         self.vmax = None
         self.opts.ed_vmax.clear()
         self._reset_selections()

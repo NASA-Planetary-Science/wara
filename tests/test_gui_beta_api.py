@@ -9,6 +9,7 @@ send-to-Spectrum — without any data files.
 """
 
 import os
+from pathlib import Path
 
 # Must be set before the first QApplication is created (during collection).
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
@@ -664,67 +665,142 @@ def test_clear_calibration_is_independent_of_dt_shift(api):
 
 
 # ── Apply to data ────────────────────────────────────────────────────────────
+#
+# "Apply to data" now re-reads every channel of the source run, bakes the active
+# calibration/time-shift onto the loaded channel's rows, and writes the combined
+# result to a *new* run via read_parquet_api.save_combined_run. The apply_env
+# fixture supplies a two-channel (4 + 5) source run, stubs the destination
+# dialog, and captures what would have been written instead of touching disk.
 
-def test_apply_to_data_bakes_both_columns(api):
+def _combined_events(n_per=2000, seed=1):
+    """A two-channel API source run: channels 4 and 5, dt in seconds (the
+    on-disk convention — the loader scales it to ns)."""
+    rng = np.random.default_rng(seed)
+    frames = []
+    for ch in (4, 5):
+        energy = rng.uniform(0, 6000, n_per)
+        frames.append(pd.DataFrame({
+            "channel": np.full(n_per, ch),
+            "dt": rng.normal(0.0, 15.0, n_per) / 1e9,   # seconds
+            "energy": energy,
+            "energy_orig": energy,
+            "A": rng.uniform(1, 100, n_per),
+            "B": rng.uniform(1, 100, n_per),
+            "C": rng.uniform(1, 100, n_per),
+            "D": rng.uniform(1, 100, n_per),
+        }))
+    return pd.concat(frames, ignore_index=True)
+
+
+@pytest.fixture
+def apply_env(api, monkeypatch):
+    """(controller, combined_frame, saved) wired so Apply to data writes nowhere:
+    save_combined_run is captured into ``saved`` and the destination dialog auto-
+    accepts run number 999."""
     _w, c = api
+    combined = _combined_events()
+
+    def fake_read(date, runnr, ch=None, flood_field=False, data_path_txt=None):
+        if ch is None:
+            return combined.copy()
+        sub = combined[read_parquet_api.channel_mask(combined, ch)]
+        return sub.reset_index(drop=True).copy()
+    monkeypatch.setattr(read_parquet_api, "read_parquet_file", fake_read)
+
+    saved = {}
+
+    def fake_save(df, date, runnr, data_path=None, overwrite=False):
+        saved.update(df=df.copy(), date=date, runnr=runnr, overwrite=overwrite)
+        return Path("saved.parquet")
+    monkeypatch.setattr(read_parquet_api, "save_combined_run", fake_save)
+    # Destination run "doesn't exist" → no overwrite prompt.
+    monkeypatch.setattr(read_parquet_api, "run_parquet_path",
+                        lambda *a, **k: (Path("__no_such_run__"), Path("p"), "RUN"))
+
+    class _StubApplyDialog:
+        def __init__(self, date, runnr, parent=None):
+            self._date = date
+        def exec_(self):
+            return QDialog.Accepted
+        def values(self):
+            return (self._date, 999)
+    monkeypatch.setattr(api_mod, "ApplyToDataDialog", _StubApplyDialog)
+
+    return c, combined, saved
+
+
+def test_apply_to_data_bakes_both_columns(apply_env):
+    c, combined, saved = apply_env
     c._load()
-    raw_dt = c.df_api["dt"].to_numpy().copy()
-    orig_cols = set(c.df_api.columns)
     c.apply_calibration([0.0, 0.5], units="keV")  # energy_cal = 0.5 * energy_orig
-    c.apply_dt_shift(7.0)                          # dt_cal = dt + 7
+    c.apply_dt_shift(7.0)                          # dt_cal = dt(ns) + 7
     c._apply_to_data()
-    # Both canonical columns exist on the master frame…
-    assert "energy_cal" in c.df_api.columns and "dt_cal" in c.df_api.columns
+
+    df = saved["df"]
+    assert saved["runnr"] == 999
+    # All channels, all rows preserved in the combined output.
+    assert len(df) == len(combined)
+    assert {"energy_cal", "dt_cal"}.issubset(df.columns)
+    m5 = read_parquet_api.channel_mask(df, 5).to_numpy()
+    m4 = read_parquet_api.channel_mask(df, 4).to_numpy()
+    # Loaded channel (5) carries the calibration; the rest stays NaN.
     np.testing.assert_allclose(
-        c.df_api["energy_cal"].to_numpy(), 0.5 * c.df_api["energy_orig"].to_numpy())
-    np.testing.assert_allclose(c.df_api["dt_cal"].to_numpy(), raw_dt + 7.0)
-    # …and every original column is preserved.
-    assert orig_cols.issubset(set(c.df_api.columns))
+        df.loc[m5, "energy_cal"].to_numpy(),
+        0.5 * df.loc[m5, "energy_orig"].to_numpy())
+    assert np.isnan(df.loc[m4, "energy_cal"].to_numpy()).all()
+    # dt_cal = raw dt (seconds) → ns, plus the 7 ns shift; raw dt left in seconds.
+    np.testing.assert_allclose(
+        df.loc[m5, "dt_cal"].to_numpy(),
+        df.loc[m5, "dt"].to_numpy() * 1e9 + 7.0)
+    assert np.isnan(df.loc[m4, "dt_cal"].to_numpy()).all()
 
 
-def test_apply_to_data_only_dt_when_no_energy_change(api):
-    _w, c = api
+def test_apply_to_data_only_dt_when_no_energy_change(apply_env):
+    c, _combined, saved = apply_env
     c._load()
     c.apply_dt_shift(3.0)
     c._apply_to_data()
-    assert "dt_cal" in c.df_api.columns
+    df = saved["df"]
+    assert "dt_cal" in df.columns
     # No energy calibration was applied, so no energy_cal column is created.
-    assert "energy_cal" not in c.df_api.columns
+    assert "energy_cal" not in df.columns
 
 
-def test_apply_to_data_noop_without_changes(api):
-    _w, c = api
+def test_apply_to_data_noop_without_changes(apply_env):
+    c, _combined, saved = apply_env
     c._load()
     c._apply_to_data()
-    assert "energy_cal" not in c.df_api.columns and "dt_cal" not in c.df_api.columns
+    assert saved == {}            # nothing written when nothing changed
 
 
-def test_apply_to_data_energy_cal_from_gainshift_only(api):
+def test_apply_to_data_energy_cal_from_gainshift_only(apply_env):
     """Gain-shift alone (no polynomial calibration) should produce energy_cal."""
-    _w, c = api
+    c, _combined, saved = apply_env
     c._load()
     c.apply_energy_gainshift(4, method="shift")
     assert "energy_drift" in c.df_api.columns and "energy_cal" not in c.df_api.columns
     c._apply_to_data()
-    assert "energy_cal" in c.df_api.columns
+    df = saved["df"]
+    assert "energy_cal" in df.columns
+    m5 = read_parquet_api.channel_mask(df, 5).to_numpy()
     np.testing.assert_array_equal(
-        c.df_api["energy_cal"].to_numpy(), c.df_api["energy_drift"].to_numpy())
+        df.loc[m5, "energy_cal"].to_numpy(), c.df_api["energy_drift"].to_numpy())
 
 
-def test_apply_to_data_ignores_cuts(api):
-    """Apply to data should write to the full df_api regardless of df_current cuts."""
-    _w, c = api
+def test_apply_to_data_ignores_cuts(apply_env):
+    """Apply to data writes the full combined run regardless of df_current cuts."""
+    c, combined, saved = apply_env
     c._load()
     c.apply_calibration([0.0, 0.5], units="keV")
     c.apply_dt_shift(5.0)
-    full_len = len(c.df_api)
-    # Simulate a dt cut that shrinks df_current.
+    # A dt cut shrinks df_current but must not affect what's written.
     dt_vals = c.df_api["dt_cal"]
     c.apply_t_filter(float(dt_vals.min()), float(dt_vals.quantile(0.5)))
-    assert len(c.df_current) < full_len
+    assert len(c.df_current) < len(c.df_api)
     c._apply_to_data()
-    assert len(c.df_api) == full_len   # original row count preserved
-    assert "energy_cal" in c.df_api.columns and "dt_cal" in c.df_api.columns
+    df = saved["df"]
+    assert len(df) == len(combined)        # full combined run written
+    assert {"energy_cal", "dt_cal"}.issubset(df.columns)
 
 
 def test_load_clears_dt_shift(api):

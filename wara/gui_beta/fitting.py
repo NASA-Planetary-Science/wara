@@ -948,7 +948,7 @@ class FitWindow(QDialog):
             locked_units=getattr(self, "_cal_locked_units", None))
         if dlg.exec_() != QDialog.Accepted:
             return
-        pairs = dlg.pairs()
+        pairs = [(ch, e) for ch, e in dlg.pairs() if e.strip()]
         if pairs:
             self.send_to_calibration.emit(pairs, dlg.selected_units())
             self.lbl_status.setText(

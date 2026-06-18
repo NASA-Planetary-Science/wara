@@ -22,6 +22,8 @@ import json
 import os
 import re
 
+import numpy as np
+
 from matplotlib.figure import Figure
 from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
 from matplotlib.backends.backend_qt5agg import NavigationToolbar2QT as NavToolbar
@@ -761,9 +763,9 @@ class CalibrationController:
     def add_centroids(self, pairs, units=None):
         """Add (channel, energy) pairs pushed from the Drag-and-Fit window.
 
-        ``pairs`` is a list of ``(channel, energy_str)``; the energy may be an
-        empty string, in which case only the channel is filled in. ``units`` (if
-        given) sets the energy units. A peak that is already in the calibration
+        ``pairs`` is a list of ``(channel, energy_str)`` where energy_str is
+        non-empty. ``units`` (if given) sets the energy units. A peak that is
+        already in the calibration
         (e.g. the same peak fitted twice) is rejected with a warning instead of
         being added again."""
         # Adopt the pushed units only before a calibration is under way (no
@@ -864,8 +866,6 @@ class CalibrationController:
     def _auto_calibrate(self):
         """Re-fit and replot from the current points. Called on every change, so
         a calibration line is always shown once enough valid points exist."""
-        if self.app.spect is None:
-            return
         chans, ergs = self._read_points()
         if len(chans) == 0:                    # nothing to fit yet
             self.predicted = None
@@ -887,9 +887,14 @@ class CalibrationController:
                 f"(have {len(chans)}).")
             return
         units = self.opts.units.currentText()
+        spect = self.app.spect
+        # When no spectrum is loaded use a synthetic channel axis — only needed
+        # to evaluate the polynomial for the preview plot; the fit coefficients
+        # (all that current_calibration() returns) are independent of this.
+        chan_axis = spect.cal_channels if spect is not None else np.arange(int(max(chans)) + 2)
         try:
             cal = ec.EnergyCalibration(mean_vals=chans, erg=ergs,
-                                       channels=self.app.spect.cal_channels, n=n, e_units=units)
+                                       channels=chan_axis, n=n, e_units=units)
         except Exception as exc:  # noqa: BLE001 — surface fit errors to the user
             self.predicted = None
             self._set_result("—")

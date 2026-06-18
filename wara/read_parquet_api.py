@@ -54,6 +54,61 @@ def load_parquet_data_files(date, runnr, data_path_txt=None):
     return []
 
 
+def channel_mask(df, ch):
+    """Boolean mask selecting the events that belong to channel *ch*.
+
+    Mirrors the per-channel filter used when loading a run: a ``channel`` column
+    is matched directly; otherwise the legacy LaBr flag splits channel 4 (LaBr)
+    from channel 5 (non-LaBr). Returns an all-False mask for any other channel
+    when no ``channel`` column is present."""
+    if "channel" in df.columns:
+        return df["channel"] == ch
+    if "LaBr[y/n]" in df.columns:
+        if ch == 4:
+            return df["LaBr[y/n]"].astype(bool)
+        if ch == 5:
+            return ~df["LaBr[y/n]"].astype(bool)
+    return pd.Series(False, index=df.index)
+
+
+def run_parquet_path(date, runnr, data_path=None, make=False):
+    """Return ``(run_dir, parquet_dir, fname)`` for run (date, runnr) under the
+    first configured data path. With ``make=True`` the ``parquet-data`` folder is
+    created. ``fname`` is the ``RUN-YYYY-MM-DD-NNNNN`` stem the loader globs on."""
+    DATE = dateparser.parse(date)
+    if DATE is None:
+        raise ValueError(f"cannot parse date '{date}'")
+    date_dir = f"{DATE.year}-{DATE.month:02d}-{DATE.day:02d}"
+    fname = f"RUN-{DATE.year}-{DATE.month:02d}-{DATE.day:02d}-{runnr:05d}"
+    DATA_PATH = get_data_path(data_path)[0]
+    run_dir = DATA_PATH / date_dir / fname
+    parquet_dir = run_dir / "parquet-data"
+    if make:
+        parquet_dir.mkdir(parents=True, exist_ok=True)
+    return run_dir, parquet_dir, fname
+
+
+def save_combined_run(df, date, runnr, data_path=None, overwrite=False):
+    """Write *df* as a single combined parquet for run (date, runnr) so it loads
+    straight back through :func:`read_parquet_file`.
+
+    The file is named ``{fname}-00000-pandas.parquet`` so the loader's
+    ``{fname}-*-pandas.parquet`` glob picks it up. When *overwrite* is set, any
+    pre-existing ``{fname}-*-pandas.parquet`` chunks in the target folder are
+    removed first so a reload doesn't concatenate stale data on top of the new
+    combined file. Returns the written file path."""
+    run_dir, parquet_dir, fname = run_parquet_path(date, runnr, data_path, make=True)
+    if overwrite:
+        for old in parquet_dir.glob(f"{fname}-*-pandas.parquet"):
+            old.unlink()
+    out = parquet_dir / f"{fname}-00000-pandas.parquet"
+    try:
+        df.to_parquet(out, engine="pyarrow")
+    except Exception:
+        df.to_parquet(out, engine="fastparquet")
+    return out
+
+
 def read_parquet_file(date, runnr, ch=None, flood_field=False, data_path_txt=None):
     files = load_parquet_data_files(date, runnr, data_path_txt)
     if not files:
@@ -69,14 +124,7 @@ def read_parquet_file(date, runnr, ch=None, flood_field=False, data_path_txt=Non
         return df
 
     # df["dt"] *= dt_multiplier  # to ns
-    if "channel" in df.columns:
-        # df["channel"] = df["channel"].str.extract(r"(\d+)$").astype(int)
-        df = df[df["channel"] == ch]
-    else:
-        if ch == 4:
-            df = df[df["LaBr[y/n]"]]
-        elif ch == 5:
-            df = df[~df["LaBr[y/n]"]]
+    df = df[channel_mask(df, ch)]
     df.reset_index(drop=True, inplace=True)
     return df
 
