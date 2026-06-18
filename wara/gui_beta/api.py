@@ -786,6 +786,16 @@ class SelectionsDialog(QDialog):
             "Overlay each selection on the energy, dt and X-Y panels")
         lay.addWidget(self.btn_plot_sel)
 
+        self.cb_norm_dt = QCheckBox("Plot S/B vs dt (straight-line background)")
+        self.cb_norm_dt.setChecked(True)
+        self.cb_norm_dt.setToolTip(
+            "Plot each selection's dt overlay as a peak-to-background ratio S/B "
+            "on a secondary y-axis, where the background B is the area under the "
+            "straight line joining the band edges (Emin, Emax) and S is the area "
+            "above it.\nUnchecked: plot the raw selected counts instead.")
+        self.cb_norm_dt.toggled.connect(self._on_norm_toggled)
+        lay.addWidget(self.cb_norm_dt)
+
         # ── Significance controls ─────────────────────────────────────
         lay.addWidget(hsep())
         lay.addWidget(header("SIGNIFICANCE vs dt"))
@@ -891,6 +901,14 @@ class SelectionsDialog(QDialog):
             b.setStyleSheet("")
 
     # ── internal ──────────────────────────────────────────────────────────────
+    def _on_norm_toggled(self, _checked):
+        """Live-refresh the dt overlay when the normalize toggle changes, but
+        only if selections are already on the plot (don't force a first plot)."""
+        if self.c.selections and self.c.df_current is not None:
+            self.c._plot_time_overlays()
+            self.c.page.reset_nav()
+            self.c.page.canvas.draw_idle()
+
     def _on_plot_significance(self):
         try:
             sideband_w = float(self.ed_sideband.text().strip())
@@ -1134,6 +1152,7 @@ class ApiController:
         self._sel_dlg = None        # SelectionsDialog (created lazily)
         self._sig_active = False    # significance overlay currently shown
         self._ax_sig = None         # the twinx axes carrying the S/B curves
+        self._ax_norm = None        # the twinx axes carrying normalized dt overlays
         # Energy calibration: the channel column the histogram is binned from
         # (set in _configure_keys), the polynomial coeffs retrieved from the
         # Calibration tab, and the energy units once calibrated (None ⇒ raw
@@ -1423,10 +1442,11 @@ class ApiController:
         return (cx - half, cx + half, cy - half, cy + half)
 
     def _initialize_plots(self):
-        # Axes are about to be rebuilt  -- clear significance state so _ax_sig
-        # doesn't keep a stale reference to the old axes.
+        # Axes are about to be rebuilt  -- clear secondary-axis state so the
+        # twinx references don't keep a stale handle to the old axes.
         self._sig_active = False
         self._ax_sig = None
+        self._ax_norm = None
         self.page.build_axes(flood_field=self.flood_field)
         self._detach_selectors()
         if self.flood_field:
@@ -1514,6 +1534,7 @@ class ApiController:
         ax = self.page.ax_dt
         if ax is None or df.shape[0] == 0:
             return
+        self._clear_dt_twin()
         low, high = np.percentile(df[self._dt_key], [0.2, 99.5])
         corrected = self._dt_corrected and self._dt_key != "dt" and "dt" in df.columns
         if corrected:
@@ -1904,6 +1925,20 @@ class ApiController:
             f"S/B vs dt  ·  sideband {sideband_w:g}  ·  "
             f"slice {dt_slice_w:.1f} ns  ·  threshold {sig_threshold:g} σ")
 
+    def _clear_dt_twin(self):
+        """Drop any secondary (twinx) axes on the dt panel  -- the S/B curve or
+        the normalized selection overlay  -- so a fresh redraw of the dt panel
+        doesn't stack ghost axes on top of the old ones."""
+        for attr in ("_ax_sig", "_ax_norm"):
+            ax = getattr(self, attr, None)
+            if ax is not None:
+                try:
+                    self.page.fig.delaxes(ax)
+                except Exception:  # noqa: BLE001  -- axes may already be gone
+                    pass
+                setattr(self, attr, None)
+        self._sig_active = False
+
     def _clear_significance(self):
         """Remove the significance overlay and restore the normal dt histogram."""
         if not self._sig_active:
@@ -1967,27 +2002,103 @@ class ApiController:
                   edgecolor=T.BORDER, labelcolor=T.TEXT_PRIMARY)
         self.page._style(ax)
 
+    def _sb_linear_vs_dt(self, sel, dt_lo, dt_hi, n_energy=40):
+        """S/B vs dt for one selection with a straight-line band background.
+
+        For each dt bin the band events are histogrammed in energy; the
+        background is the trapezoid under the line joining the spectrum heights
+        at the two band edges (Emin/Emax), the signal is the area above it
+        (total band counts - background), and the per-bin ratio S/B is returned
+        as ``(centres, ratio)``. Edge heights are averaged over the outer ~10%
+        of energy bins so a single noisy edge bin doesn't dominate; bins with a
+        non-positive background (or negative net signal) are clamped to 0.
+        Returns ``(None, None)`` when the selection has no events."""
+        df = sel["df"]
+        if df.shape[0] == 0 or sel["emax"] <= sel["emin"]:
+            return None, None
+        t = df[self._dt_key].to_numpy()
+        e = df[self.ekey].to_numpy()
+        # H[i, j] = counts in dt bin i, energy bin j across the band.
+        H, dt_edges, _ = np.histogram2d(
+            t, e, bins=[self.tbins, n_energy],
+            range=[[dt_lo, dt_hi], [sel["emin"], sel["emax"]]])
+        k = max(1, n_energy // 10)
+        h_lo = H[:, :k].mean(axis=1)
+        h_hi = H[:, -k:].mean(axis=1)
+        bkg = 0.5 * (h_lo + h_hi) * n_energy        # trapezoid area, in counts
+        total = H.sum(axis=1)
+        sig = total - bkg
+        with np.errstate(divide="ignore", invalid="ignore"):
+            ratio = np.where(bkg > 0, sig / bkg, 0.0)
+        ratio = np.clip(ratio, 0.0, None)
+        centers = 0.5 * (dt_edges[:-1] + dt_edges[1:])
+        return centers, ratio
+
     def _plot_time_overlays(self):
         ax = self.page.ax_dt
         if ax is None:
             return
+        self._clear_dt_twin()
         ax.clear()
         base = self.df_current
         if base.shape[0] == 0:
             self.page._style(ax)
             return
         low, high = np.percentile(base[self._dt_key], [0.2, 99.5])
-        # Gray base histogram, each selection overlaid as a coloured outline.
+        # Gray base histogram of the full run on the primary (counts) axis.
         ax.hist(base[self._dt_key], bins=self.tbins, range=(low, high),
                 color=T.TEXT_DIM, alpha=0.30, edgecolor=API_PLOT_BG, linewidth=0.3)
-        for sel in self.selections:
-            d = sel["df"][self._dt_key]
-            if len(d) == 0:
-                continue
-            ax.hist(d, bins=self.tbins, range=(low, high), histtype="step",
-                    color=sel["color"], linewidth=1.3)
-        ax.set_xlabel("dt (ns)"); ax.set_ylabel("Counts")
-        self.page._style(ax)
+        ax.set_xlabel("dt (ns)")
+
+        normalize = (self._sel_dlg is not None
+                     and self._sel_dlg.cb_norm_dt.isChecked())
+        if normalize:
+            # Peak-to-background view: for each dt slice, S/B where the background
+            # B is the area under the straight line joining the band's edge
+            # heights (the spectrum value at Emin and at Emax) and the signal S is
+            # the area above that line (total counts in band - B).  Drawn on a
+            # secondary y-axis so the ratio is readable against the gray counts
+            # histogram behind it.  (SIGNIFICANCE vs dt instead estimates the
+            # background from sidebands outside the band.)
+            ax.set_ylabel("Counts", color=T.TEXT_DIM)
+            self.page._style(ax)
+            ax_norm = ax.twinx()
+            # Tint the secondary axis (label/ticks/spine) so it reads as distinct
+            # from the primary counts axis at a glance.
+            ax_norm.set_ylabel("S / B", color=T.SNR_PURPLE)
+            ax_norm.tick_params(colors=T.SNR_PURPLE, which="both", length=3)
+            ax_norm.spines["right"].set_color(T.SNR_PURPLE)
+            ax_norm.spines["top"].set_color(T.BORDER)
+            ax_norm.set_facecolor("none")   # let the dt hist show through
+            ymax = 0.0
+            for sel in self.selections:
+                centers, ratio = self._sb_linear_vs_dt(sel, low, high)
+                if centers is None:
+                    continue
+                ymax = max(ymax, float(np.nanmax(ratio)) if ratio.size else 0.0)
+                ax_norm.step(centers, ratio, where="mid",
+                             color=sel["color"], linewidth=1.3, label=sel["label"])
+            # Pin the secondary axis to the data range (set last so it isn't
+            # frozen before the curves are drawn  -- which left the ratios off
+            # screen). Top gets a 12% headroom so peaks aren't clipped.
+            ax_norm.set_ylim(0, ymax * 1.12 if ymax > 0 else 1.0)
+            handles = [Line2D([0], [0], color=s["color"], lw=1.3, label=s["label"])
+                       for s in self.selections]
+            if handles:
+                ax_norm.legend(handles=handles, loc="upper right", fontsize=8,
+                               facecolor=API_PLOT_BG, edgecolor=T.BORDER,
+                               labelcolor=T.TEXT_PRIMARY)
+            self._ax_norm = ax_norm
+        else:
+            # Raw counts overlay: each selection as a coloured step outline.
+            ax.set_ylabel("Counts")
+            for sel in self.selections:
+                d = sel["df"][self._dt_key]
+                if len(d) == 0:
+                    continue
+                ax.hist(d, bins=self.tbins, range=(low, high), histtype="step",
+                        color=sel["color"], linewidth=1.3)
+            self.page._style(ax)
 
     def _plot_xy_overlays(self):
         ax = self.page.ax_xy
