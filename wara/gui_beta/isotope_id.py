@@ -12,14 +12,49 @@ a plausible escape of another observed peak it is shown as a separate
 possibility (``possibly SEP of <parent> keV (<isotope>)``). Candidates that round
 to 0 % are dropped.
 """
+import numpy as np
+
 from wara import nuclide_identificator as nid
 
 from . import theme as T
 
+# Window used when no detector-resolution model is available. The old default
+# (~1 % of E, floored at 2 keV) was far narrower than a real photopeak and
+# missed true matches; without an FWHM to size the window we open it up.
+FALLBACK_FLOOR = 5.0
+
 
 def default_tol(energy):
-    """Energy-matching window: ~0.1 % of E, with a 2 keV floor."""
-    return max(2.0, 0.001 * energy)
+    """Energy-matching window when no resolution model is available: at least
+    10 keV, widening to ~1 % of E at high energies."""
+    return max(FALLBACK_FLOOR, 0.01 * energy)
+
+
+def fwhm_tol(search, floor=FALLBACK_FLOOR):
+    """Build a ``tol(energy) -> keV`` matching window sized to 2×FWHM.
+
+    A two-FWHM window is wide enough to still catch slightly off-calibrated
+    lines. *search* is a :class:`wara.peaksearch.PeakSearch`; its
+    ``fwhm(channel)`` resolution model gives the FWHM in *channels*, which we
+    convert to keV via the spectrum's local calibration dispersion. The window
+    is never narrower than *floor* (≥10 keV), and falls back to
+    :func:`default_tol` when no usable search/calibration is available.
+    """
+    spect = getattr(search, "spectrum", None) if search is not None else None
+    energies = getattr(spect, "energies", None) if spect is not None else None
+    channels = getattr(spect, "channels", None) if spect is not None else None
+    if energies is None or channels is None:
+        return default_tol
+    energies = np.asarray(energies, dtype=float)
+    channels = np.asarray(channels, dtype=float)
+    disp = np.abs(np.gradient(energies, channels))   # keV per channel
+
+    def tol(energy):
+        i = int(np.argmin(np.abs(energies - energy)))
+        fwhm_kev = float(search.fwhm(channels[i])) * disp[i]
+        return max(floor, 2.0 * fwhm_kev)
+
+    return tol
 
 
 def identify(energies, tol=None, top_n=2):
@@ -36,16 +71,18 @@ def escape_relations(energies, tol=None):
 
 def _best_isotope(parent_energy, results):
     """Most likely isotope identified for *parent_energy* across the databases.
-    Ranked by corroboration (lines seen) then probability, since probabilities
-    are not comparable between databases."""
-    best, best_key = None, (-1, -1.0)
+    Ranked by probability scaled by the element-naturalness prior (so a common
+    element like O/Fe outranks a rare one like Gd at similar probability), with
+    corroboration (lines seen) as a tiebreaker."""
+    best, best_key = None, (-1.0, -1)
     for frame in results.values():
         rows = frame[(abs(frame["Energy"] - parent_energy) < 1e-6)
                      & frame["Isotope"].notna()]
         if rows.empty:
             continue
         r = rows.iloc[0]
-        key = (int(r.get("Lines seen", 0)), float(r["Probability"]))
+        score = float(r["Probability"]) * nid.element_factor(r["Isotope"])
+        key = (score, int(r.get("Lines seen", 0)))
         if key > best_key:
             best, best_key = r["Isotope"], key
     return best

@@ -9,9 +9,13 @@ stages:
 
 1. **Per database — top candidates.** Within each library the candidate isotopes
    for an energy are ranked using that library's own (absolute) cross sections /
-   intensities, weighted by **natural isotopic abundance** (for reaction-on-
-   natural-target libraries) and boosted by corroborating lines. :func:`identify`
-   returns the top-N candidates *for each database, per energy*.
+   intensities, weighted by **natural isotopic abundance** and a **terrestrial
+   element-naturalness prior** (both for reaction-on-natural-target libraries)
+   and boosted by corroborating lines. The element prior (:func:`element_factor`,
+   from :data:`NATURAL_ABUNDANCE_PPM`) favours the common rock/air/biological
+   elements (O, Si, Fe, H, C, N…) over rare ones (Gd, Eu, Kr…), reflecting that a
+   detector usually looks at natural matter. :func:`identify` returns the top-N
+   candidates *for each database, per energy*.
 
 2. **Comparable probability across databases.** The per-database picks are pooled
    and re-scored with a *relative* strength (each matched line normalised by its
@@ -40,7 +44,8 @@ from wara import parse_NIST
 
 __all__ = [
     "DATABASES", "ABUNDANCE_WEIGHTED", "load_database", "standardize",
-    "abundance_factor", "score_database", "identify",
+    "abundance_factor", "element_factor", "NATURAL_ABUNDANCE_PPM",
+    "score_database", "identify",
     "rank_candidates", "identify_best", "escape_relations",
 ]
 
@@ -100,6 +105,8 @@ def standardize(df):
 
 # ── Natural isotopic abundance ────────────────────────────────────────────────
 _ISO_RE = re.compile(r"^\s*(\d+)\s*([A-Za-z]{1,3})")
+# Element symbol with an optional mass-number prefix ('16O', '00Fe', or 'Fe').
+_ELEMENT_RE = re.compile(r"^\s*\d*\s*([A-Za-z]{1,3})")
 _ABUNDANCE_CACHE = {}
 
 
@@ -135,6 +142,55 @@ def abundance_factor(isotope):
         return 1.0
     table = _abundance_table(m.group(2).capitalize())
     return table.get(mass, 1.0)
+
+
+# ── Natural element abundance (terrestrial "naturalness" prior) ───────────────
+# Approximate natural abundance of each *element*, in ppm by mass, for samples a
+# detector normally sees: Earth's-crust composition, with the major atmospheric
+# / biological / hydrological elements (H, C, N, O, Ar) raised to reflect that
+# they are ubiquitous in real samples (water, organics, air) even when their
+# bare crustal figure is small (N is ~19 ppm in crust but ~78 % of air). Only
+# the ratios matter — scores are renormalised per energy — and the value feeds a
+# log scale, so this is a firm but non-absolute prior: a rare element can still
+# win on strong spectral evidence. Edit freely to match your sample matrix.
+NATURAL_ABUNDANCE_PPM = {
+    "O": 461000, "Si": 282000, "H": 140000, "Al": 82300, "Fe": 56300,
+    "Ca": 41500, "Na": 23600, "Mg": 23300, "K": 20900, "C": 20000,
+    "N": 5000, "Ti": 5650, "P": 1050, "Mn": 950, "F": 585, "Ba": 425,
+    "Sr": 370, "S": 350, "Zr": 165, "Cl": 145, "V": 120, "Cr": 102,
+    "Rb": 90, "Ni": 84, "Zn": 70, "Ce": 66, "Cu": 60, "Y": 33, "La": 39,
+    "Nd": 41, "Co": 25, "Sc": 22, "Li": 20, "Nb": 20, "Ga": 19, "Pb": 14,
+    "B": 10, "Th": 9.6, "Pr": 9.2, "Sm": 7.0, "Gd": 6.2, "Dy": 5.2,
+    "Hf": 3.0, "Cs": 3.0, "Be": 2.8, "Sn": 2.3, "Br": 2.4, "U": 2.7,
+    "Er": 3.5, "Yb": 3.2, "Ta": 2.0, "Eu": 2.0, "As": 1.8, "Ge": 1.5,
+    "Ho": 1.3, "Mo": 1.2, "W": 1.25, "Tb": 1.2, "Tl": 0.85, "Lu": 0.8,
+    "Tm": 0.52, "I": 0.45, "In": 0.25, "Sb": 0.2, "Cd": 0.15, "Ar": 1.2,
+    "Ag": 0.075, "Hg": 0.085, "Se": 0.05, "He": 0.008, "Pd": 0.015,
+    "Bi": 0.009, "Pt": 0.005, "Au": 0.004, "Te": 0.001, "Ru": 0.001,
+    "Rh": 0.001, "Ir": 0.001, "Os": 0.0015, "Re": 0.0007, "Ne": 0.00007,
+    "Kr": 0.0001, "Xe": 0.00003,
+}
+
+# Below-floor (and unknown-element) candidates keep this weight, so the prior
+# only down-ranks rare elements rather than erasing them.
+NATURAL_WEIGHT_FLOOR = 0.5
+
+
+def element_factor(isotope):
+    """Terrestrial "naturalness" weight for *isotope*'s element.
+
+    Log-compressed :data:`NATURAL_ABUNDANCE_PPM`, so common rock/air/biological
+    elements (O, Si, Fe, H, C, N…) outweigh rare ones (Gd, Eu, Kr…) by a firm
+    but bounded factor. Returns 1.0 (neutral) for an unknown element so the prior
+    only re-ranks elements we have data for. Works for ``'16O'``, ``'00Fe'`` and
+    bare ``'Fe'`` alike."""
+    m = _ELEMENT_RE.match(str(isotope))   # mass number optional
+    if not m:
+        return 1.0
+    ppm = NATURAL_ABUNDANCE_PPM.get(m.group(1).capitalize())
+    if ppm is None:
+        return 1.0
+    return max(NATURAL_WEIGHT_FLOOR, float(np.log10(ppm)) + 1.0)
 
 
 # ── Observable-peak table (full + escape peaks) ───────────────────────────────
@@ -189,11 +245,17 @@ def _abundance_series(std):
     return pd.Series({iso: abundance_factor(iso) for iso in isos}, dtype=float)
 
 
-def _database_evidence(std, escape_peaks, weight_abundance):
+def _element_series(std):
+    isos = std["Isotope"].unique()
+    return pd.Series({iso: element_factor(iso) for iso in isos}, dtype=float)
+
+
+def _database_evidence(std, escape_peaks, weight_abundance, weight_element):
     obs = _observable_table(std, escape_peaks)
     max_strength = std.groupby("Isotope")["Strength"].max()
     abundance = _abundance_series(std) if weight_abundance else None
-    return obs, max_strength, abundance
+    element = _element_series(std) if weight_element else None
+    return obs, max_strength, abundance, element
 
 
 def _mark_present(obs, ref, tol, max_strength):
@@ -220,13 +282,13 @@ def _mark_present(obs, ref, tol, max_strength):
 
 
 def _candidates_for_energy(energy, obs, support, support_energies, max_strength,
-                           abundance, tol, full_present):
+                           abundance, element, tol, full_present):
     """Best matching line per isotope at *energy*, scored two ways (both folding
-    in natural abundance):
+    in natural isotopic abundance and the element-naturalness prior):
 
-    * ``raw_abs`` = strength · abundance · support — within-database ranking.
-    * ``raw_rel`` = (strength / strongest line) · abundance · support — comparable
-      across databases.
+    * ``raw_abs`` = strength · abundance · element · support — within-database.
+    * ``raw_rel`` = (strength / strongest line) · abundance · element · support —
+      comparable across databases.
 
     A SEP/DEP candidate is kept only when its parent full-energy line is itself
     observed (``full_present``): an escape peak never appears without its — always
@@ -245,14 +307,16 @@ def _candidates_for_energy(energy, obs, support, support_energies, max_strength,
         return cand, tv
     cand["abundance"] = (cand["isotope"].map(abundance).fillna(1.0)
                          if abundance is not None else 1.0)
-    cand["line_abs"] = cand["strength"] * cand["weight"] * cand["abundance"]
+    cand["element"] = (cand["isotope"].map(element).fillna(1.0)
+                       if element is not None else 1.0)
+    cand["line_abs"] = cand["strength"] * cand["weight"] * cand["abundance"] * cand["element"]
     denom = cand["isotope"].map(max_strength).replace(0.0, np.nan)
     cand["rel_line"] = (cand["weight"] * cand["strength"] / denom).fillna(cand["weight"])
     # Keep, per isotope, its strongest matching line at this energy.
     best = cand.loc[cand.groupby("isotope")["line_abs"].idxmax()].copy()
     best["support"] = best["isotope"].map(support).fillna(0.0)
     best["raw_abs"] = best["line_abs"] * best["support"]
-    best["raw_rel"] = best["rel_line"] * best["abundance"] * best["support"]
+    best["raw_rel"] = best["rel_line"] * best["abundance"] * best["element"] * best["support"]
     best["lines_seen"] = best["isotope"].map(lambda i: len(support_energies.get(i, [])))
     best["supporting"] = best["isotope"].map(
         lambda i: [e for e in support_energies.get(i, []) if abs(e - energy) > tv])
@@ -265,23 +329,25 @@ _SCORE_COLS = ["Energy", "Rank", "Isotope", "Probability", "Matched line",
 
 
 def score_database(energies, std, tol=DEFAULT_TOL, escape_peaks=True, top_n=3,
-                   weight_abundance=True):
+                   weight_abundance=True, weight_element=True):
     """Top ``top_n`` candidate isotopes for each input energy **within one
     database** (long format: one row per candidate). ``Probability`` is
     normalised within this database. Set ``weight_abundance=False`` for
-    source/decay libraries."""
+    source/decay libraries; ``weight_element=False`` disables the terrestrial
+    element-naturalness prior."""
     ref = np.unique(np.asarray(list(energies), dtype=float))
     if ref.size == 0 or std.empty:
         return pd.DataFrame(columns=_SCORE_COLS)
 
-    obs, max_strength, abundance = _database_evidence(std, escape_peaks, weight_abundance)
+    obs, max_strength, abundance, element = _database_evidence(
+        std, escape_peaks, weight_abundance, weight_element)
     obs, support, support_energies, full_present = _mark_present(obs, ref, tol, max_strength)
 
     rows = []
     for energy in ref:
         best, _ = _candidates_for_energy(
-            energy, obs, support, support_energies, max_strength, abundance, tol,
-            full_present)
+            energy, obs, support, support_energies, max_strength, abundance,
+            element, tol, full_present)
         if best.empty:
             rows.append({"Energy": float(energy), "Rank": 1, "Isotope": None,
                          "Probability": 0.0, "Matched line": None, "Match type": None,
@@ -306,17 +372,20 @@ def score_database(energies, std, tol=DEFAULT_TOL, escape_peaks=True, top_n=3,
 
 
 def identify(energies, databases=None, tol=DEFAULT_TOL, escape_peaks=True,
-             top_n=3, weight_abundance=True):
+             top_n=3, weight_abundance=True, weight_element=True):
     """Stage 1 for every database: ``{database_name: score_database(...)}`` —
-    the top ``top_n`` candidates for each database, per energy. Abundance
-    weighting is applied only to the reaction-on-natural-target libraries
-    (:data:`ABUNDANCE_WEIGHTED`)."""
+    the top ``top_n`` candidates for each database, per energy. Abundance and
+    element-naturalness weighting are applied only to the reaction-on-natural-
+    target libraries (:data:`ABUNDANCE_WEIGHTED`); source/decay libraries (lab
+    sources, natural radiation, delayed activation) carry specific radionuclides,
+    not sample elements, so neither prior applies."""
     names = list(DATABASES) if databases is None else list(databases)
     return {
         name: score_database(
             energies, standardize(load_database(name)), tol=tol,
             escape_peaks=escape_peaks, top_n=top_n,
-            weight_abundance=weight_abundance and name in ABUNDANCE_WEIGHTED)
+            weight_abundance=weight_abundance and name in ABUNDANCE_WEIGHTED,
+            weight_element=weight_element and name in ABUNDANCE_WEIGHTED)
         for name in names
     }
 
@@ -327,11 +396,12 @@ _RANK_COLS = ["Energy", "Rank", "Database", "Isotope", "Probability",
 
 
 def rank_candidates(energies, databases=None, tol=DEFAULT_TOL, escape_peaks=True,
-                    per_database=1, top_n=None, weight_abundance=True):
+                    per_database=1, top_n=None, weight_abundance=True,
+                    weight_element=True):
     """Pool the most likely isotope(s) from **each** database and give each a
-    comparable probability (relative strength × abundance × corroboration). Long
-    DataFrame, one row per candidate per energy, sorted by descending
-    probability within each energy."""
+    comparable probability (relative strength × abundance × element-naturalness ×
+    corroboration). Long DataFrame, one row per candidate per energy, sorted by
+    descending probability within each energy."""
     names = list(DATABASES) if databases is None else list(databases)
     ref = np.unique(np.asarray(list(energies), dtype=float))
 
@@ -341,17 +411,20 @@ def rank_candidates(energies, databases=None, tol=DEFAULT_TOL, escape_peaks=True
         if std.empty:
             continue
         weighted = weight_abundance and name in ABUNDANCE_WEIGHTED
-        obs, max_strength, abundance = _database_evidence(std, escape_peaks, weighted)
+        elemental = weight_element and name in ABUNDANCE_WEIGHTED
+        obs, max_strength, abundance, element = _database_evidence(
+            std, escape_peaks, weighted, elemental)
         obs, support, support_energies, full_present = _mark_present(obs, ref, tol, max_strength)
-        prepared[name] = (obs, support, support_energies, max_strength, abundance, full_present)
+        prepared[name] = (obs, support, support_energies, max_strength, abundance,
+                          element, full_present)
 
     records = []
     for energy in ref:
         pool = []
-        for name, (obs, support, support_energies, max_strength, abundance, full_present) in prepared.items():
+        for name, (obs, support, support_energies, max_strength, abundance, element, full_present) in prepared.items():
             best, _ = _candidates_for_energy(
-                energy, obs, support, support_energies, max_strength, abundance, tol,
-                full_present)
+                energy, obs, support, support_energies, max_strength, abundance,
+                element, tol, full_present)
             if best.empty:
                 continue
             score_abs = best["raw_abs"].to_numpy(float)
@@ -394,14 +467,30 @@ def escape_relations(energies, tol=DEFAULT_TOL):
     possibility — kept out of the probability ranking in :func:`identify`."""
     arr = sorted({float(e) for e in energies})
     relations = {e: [] for e in arr}
-    for e in arr:
+    # Escape peaks come from pair production, which requires the parent gamma to
+    # be above the pair-production threshold (2 mₑc² = 1022 keV); a lower-energy
+    # peak cannot have escape peaks, so don't propose it as a parent.
+    pair_threshold = 2 * ELECTRON_MASS_KEV
+    # An escape peak's parent must be a *full-energy* peak, never another escape
+    # peak — otherwise an escape chains to a higher escape (e.g. a DEP at
+    # parent−1022 also matches "SEP of (parent−511)", which is itself an SEP).
+    # Resolve top-down: a peak is full-energy unless it is the escape of a
+    # higher peak already classified as full-energy, and only full-energy peaks
+    # are offered as parents.
+    full_energy = set()
+    for e in sorted(arr, reverse=True):
+        is_escape = False
         for label, offset in (("SEP", ELECTRON_MASS_KEV), ("DEP", 2 * ELECTRON_MASS_KEV)):
             parent = e + offset
             tv = float(tol(parent)) if callable(tol) else float(tol)
-            match = min((p for p in arr if abs(p - parent) <= tv),
+            match = min((p for p in full_energy
+                         if p > pair_threshold and abs(p - parent) <= tv),
                         key=lambda p: abs(p - parent), default=None)
             if match is not None:
                 relations[e].append((label, match))
+                is_escape = True
+        if not is_escape:
+            full_energy.add(e)
     return relations
 
 

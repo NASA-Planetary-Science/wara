@@ -944,10 +944,9 @@ class WaraBetaApp(QMainWindow):
         self.statusBar().showMessage("  Peaks cleared")
 
     # ── Isotope ID (hover to identify) ────────────────────────────────────────
-    @staticmethod
-    def _iso_tol(energy):
+    def _iso_tol(self, energy):
         from . import isotope_id
-        return isotope_id.default_tol(energy)
+        return isotope_id.fwhm_tol(self.search)(energy)
 
     def _toggle_isotope_id(self, checked):
         if not checked:
@@ -991,9 +990,10 @@ class WaraBetaApp(QMainWindow):
         key = tuple(round(e, 3) for e in energies)
         if key == self._iso_key and self._iso_info_cache is not None:
             return self._iso_info_cache
+        tol = isotope_id.fwhm_tol(self.search)
         try:
-            results = isotope_id.identify(energies)
-            escapes = isotope_id.escape_relations(energies)
+            results = isotope_id.identify(energies, tol=tol)
+            escapes = isotope_id.escape_relations(energies, tol=tol)
         except Exception as exc:  # noqa: BLE001 — surface, don't crash the GUI
             self.statusBar().showMessage(f"  Isotope ID failed: {exc}")
             return {}

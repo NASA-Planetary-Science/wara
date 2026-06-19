@@ -410,7 +410,7 @@ class ShiftsDialog(QDialog):
 
         btn_prev = QPushButton("Preview"); btn_prev.setObjectName("action_btn")
         btn_prev.setCursor(Qt.PointingHandCursor)
-        btn_prev.clicked.connect(lambda _=False, k=kind: self._preview(k))
+        btn_prev.clicked.connect(lambda _=False, k=kind: self._preview(k, prospective=True))
         side.addWidget(btn_prev)
 
         btn_apply = QPushButton("Apply alignment"); btn_apply.setObjectName("open_btn")
@@ -477,16 +477,19 @@ class ShiftsDialog(QDialog):
         return gs._spectra
 
     # ── actions ─────────────────────────────────────────────────────────────────
-    def _preview(self, kind):
+    def _preview(self, kind, prospective=False):
         """Redraw the tab: raw segments on top; on the bottom the *committed*
-        correction (constant or segment) when one is applied, otherwise a
-        prospective segment alignment for the current controls."""
+        correction (constant or segment) when one is applied. The prospective
+        segment alignment for the current controls is computed only when the user
+        asks for it (``prospective=True``, the Preview button) -- opening the
+        window must not run any shift computation, just show the raw segments."""
         c = self.c
         if c.df_api is None:
             return
         nseg, method, xr = self._params(kind)
         base, out_col, bins, base_erange = self._axis_cfg(kind)
         applied = c._dt_corrected if kind == "time" else c._egain_applied
+        bottom = None
         try:
             raw_spectra = self._segment_spectra(base, nseg, bins, base_erange)
             if applied and out_col in c.df_api.columns:
@@ -494,25 +497,45 @@ class ShiftsDialog(QDialog):
                 erange = (float(vals.min()), float(vals.max()))
                 bottom = self._segment_spectra(out_col, nseg, bins, erange)
                 bottom_title = "Corrected"
-            else:
+            elif prospective:
                 gs = apicalc.GainShift(c.df_api, n_segments=nseg, bins=bins,
                                        erange=base_erange, col=base, out_col=out_col)
                 gs.align(method=method, xrange=xr)
                 bottom = gs._aligned_spectra
                 bottom_title = f"Aligned ({method})"
+            else:
+                bottom_title = "Press Preview to compute the alignment"
         except Exception as exc:  # noqa: BLE001  -- surface to the state label
             self.lbl_state[kind].setText(f"Preview failed: {exc}")
             return
         xlabel = "Raw channel" if kind == "energy" else "dt (ns)"
         yscale = "log" if kind == "energy" else "linear"
+        # Draw the bottom panel first, then the raw panel last: the axes share y,
+        # so the raw overlay's autoscale sets the final (positive) limits.
+        if bottom is not None:
+            self._draw_overlay(self.ax_aligned[kind], bottom, nseg,
+                               bottom_title, xlabel, yscale)
+        else:
+            self._draw_placeholder(self.ax_aligned[kind], bottom_title, xlabel, yscale)
         self._draw_overlay(self.ax_raw[kind], raw_spectra, nseg,
                            f"Raw segments ({nseg})", xlabel, yscale)
-        self._draw_overlay(self.ax_aligned[kind], bottom, nseg,
-                           bottom_title, xlabel, yscale)
         self.fig[kind].tight_layout()
         self.canvas[kind].draw_idle()
         # Reset the pan/zoom history so "Home" returns to this fresh view.
         self.toolbar[kind].update()
+
+    def _draw_placeholder(self, ax, message, xlabel, yscale="log"):
+        """Empty aligned panel with a hint, shown until the user runs a preview."""
+        ax.clear()
+        ax.set_ylim(0.1, 1.0)          # positive, so a log scale doesn't warn
+        ax.set_yscale(yscale)
+        ax.set_xlabel(xlabel, color=T.TEXT_DIM, fontsize=9)
+        ax.set_facecolor(API_PLOT_BG)
+        ax.tick_params(colors=T.TEXT_DIM, which="both", length=3, labelsize=8)
+        for sp_ in ax.spines.values():
+            sp_.set_color(T.BORDER)
+        ax.text(0.5, 0.5, message, transform=ax.transAxes, ha="center", va="center",
+                color=T.TEXT_DIM, fontsize=9)
 
     def _draw_overlay(self, ax, spectra, n_seg, title, xlabel, yscale="log"):
         ax.clear()

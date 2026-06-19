@@ -830,7 +830,8 @@ class FitWindow(QDialog):
             context = [float(spect.x[i]) for i in idx] if idx is not None else []
             QApplication.setOverrideCursor(Qt.WaitCursor)
             try:
-                html = isotope_id.lookup_html(energy, context=context)
+                tol = isotope_id.fwhm_tol(self._search)
+                html = isotope_id.lookup_html(energy, tol=tol, context=context)
             except Exception as exc:  # noqa: BLE001 — never crash the fit window
                 html = f"Isotope ID failed: {exc}"
             finally:

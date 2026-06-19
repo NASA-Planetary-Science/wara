@@ -48,30 +48,31 @@ def test_observable_table_can_disable_escape_peaks():
 # ── scoring on a small synthetic database ─────────────────────────────────────
 @pytest.fixture
 def synthetic_std():
-    # Isotope X: a strong, corroborated cluster. Isotope Y: a lone weak line
-    # near X's main peak (a coincidence to be out-voted).
+    # Isotope Xx: a strong, corroborated cluster. Isotope Yy: a lone weak line
+    # near Xx's main peak (a coincidence to be out-voted). Placeholder symbols
+    # are deliberately non-elements so the element-naturalness prior is neutral.
     return pd.DataFrame({
-        "Isotope": ["X", "X", "X", "Y"],
+        "Isotope": ["Xx", "Xx", "Xx", "Yy"],
         "Energy": [6000.0, 3000.0, 1500.0, 6000.5],
         "Strength": [100.0, 60.0, 30.0, 8.0],
     })
 
 
 def test_strength_and_corroboration_pick_the_right_isotope(synthetic_std):
-    # X's main line + another X line are present; Y only coincides at 6000.
+    # Xx's main line + another Xx line are present; Yy only coincides at 6000.
     res = nid.score_database([6000.0, 3000.0], synthetic_std, tol=2.0)
     row = res.loc[res["Energy"] == 6000.0].iloc[0]
-    assert row["Isotope"] == "X"
+    assert row["Isotope"] == "Xx"
     assert row["Probability"] > 0.9
     assert row["Lines seen"] == 2                      # 6000 and 3000
     assert 3000.0 in row["Supporting energies"]
 
 
 def test_escape_peak_is_attributed_to_parent_line(synthetic_std):
-    # 5489 = 6000 - 511 → single-escape peak of X's 6000 line.
+    # 5489 = 6000 - 511 → single-escape peak of Xx's 6000 line.
     res = nid.score_database([6000.0, 5489.0], synthetic_std, tol=2.0)
     sep = res.loc[res["Energy"] == 5489.0].iloc[0]
-    assert sep["Isotope"] == "X"
+    assert sep["Isotope"] == "Xx"
     assert sep["Match type"] == "SEP"
     assert sep["Matched line"] == pytest.approx(6000.0)
 
@@ -85,12 +86,57 @@ def test_escape_peak_dropped_when_parent_absent(synthetic_std):
     assert res.iloc[0]["Isotope"] is None
 
 
+def test_element_factor_favours_common_over_rare():
+    # Common rock/air/bio elements outrank rare ones, on the log-compressed scale.
+    assert nid.element_factor("16O") > nid.element_factor("56Fe") > nid.element_factor("14N")
+    assert nid.element_factor("14N") > nid.element_factor("155Gd") > nid.element_factor("84Kr")
+    # Mass-tagged, natural-target ('00X') and bare symbols all resolve the element.
+    assert nid.element_factor("16O") == nid.element_factor("00O") == nid.element_factor("O")
+    # Unknown / unparseable → neutral 1.0, so the prior never erases a candidate.
+    assert nid.element_factor("Zz") == 1.0
+    assert nid.element_factor("???") == 1.0
+    # Rare elements keep a positive floor rather than zero.
+    assert nid.element_factor("84Kr") == nid.NATURAL_WEIGHT_FLOOR
+
+
+def test_element_prior_breaks_common_vs_rare_tie():
+    # Two candidate elements at one energy with identical strength: the common
+    # element (Fe) must outrank the rare one (Gd) once the prior is on, and the
+    # ranking is a pure tie (alphabetical by score) when it is off.
+    std = pd.DataFrame({"Isotope": ["56Fe", "155Gd"], "Energy": [1000.0, 1000.0],
+                        "Strength": [10.0, 10.0]})
+    on = nid.score_database([1000.0], std, tol=2.0, weight_element=True)
+    assert on.sort_values("Rank").iloc[0]["Isotope"] == "56Fe"
+    assert on.iloc[0]["Probability"] > on.iloc[1]["Probability"]
+    off = nid.score_database([1000.0], std, tol=2.0,
+                             weight_abundance=False, weight_element=False)
+    assert off.iloc[0]["Probability"] == pytest.approx(off.iloc[1]["Probability"])
+
+
 def test_escape_relations_detects_sep_and_dep():
     # 5618.9 = 6129.9 - 511 (SEP); 5107.9 = 6129.9 - 1022 (DEP).
     rel = nid.escape_relations([6129.9, 5618.9, 5107.9], tol=lambda e: max(2.0, 0.001 * e))
     assert ("SEP", 6129.9) in rel[5618.9]
     assert ("DEP", 6129.9) in rel[5107.9]
     assert rel[6129.9] == []        # the full peak is nobody's escape here
+
+
+def test_escape_relations_do_not_chain_through_escape_peaks():
+    # The DEP (5107.9) is exactly one 511 keV below the SEP (5618.9), so a naive
+    # search also flags it as "SEP of 5618.9". But 5618.9 is itself an escape
+    # peak, not a real gamma — the DEP must point only at the full-energy parent.
+    rel = nid.escape_relations([6129.9, 5618.9, 5107.9],
+                               tol=lambda e: max(10.0, 0.002 * e))
+    assert rel[5107.9] == [("DEP", 6129.9)]      # no spurious ("SEP", 5618.9)
+    assert rel[5618.9] == [("SEP", 6129.9)]
+
+
+def test_escape_relations_parent_must_clear_pair_threshold():
+    # A parent below 2·mₑc² (1022 keV) cannot pair-produce, so 289 keV must not
+    # be offered as the SEP of an 800 keV peak.
+    rel = nid.escape_relations([289.0, 800.0], tol=lambda e: max(10.0, 0.002 * e))
+    assert rel[289.0] == []
+    assert rel[800.0] == []
 
 
 def test_cs137_peak_not_outranked_by_escape_peaks():
@@ -115,12 +161,12 @@ def test_unmatched_energy_returns_no_isotope(synthetic_std):
 
 
 def test_strengthless_database_falls_back_to_corroboration():
-    std = pd.DataFrame({"Isotope": ["A", "A", "B"],
+    std = pd.DataFrame({"Isotope": ["Aa", "Aa", "Bb"],
                         "Energy": [500.0, 900.0, 500.2], "Strength": [0.0, 0.0, 0.0]})
     res = nid.score_database([500.0, 900.0], std, tol=2.0)
     row = res.loc[res["Energy"] == 500.0].iloc[0]
-    # A is corroborated by its 900 keV line; B is a lone coincidence.
-    assert row["Isotope"] == "A"
+    # Aa is corroborated by its 900 keV line; Bb is a lone coincidence.
+    assert row["Isotope"] == "Aa"
 
 
 # ── natural isotopic abundance ────────────────────────────────────────────────

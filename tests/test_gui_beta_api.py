@@ -1025,6 +1025,28 @@ def test_shifts_dialog_opens_and_drives_controller(api):
     dlg.close()
 
 
+def test_shifts_dialog_open_does_not_compute_alignment(api, monkeypatch):
+    # Opening the window must only show the raw segments; the shift alignment is
+    # computed only when the user clicks Preview (or Apply), never on open.
+    from wara import apicalc
+    _w, c = api
+    c._load()
+    calls = {"align": 0}
+    orig_align = apicalc.GainShift.align
+    monkeypatch.setattr(apicalc.GainShift, "align",
+                        lambda self, *a, **k: calls.__setitem__("align", calls["align"] + 1)
+                        or orig_align(self, *a, **k))
+    c._open_shifts()
+    dlg = c._shifts_dlg
+    assert calls["align"] == 0                     # nothing aligned on open
+    # The aligned panel shows the placeholder hint, not an alignment.
+    aligned_text = " ".join(t.get_text() for t in dlg.ax_aligned["energy"].texts)
+    assert "Preview" in aligned_text
+    dlg._preview("energy", prospective=True)        # user asks for the preview
+    assert calls["align"] == 1                      # now it computes
+    dlg.close()
+
+
 def test_load_guards_blank_inputs(api):
     _w, c = api
     c.opts.ed_date.setText("")
