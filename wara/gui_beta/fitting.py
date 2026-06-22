@@ -222,6 +222,7 @@ class FitWindow(QDialog):
         self._roi_lo, self._roi_hi = 0.0, 1.0   # initial ROI (slider bounds)
         self.N = 1000                             # slider resolution
         self.last_fit = None                      # most recent peak-fit object
+        self._last_area = None                     # most recent PeakAreaLinearBkg
         self._iso_cache = {}                      # {round(centroid, 3): ID HTML}
 
         outer = QVBoxLayout(self)
@@ -549,6 +550,7 @@ class FitWindow(QDialog):
         )
 
     def _refit_peakfit(self):
+        self._last_area = None
         if self._xrange is None or self._search is None:
             return
         try:
@@ -637,6 +639,7 @@ class FitWindow(QDialog):
     # ── Net area − linear background (wara.advanced_fit.PeakAreaLinearBkg) ─────
     def _refit_area(self):
         self.last_fit = None
+        self._last_area = None
         if self._search is None or self._xrange is None:
             return
         spect = self._search.spectrum
@@ -658,6 +661,7 @@ class FitWindow(QDialog):
         try:
             alb = PeakAreaLinearBkg(spect, x1=outer_l, x2=outer_r)
             alb.calculate_peak_area(x1=[outer_l, inner_l], x2=[inner_r, outer_r])
+            self._last_area = alb
             self._draw_area(alb, spect)
             self._fill_area_table(alb)
         except Exception as exc:  # noqa: BLE001

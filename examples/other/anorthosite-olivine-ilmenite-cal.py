@@ -88,10 +88,40 @@ def fit_linear(spe, bkg_l, bkg_r):
     return pa
 
 
+def line_snr(search, line_e, tol=20):
+    """Peak SNR near a line: max of search.snr within +/- tol of the centroid.
+    search.snr is a per-energy-bin array (method 'km'), aligned to the spectrum."""
+    snr = getattr(search, "snr", None)
+    if snr is None:
+        return np.nan
+    e = search.spectrum.energies
+    band = np.abs(e - line_e) <= tol
+    if not np.any(band):
+        return np.nan
+    return float(np.nanmax(snr[band]))
+
+
 def _normalize(a, a_err):
     """Normalize an array (and its error) to the array's max over time."""
     amax = np.nanmax(a) if np.any(np.isfinite(a)) else np.nan
     return a / amax, a_err / amax
+
+
+def ratio_to_ref(num, num_err, den, den_err):
+    """Element-area ratio num/den per time slice, with uncorrelated Poisson
+    error propagation. Slices with a non-positive reference area are NaN."""
+    num = np.asarray(num, float)
+    den = np.asarray(den, float)
+    num_err = np.asarray(num_err, float)
+    den_err = np.asarray(den_err, float)
+    with np.errstate(divide="ignore", invalid="ignore"):
+        r = num / den
+        rerr = np.abs(r) * np.sqrt((num_err / num) ** 2 + (den_err / den) ** 2)
+    bad = (den <= 0) | ~np.isfinite(r)
+    r = np.where(bad, np.nan, r)
+    rerr = np.where(np.isfinite(rerr), rerr, np.nan)
+    rerr = np.where(bad, np.nan, rerr)
+    return r, rerr
 
 
 # --- Build the per-slice spectra once (shared across all lines) ---
@@ -111,9 +141,10 @@ for j in range(no_slices):
 def process_line(cfg):
     """Run both area estimators for one line across all slices."""
     R = {k: [] for k in ("tc", "area", "area_err", "ratio", "ratio_err", "chi2",
-                         "area_lin", "area_lin_err", "slice_fits")}
+                         "area_lin", "area_lin_err", "snr", "slice_fits")}
     for s in slices:
         R["tc"].append(s["tc"])
+        R["snr"].append(line_snr(s["search"], cfg["e"]))
         result = fit_gauss(s["search"], cfg["e"], cfg["win"])
         pa = fit_linear(s["spe"], cfg["bkg_l"], cfg["bkg_r"])
 
@@ -148,7 +179,7 @@ def process_line(cfg):
         R["ratio_err"].append(a_err / cont if cont > 0 else np.nan)
 
     for key in ("tc", "area", "area_err", "ratio", "ratio_err", "chi2",
-                "area_lin", "area_lin_err"):
+                "area_lin", "area_lin_err", "snr"):
         R[key] = np.array(R[key])
     R["area_norm"], R["area_norm_err"] = _normalize(R["area"], R["area_err"])
     R["area_lin_norm"], R["area_lin_norm_err"] = _normalize(R["area_lin"], R["area_lin_err"])
@@ -209,6 +240,44 @@ def plot_metrics(name, R):
     fig.tight_layout()
 
 
+def plot_ratios_to_ref(results, ref="Si"):
+    """Area of every other line normalized to the reference line vs time,
+    for both the Gaussian-fit and linear-ROI estimators."""
+    tc = results[ref]["tc"]
+    others = [n for n in results if n != ref]
+    fig, (axg, axl) = plt.subplots(
+        2, 1, sharex=True, figsize=(16, 12),
+        num=f"Area ratios to {ref} vs time")
+    for name, color in zip(others, ("C0", "C3", "C5", "C6")):
+        rg, rge = ratio_to_ref(results[name]["area"], results[name]["area_err"],
+                               results[ref]["area"], results[ref]["area_err"])
+        axg.errorbar(tc, rg, yerr=rge, marker="s", lw=2, capsize=4,
+                     color=color, label=f"{name}/{ref}")
+        rl, rle = ratio_to_ref(results[name]["area_lin"], results[name]["area_lin_err"],
+                               results[ref]["area_lin"], results[ref]["area_lin_err"])
+        axl.errorbar(tc, rl, yerr=rle, marker="o", lw=2, capsize=4,
+                     color=color, label=f"{name}/{ref}")
+    axg.set_ylabel(f"Area ratio to {ref}\n(Gaussian fit)")
+    axg.legend()
+    axl.set_ylabel(f"Area ratio to {ref}\n(linear ROI)")
+    axl.set_xlabel("Time (ns)")
+    axl.legend()
+    fig.tight_layout()
+
+
+def plot_snr(results):
+    """Peak SNR vs time for every line, overlaid on one axis."""
+    plt.figure("SNR vs time", figsize=(16, 8))
+    for name, color in zip(results, ("C0", "C1", "C2", "C3", "C4")):
+        R = results[name]
+        plt.plot(R["tc"], R["snr"], marker="s", lw=2, color=color, label=name)
+    plt.axhline(3, color="grey", ls="--", lw=1, label="min_snr = 3")
+    plt.xlabel("Time (ns)")
+    plt.ylabel("Peak SNR")
+    plt.legend()
+    plt.tight_layout()
+
+
 # --- Overlaid spectra per time slice ---
 cmap = plt.get_cmap("plasma")
 colors = cmap(np.linspace(0, 1, no_slices))
@@ -228,5 +297,11 @@ for name, cfg in lines.items():
     results[name] = R
     plot_grid(name, cfg, R)
     plot_metrics(name, R)
+
+# Mg and Fe areas normalized to Si, vs time
+plot_ratios_to_ref(results, ref="Si")
+
+# Peak SNR for Si, Mg, Fe vs time
+plot_snr(results)
 
 plt.show()

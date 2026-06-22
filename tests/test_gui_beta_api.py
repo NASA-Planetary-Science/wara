@@ -274,29 +274,19 @@ def test_reset_restores_full_data(api):
     assert c.en_flag == 0 and c.dt_flag == 0 and c.xy_flag == 0
 
 
-def test_send_to_spectrum_stays_on_tab_and_marks_button(api):
+def test_send_to_spectrum_stays_on_tab_and_blinks(api):
     w, c = api
     c._load()
     assert c.opts.btn_send.objectName() == "open_btn"
     c._send_to_spectrum()
     assert w.spect is not None
     assert len(w.spect.counts) == c.ebins
-    # Stays on the API tab; the button turns into the green "Sent" confirmation.
+    # Stays on the API tab; the button keeps its label/objectName and only blinks
+    # (a transient inline stylesheet, reverted by a QTimer) to confirm the send.
     assert type(w.stack.currentWidget()).__name__ == "ApiPage"
-    assert c.opts.btn_send.objectName() == "sent_btn"
-    assert c.opts.btn_send.text() == api_mod.SEND_SENT_TEXT
-    assert "sent" in c.opts.btn_send.text().lower()
-
-
-def test_send_button_resets_when_spectrum_changes(api):
-    _w, c = api
-    c._load()
-    c._send_to_spectrum()
-    assert c.opts.btn_send.objectName() == "sent_btn"
-    # A filter recomputes the energy histogram → the confirmation clears.
-    c.apply_t_filter(-10, 10)
     assert c.opts.btn_send.objectName() == "open_btn"
     assert c.opts.btn_send.text() == api_mod.SEND_DEFAULT_TEXT
+    assert "background-color" in c.opts.btn_send.styleSheet()
 
 
 def test_reset_uses_cached_df_without_reloading(api, monkeypatch):
@@ -487,71 +477,343 @@ def test_selections_dialog_remove_clears_significance(api, monkeypatch):
     assert not c._sig_active    # cleared by _reset_selections -> _clear_significance
 
 
-# -- _compute_sig_vs_dt --------------------------------------------------------
+# -- time-slice fits vs dt -----------------------------------------------------
 
-def test_compute_sig_vs_dt_returns_array(api, monkeypatch):
+def test_build_slices_returns_spectra(api):
+    _w, c = api
+    c._load()
+    slices = c._build_slices(dt_slice_w=None)
+    assert len(slices) >= 1
+    s = slices[0]
+    assert {"idx", "t0", "t1", "tc", "spe", "search"} <= set(s)
+    # Each slice carries an energy Spectrum binned to the tab's ebins, and the
+    # PeakSearch has run (km method populates .snr).
+    assert len(s["spe"].counts) == c.ebins
+    assert s["search"].snr is not None
+    # Energy units propagate from _axis_units: only an applied calibration
+    # (energy_cal) is energy; everything else is channels (no units).
+    expected_units = c.e_units if c.ekey == "energy_cal" else None
+    assert s["spe"].e_units == expected_units
+
+
+def test_build_slices_caps_count(api):
+    _w, c = api
+    c._load()
+    from wara.gui_beta.slicefit import MAX_SLICES
+    # An absurdly small width would ask for a huge slice count; it must cap.
+    slices = c._build_slices(dt_slice_w=1e-12)
+    assert 1 <= len(slices) <= MAX_SLICES
+
+
+def test_band_snr_reads_search_snr(api):
+    _w, c = api
+    c._load()
+    from wara.gui_beta.slicefit import band_snr
+    slices = c._build_slices(dt_slice_w=None)
+    val = band_snr(slices[0]["search"], (500.0, 2000.0))
+    # A finite, non-negative SNR (snr is clipped at 0 by PeakSearch).
+    assert val >= 0.0 or val != val  # >=0 or NaN if band off-axis
+
+
+def test_slice_fit_window_area_mode_emits(api):
+    _w, c = api
+    c._load()
+    from wara.gui_beta.slicefit import SliceFitWindow, TECH_FIT
+    slices = c._build_slices(dt_slice_w=None)
+    win = SliceFitWindow(c.app, slices, (500.0, 2000.0), "Fe", "#ff0000")
+    # Switch the per-slice Method to Net area − linear bkg.
+    win.method.setCurrentIndex(1)
+    assert win._is_area_method()
+    captured = {}
+    win.results_ready.connect(lambda p: captured.update(p))
+    # Step forward and back to exercise per-slice ROI restore + refit, then emit.
+    win._step(+1)
+    win._step(-1)
+    win._emit_results()
+    win.close()
+    assert captured["label"] == "Fe"
+    assert captured["technique"] == TECH_FIT
+    assert len(captured["vals"]) == len(slices)
+    assert len(captured["dt_centers"]) == len(slices)
+    # Net-area mode must produce finite values (regression: the ROI edges used
+    # to collapse to a single point, making every net area NaN).
+    assert any(np.isfinite(v) for v in captured["vals"])
+
+
+def test_build_slices_respects_min_snr(api):
+    _w, c = api
+    c._load()
+    s_lo = c._build_slices(dt_slice_w=None, min_snr=1.0)
+    s_hi = c._build_slices(dt_slice_w=None, min_snr=42.0)
+    assert s_lo[0]["search"].min_snr == 1.0
+    assert s_hi[0]["search"].min_snr == 42.0
+
+
+def test_slice_fit_window_peak_selection(api):
+    _w, c = api
+    c._load()
+    from wara.gui_beta.slicefit import SliceFitWindow
+    slices = c._build_slices(dt_slice_w=None, min_snr=1.0)
+    win = SliceFitWindow(c.app, slices, (500.0, 2000.0), "Fe", "#ff0000")
+    assert not win._is_area_method()   # opens in Peak-fit mode
+    # Selecting no peaks must yield exactly 0 for the slice (none → 0).
+    win._selected_by_slice[win._cur] = set()
+    v, e = win._current_metric()
+    assert v == 0.0 and e == 0.0
+    # If the fit found peaks, the table carries a leading "Use" checkbox column
+    # and selecting all peaks gives their summed area.
+    if win._peak_rows:
+        assert win.table.horizontalHeaderItem(0).text() == "Use"
+        assert win.table.cellWidget(0, 0) is not None
+        win._selected_by_slice[win._cur] = set(range(len(win._peak_rows)))
+        total = sum(r[1] for r in win._peak_rows)
+        v2, _e2 = win._current_metric()
+        assert abs(v2 - total) < 1e-6
+    captured = {}
+    win.results_ready.connect(lambda p: captured.update(p))
+    win._emit_results()
+    win.close()
+    assert len(captured["vals"]) == len(slices)
+
+
+def test_slice_fit_table_keeps_data_columns(qapp):
+    """Regression: the inserted 'Use' checkbox column must not clobber the
+    Centroid/Area/FWHM cells across repeated refits, and units stay keV."""
+    from wara import spectrum as sp, peaksearch as ps
+    from wara.gui_beta.slicefit import SliceFitWindow
+    x = np.linspace(700, 900, 2048)
+    peak = 50 + 4000 * np.exp(-0.5 * ((x - 780) / 3) ** 2)
+    slices = []
+    for i in range(3):
+        cts = (peak * (1 + 0.1 * i)).astype(int)
+        spe = sp.Spectrum(counts=cts, energies=x, e_units="keV", label="t")
+        se = ps.PeakSearch(spe, 420 * 2048 / 2 ** 11, 12 * 2048 / 2 ** 11,
+                           fwhm_at_0=1.0, min_snr=3)
+        slices.append(dict(idx=i, t0=i * 2.0, t1=(i + 1) * 2.0,
+                           tc=i * 2.0 + 1.0, spe=spe, search=se))
+    win = SliceFitWindow(None, slices, (760.0, 800.0), "Fe", "#f00")
+    # Step around to force the multi-refit path that exposed the bug.
+    win._step(+1); win._step(-1)
+    t = win.table
+    assert t.horizontalHeaderItem(0).text() == "Use"
+    assert t.horizontalHeaderItem(1).text().startswith("Centroid")
+    assert "keV" in t.horizontalHeaderItem(1).text()      # units, not "ch"
+    assert win._peak_rows                                  # the peak was fit
+    # Column 0 is the checkbox widget; column 1 carries the centroid TEXT.
+    assert t.cellWidget(0, 0) is not None
+    assert t.cellWidget(0, 1) is None
+    assert t.item(0, 1) is not None and t.item(0, 1).text() not in ("", "-")
+    win.close()
+
+
+def test_spectra_view_toggle(api, monkeypatch):
+    _w, c = api
+    c._load()
+    monkeypatch.setattr(api_mod, "EnergySelectionDialog", _StubSelDialog)
+    c._open_selections()
+    d = c._sel_dlg
+    slices = c._build_slices(dt_slice_w=None)
+    d.show_slice_spectra(slices, (500.0, 2000.0), c._energy_xlabel())
+    # Overlay: a single log-y axis.
+    assert len(d.spectra_fig.axes) == 1
+    assert d.spectra_fig.axes[0].get_yscale() == "log"
+    # Offset: ridgeline traces + a dt colour bar (second axes).
+    d.cmb_spectra_view.setCurrentText("Offset")
+    assert len(d.spectra_fig.axes) == 2
+    assert "offset" in d.spectra_fig.axes[0].get_ylabel().lower()
+    # Waterfall: 2-D heatmap (energy × dt) + a counts colour bar.
+    d.cmb_spectra_view.setCurrentText("Waterfall")
+    assert len(d.spectra_fig.axes) == 2
+    assert d.spectra_fig.axes[0].get_ylabel() == "dt (ns)"
+    # Back to overlay.
+    d.cmb_spectra_view.setCurrentText("Overlay")
+    assert len(d.spectra_fig.axes) == 1
+    assert d.spectra_fig.axes[0].get_yscale() == "log"
+
+
+def test_receive_slice_results_overlays(api, monkeypatch):
     _w, c = api
     c._load()
     monkeypatch.setattr(api_mod, "EnergySelectionDialog", _StubSelDialog)
     c._arm_selection(); c._on_energy_span(500, 2000)
     sel = c.selections[0]
-    import numpy as np
-    dt_lo, dt_hi = np.percentile(c.df_current[c._dt_key], [0.2, 99.5])
-    n = 20
-    dt_edges = np.linspace(dt_lo, dt_hi, n + 1)
-    result = c._compute_sig_vs_dt(sel, sideband_w=200, dt_edges=dt_edges,
-                                  sig_threshold=5.0)
-    assert result is not None
-    assert len(result) == n
-    # All values are >= 0 (either S/B or zero).
-    assert (result >= 0).all()
-
-
-def test_compute_sig_vs_dt_zero_sideband_returns_none(api, monkeypatch):
-    _w, c = api
-    c._load()
-    monkeypatch.setattr(api_mod, "EnergySelectionDialog", _StubSelDialog)
-    c._arm_selection(); c._on_energy_span(500, 2000)
-    import numpy as np
-    dt_edges = np.linspace(0, 1e4, 11)
-    result = c._compute_sig_vs_dt(c.selections[0], sideband_w=0,
-                                  dt_edges=dt_edges, sig_threshold=5.0)
-    assert result is None
-
-
-def test_plot_significance_sets_sig_active(api, monkeypatch):
-    _w, c = api
-    c._load()
-    monkeypatch.setattr(api_mod, "EnergySelectionDialog", _StubSelDialog)
-    c._arm_selection(); c._on_energy_span(500, 2000)
-    assert not c._sig_active
-    c._plot_significance(sideband_w=100, dt_slice_w=None, sig_threshold=5.0)
+    c._receive_slice_results(dict(
+        label=sel["label"], color=sel["color"], technique="snr",
+        dt_centers=[1.0, 2.0, 3.0], vals=[1.0, 2.0, 1.5],
+        errs=[0.0, 0.0, 0.0], ylabel="Peak SNR"))
     assert c._sig_active
     assert c._ax_sig is not None
     # A secondary y-axis was added to the dt panel.
     assert c._ax_sig in c.page.fig.axes
+    assert sel["label"] in c._slice_results
 
 
-def test_clear_significance_restores_dt_panel(api, monkeypatch):
+def test_clear_slice_overlay_restores_dt_panel(api, monkeypatch):
     _w, c = api
     c._load()
     monkeypatch.setattr(api_mod, "EnergySelectionDialog", _StubSelDialog)
     c._arm_selection(); c._on_energy_span(500, 2000)
-    c._plot_significance(sideband_w=100, dt_slice_w=None, sig_threshold=5.0)
-    n_axes_with_sig = len(c.page.fig.axes)
-    c._clear_significance()
+    sel = c.selections[0]
+    c._receive_slice_results(dict(
+        label=sel["label"], color=sel["color"], technique="snr",
+        dt_centers=[1.0, 2.0], vals=[1.0, 2.0], errs=[0.0, 0.0],
+        ylabel="Peak SNR"))
+    n_axes_with_overlay = len(c.page.fig.axes)
+    c._clear_slice_overlay()
     assert not c._sig_active
     assert c._ax_sig is None
+    assert c._slice_results == {}
     # The secondary axes was removed.
-    assert len(c.page.fig.axes) == n_axes_with_sig - 1
+    assert len(c.page.fig.axes) == n_axes_with_overlay - 1
 
 
-def test_filter_clears_significance(api, monkeypatch):
+def test_open_selections_disables_interactive_cuts(api):
+    _w, c = api
+    c._load()
+    c.opts.btn_interactive.setChecked(True)        # arm interactive cuts
+    assert c.opts.btn_interactive.isChecked()
+    assert len(c._selectors) == 3                  # energy / dt / X-Y selectors
+    c._open_selections()
+    # Opening Selections must turn cuts off and detach the span/rect selectors.
+    assert not c.opts.btn_interactive.isChecked()
+    assert c._selectors == []
+
+
+def test_clear_selections_clears_slice_results(api, monkeypatch):
     _w, c = api
     c._load()
     monkeypatch.setattr(api_mod, "EnergySelectionDialog", _StubSelDialog)
     c._arm_selection(); c._on_energy_span(500, 2000)
-    c._plot_significance(sideband_w=100, dt_slice_w=None, sig_threshold=5.0)
+    sel = c.selections[0]
+    c._receive_slice_results(dict(
+        label=sel["label"], color=sel["color"], technique="snr",
+        dt_centers=[1.0, 2.0], vals=[1.0, 2.0], errs=[0.0, 0.0],
+        ylabel="Peak SNR"))
+    assert c._slice_results
+    c._clear_selections()
+    # The stored result must be gone so it can't reappear on the next overlay.
+    assert c._slice_results == {}
+    assert not c._sig_active
+
+
+def test_remove_selection_drops_its_slice_result(api, monkeypatch):
+    _w, c = api
+    c._load()
+    monkeypatch.setattr(api_mod, "EnergySelectionDialog", _StubSelDialog)
+    c._arm_selection(); c._on_energy_span(500, 2000)
+    sel = c.selections[0]
+    c._receive_slice_results(dict(
+        label=sel["label"], color=sel["color"], technique="snr",
+        dt_centers=[1.0, 2.0], vals=[1.0, 2.0], errs=[0.0, 0.0],
+        ylabel="Peak SNR"))
+    c._remove_selection(sel)
+    assert sel["label"] not in c._slice_results
+
+
+def test_remove_one_selection_keeps_others_overlay(api, monkeypatch):
+    _w, c = api
+    c._load()
+    monkeypatch.setattr(api_mod, "EnergySelectionDialog", _StubSelDialog)
+    c._arm_selection(); c._on_energy_span(500, 1000)
+    c._arm_selection(); c._on_energy_span(1500, 2000)
+    # The stub uses a fixed label; give them distinct ones for the results map.
+    c.selections[0]["label"] = "A"
+    c.selections[1]["label"] = "B"
+    for s in c.selections:
+        c._receive_slice_results(dict(
+            label=s["label"], color=s["color"], technique="snr",
+            dt_centers=[1.0, 2.0], vals=[1.0, 2.0], errs=[0.0, 0.0],
+            ylabel="Peak SNR"))
+    assert set(c._slice_results) == {"A", "B"}
+    c._remove_selection(c.selections[0])    # remove "A"
+    # A's curve is gone; B's stays drawn.
+    assert set(c._slice_results) == {"B"}
+    assert c._sig_active
+    assert c._ax_sig in c.page.fig.axes
+
+
+def test_ratio_to_ref_math():
+    from wara.gui_beta.slicefit import ratio_to_ref
+    r, e = ratio_to_ref([10.0, 20.0], [1.0, 2.0], [5.0, 10.0], [0.5, 1.0])
+    assert np.allclose(r, [2.0, 2.0])
+    # err = |r| * sqrt((num_err/num)^2 + (den_err/den)^2)
+    assert np.allclose(e, [2.0 * np.sqrt(0.01 + 0.01)] * 2)
+    # A non-positive denominator yields NaN (drops out of the plot).
+    r0, e0 = ratio_to_ref([5.0], [1.0], [0.0], [0.0])
+    assert np.isnan(r0[0]) and np.isnan(e0[0])
+
+
+def _inject_two_results(c):
+    for lbl, col, vals in (("Si", "#f00", [10.0, 20.0, 30.0]),
+                           ("Mg", "#0f0", [5.0, 8.0, 9.0])):
+        c._receive_slice_results(dict(
+            label=lbl, color=col, technique="snr", dt_centers=[1.0, 2.0, 3.0],
+            vals=vals, errs=[1.0, 1.0, 1.0], ylabel="Peak SNR"))
+
+
+def test_slice_ratio_overlay_toggle(api):
+    _w, c = api
+    c._load()
+    _inject_two_results(c)
+    assert not c._ratio_active()                  # no reference selected yet
+    c._set_slice_ratio_ref("Si")
+    assert c._ratio_active()
+    assert c._slice_overlay_ylabel() == "Ratio to Si"
+    assert c._sig_active and c._ax_sig in c.page.fig.axes
+    c._set_slice_ratio_ref(None)                  # back to absolute
+    assert not c._ratio_active()
+    assert c._slice_overlay_ylabel() == "Peak SNR"
+
+
+def test_ratio_combo_enables_with_two_results(api, monkeypatch):
+    _w, c = api
+    c._load()
+    monkeypatch.setattr(api_mod, "EnergySelectionDialog", _StubSelDialog)
+    c._open_selections()
+    d = c._sel_dlg
+    assert not d.cmb_ratio_ref.isEnabled()        # no results
+    c._receive_slice_results(dict(
+        label="Si", color="#f00", technique="snr", dt_centers=[1.0],
+        vals=[1.0], errs=[0.0], ylabel="Peak SNR"))
+    assert not d.cmb_ratio_ref.isEnabled()        # only one
+    c._receive_slice_results(dict(
+        label="Mg", color="#0f0", technique="snr", dt_centers=[1.0],
+        vals=[1.0], errs=[0.0], ylabel="Peak SNR"))
+    assert d.cmb_ratio_ref.isEnabled()            # two → enabled
+    items = [d.cmb_ratio_ref.itemText(i) for i in range(d.cmb_ratio_ref.count())]
+    assert items[0] == "(absolute)" and "Si" in items and "Mg" in items
+
+
+def test_remove_reference_resets_ratio(api, monkeypatch):
+    _w, c = api
+    c._load()
+    monkeypatch.setattr(api_mod, "EnergySelectionDialog", _StubSelDialog)
+    c._arm_selection(); c._on_energy_span(500, 1000)
+    c._arm_selection(); c._on_energy_span(1500, 2000)
+    c.selections[0]["label"] = "Si"
+    c.selections[1]["label"] = "Mg"
+    for s in c.selections:
+        c._receive_slice_results(dict(
+            label=s["label"], color=s["color"], technique="snr",
+            dt_centers=[1.0, 2.0], vals=[10.0, 20.0], errs=[1.0, 1.0],
+            ylabel="Peak SNR"))
+    c._set_slice_ratio_ref("Si")
+    assert c._ratio_active()
+    c._remove_selection(c.selections[0])          # remove the reference (Si)
+    assert c._slice_ratio_ref is None
+    assert not c._ratio_active()
+
+
+def test_filter_clears_slice_overlay(api, monkeypatch):
+    _w, c = api
+    c._load()
+    monkeypatch.setattr(api_mod, "EnergySelectionDialog", _StubSelDialog)
+    c._arm_selection(); c._on_energy_span(500, 2000)
+    sel = c.selections[0]
+    c._receive_slice_results(dict(
+        label=sel["label"], color=sel["color"], technique="snr",
+        dt_centers=[1.0, 2.0], vals=[1.0, 2.0], errs=[0.0, 0.0],
+        ylabel="Peak SNR"))
     assert c._sig_active
     c.apply_energy_filter(0, 3000)
     assert not c._sig_active    # cleared by the filter
@@ -587,6 +849,25 @@ def test_send_uncalibrated_spectrum_carries_real_channels(api):
     np.testing.assert_array_equal(spect.channels, np.arange(len(spect.counts)))
     np.testing.assert_array_equal(spect.x, np.arange(len(spect.counts)))
     assert spect.adc_channels.max() > len(spect.channels)   # proves real channels
+
+
+def test_send_units_match_channel_panel(api):
+    # Regression: a channel panel must not send an energy (MeV) spectrum.
+    # _native_units could be "MeV" (a native-energy column was detected) while
+    # the working axis is still channels (e.g. raw or a drift-corrected axis);
+    # the send must mirror the panel label, not _native_units.
+    w, c = api
+    c._load()
+    c._native_units = "MeV"                  # pretend native energy was detected
+    assert c.ekey == "energy_orig"           # but the working axis is channels
+    assert c._energy_xlabel() == "Channels"
+    assert c._axis_units() is None
+    c._send_to_spectrum()
+    spect = w.spect
+    # Channels → rides on adc_channels with no energy units, NOT MeV energies.
+    assert spect.energies is None
+    assert not spect.e_units
+    np.testing.assert_allclose(spect.adc_channels, c.gam_x)
 
 
 def test_send_works_without_a_prior_energy_draw(api):
@@ -714,7 +995,7 @@ def test_apply_dt_shift_adds_dt_cal(api):
     assert "dt_cal" in c.df_current.columns and "dt_cal" in c.df_api.columns
     np.testing.assert_allclose(c.df_current["dt_cal"].to_numpy(), raw + 12.5)
     assert c._dt_corrected
-    assert "shifted" in c._dt_label.lower()
+    assert "12.5 ns" in c._dt_label and "constant" in c._dt_label.lower()
     assert "shifted" in c.page.ax_dt.get_xlabel().lower()
 
 
@@ -858,7 +1139,11 @@ def test_apply_to_data_bakes_both_columns(apply_env):
     np.testing.assert_allclose(
         df.loc[m5, "dt_cal"].to_numpy(),
         df.loc[m5, "dt"].to_numpy() * 1e9 + 7.0)
-    assert np.isnan(df.loc[m4, "dt_cal"].to_numpy()).all()
+    # The un-shifted channel keeps its raw dt (in ns) -- never NaN -- so a dt_cal
+    # column is usable for every channel.
+    np.testing.assert_allclose(
+        df.loc[m4, "dt_cal"].to_numpy(),
+        df.loc[m4, "dt"].to_numpy() * 1e9)
 
 
 def test_apply_to_data_only_dt_when_no_energy_change(apply_env):
@@ -879,18 +1164,49 @@ def test_apply_to_data_noop_without_changes(apply_env):
     assert saved == {}            # nothing written when nothing changed
 
 
-def test_apply_to_data_energy_cal_from_gainshift_only(apply_env):
-    """Gain-shift alone (no polynomial calibration) should produce energy_cal."""
+def test_apply_to_data_energy_cal_from_gainshift_only(apply_env, monkeypatch):
+    """Gain-shift alone (no polynomial calibration) should produce energy_cal,
+    after the user confirms the "not calibrated" warning."""
     c, _combined, saved = apply_env
     c._load()
     c.apply_energy_gainshift(4, method="shift")
     assert "energy_drift" in c.df_api.columns and "energy_cal" not in c.df_api.columns
+    # Gain-shift-only ⇒ no calibration curve ⇒ the warning must fire; accept it.
+    warned = {"n": 0}
+    def _ok():
+        warned["n"] += 1
+        return True
+    monkeypatch.setattr(c, "_confirm_uncalibrated_energy", _ok)
     c._apply_to_data()
+    assert warned["n"] == 1
     df = saved["df"]
     assert "energy_cal" in df.columns
     m5 = read_parquet_api.channel_mask(df, 5).to_numpy()
     np.testing.assert_array_equal(
         df.loc[m5, "energy_cal"].to_numpy(), c.df_api["energy_drift"].to_numpy())
+
+
+def test_apply_to_data_uncalibrated_energy_can_be_cancelled(apply_env, monkeypatch):
+    """Declining the "not calibrated" warning aborts the save entirely."""
+    c, _combined, saved = apply_env
+    c._load()
+    c.apply_energy_gainshift(4, method="shift")
+    monkeypatch.setattr(c, "_confirm_uncalibrated_energy", lambda: False)
+    c._apply_to_data()
+    assert saved == {}            # nothing written when the warning is declined
+
+
+def test_apply_to_data_calibrated_energy_skips_warning(apply_env, monkeypatch):
+    """A real calibration curve (e_units set) must not trigger the warning."""
+    c, _combined, saved = apply_env
+    c._load()
+    c.apply_calibration([0.0, 0.5], units="keV")
+    called = {"n": 0}
+    monkeypatch.setattr(c, "_confirm_uncalibrated_energy",
+                        lambda: called.__setitem__("n", called["n"] + 1) or True)
+    c._apply_to_data()
+    assert called["n"] == 0       # calibrated energy needs no warning
+    assert "energy_cal" in saved["df"].columns
 
 
 def test_apply_to_data_ignores_cuts(apply_env):
@@ -907,6 +1223,86 @@ def test_apply_to_data_ignores_cuts(apply_env):
     df = saved["df"]
     assert len(df) == len(combined)        # full combined run written
     assert {"energy_cal", "dt_cal"}.issubset(df.columns)
+
+
+def test_apply_to_data_merges_channels_into_one_run(api, monkeypatch, tmp_path):
+    """Saving channel 5 then channel 4 to the SAME destination run accumulates
+    both channels' calibration -- the second save must not clobber the first.
+    """
+    _w, c = api
+    combined = _combined_events()
+    disk = {}                                  # runnr -> saved combined frame
+
+    def fake_read(date, runnr, ch=None, flood_field=False, data_path_txt=None):
+        base = disk.get(runnr, combined)       # destination reads back; source = raw
+        if ch is None:
+            return base.copy()
+        sub = base[read_parquet_api.channel_mask(base, ch)]
+        return sub.reset_index(drop=True).copy()
+    monkeypatch.setattr(read_parquet_api, "read_parquet_file", fake_read)
+
+    def fake_save(df, date, runnr, data_path=None, overwrite=False):
+        disk[runnr] = df.copy()
+        (tmp_path / f"run-{runnr}").mkdir(parents=True, exist_ok=True)
+        return Path("saved.parquet")
+    monkeypatch.setattr(read_parquet_api, "save_combined_run", fake_save)
+
+    def fake_path(date, runnr, data_path=None, make=False):
+        run_dir = tmp_path / f"run-{runnr}"
+        return run_dir, run_dir / "parquet-data", "RUN"
+    monkeypatch.setattr(read_parquet_api, "run_parquet_path", fake_path)
+
+    class _StubApplyDialog:
+        def __init__(self, date, runnr, parent=None):
+            self._date = date
+        def exec_(self):
+            return QDialog.Accepted
+        def values(self):
+            return (self._date, 999)
+    monkeypatch.setattr(api_mod, "ApplyToDataDialog", _StubApplyDialog)
+    # The existing-run prompt always chooses "merge" (add the channel).
+    monkeypatch.setattr(c, "_confirm_existing_run", lambda *a, **k: "merge")
+
+    # 1) Channel 5 → new run 999.
+    c.opts.ed_ch.setText("5")
+    c._load()
+    c.apply_calibration([0.0, 0.5], units="keV")
+    c._apply_to_data()
+    df1 = disk[999]
+    m4 = read_parquet_api.channel_mask(df1, 4).to_numpy()
+    assert np.isnan(df1.loc[m4, "energy_cal"].to_numpy()).all()  # ch4 not yet done
+
+    # 2) Channel 4 → same run 999 (merge). Channel 5 must survive.
+    c.opts.ed_ch.setText("4")
+    c._load()
+    c.apply_calibration([0.0, 0.25], units="keV")
+    c._apply_to_data()
+    df2 = disk[999]
+    m5 = read_parquet_api.channel_mask(df2, 5).to_numpy()
+    m4 = read_parquet_api.channel_mask(df2, 4).to_numpy()
+    # Both channels now calibrated, each with its own coefficient.
+    np.testing.assert_allclose(df2.loc[m5, "energy_cal"].to_numpy(),
+                               0.5 * df2.loc[m5, "energy_orig"].to_numpy())
+    np.testing.assert_allclose(df2.loc[m4, "energy_cal"].to_numpy(),
+                               0.25 * df2.loc[m4, "energy_orig"].to_numpy())
+
+
+def test_apply_to_data_unshifted_channel_keeps_raw_dt(apply_env):
+    """When a dt_cal column is created for the shifted channel, the other channel
+    (no shift applied) must keep its raw dt in ns, not be left NaN."""
+    c, combined, saved = apply_env
+    c._load()                                     # loads ch 5
+    c.apply_calibration([0.0, 0.5], units="keV")
+    c.apply_dt_shift(8.0)
+    c._apply_to_data()
+    df = saved["df"]
+    m4 = read_parquet_api.channel_mask(df, 4).to_numpy()
+    # ch4 got no shift -> dt_cal is raw dt (s) converted to ns, never NaN.
+    assert not np.isnan(df.loc[m4, "dt_cal"].to_numpy()).any()
+    np.testing.assert_allclose(
+        df.loc[m4, "dt_cal"].to_numpy(), df.loc[m4, "dt"].to_numpy() * 1e9)
+    # ch4 has no energy calibration, so energy_cal stays NaN (no valid fallback).
+    assert np.isnan(df.loc[m4, "energy_cal"].to_numpy()).all()
 
 
 def test_load_clears_dt_shift(api):
@@ -987,15 +1383,23 @@ def test_dt_gainshift_writes_dt_cal(api):
     assert "dt_cal" in c.df_current.columns
 
 
-def test_constant_and_segment_dt_replace_each_other(api):
+def test_constant_and_segment_dt_compose(api):
+    import numpy as np
     _w, c = api
     c._load()
+    # Constant first, then segment alignment: the alignment must retain the
+    # constant rather than recompute dt_cal from raw dt.
     c.apply_dt_shift(5.0)
     assert c._dt_shift == 5.0 and not c._dt_segments_applied
     c.apply_dt_gainshift(4)
-    assert c._dt_shift is None and c._dt_segments_applied   # segment replaced constant
+    assert c._dt_shift == 5.0 and c._dt_segments_applied      # constant retained
+    aligned = c.df_api["dt_aligned"].to_numpy()
+    np.testing.assert_allclose(c.df_api["dt_cal"].to_numpy(), aligned + 5.0)
+    # A further constant builds on the aligned baseline (not cumulative) and
+    # keeps the alignment in place -- the original reported bug.
     c.apply_dt_shift(2.0)
-    assert c._dt_shift == 2.0 and not c._dt_segments_applied  # constant replaced segment
+    assert c._dt_shift == 2.0 and c._dt_segments_applied
+    np.testing.assert_allclose(c.df_api["dt_cal"].to_numpy(), aligned + 2.0)
 
 
 def test_energy_and_time_corrections_independent(api):
@@ -1022,6 +1426,39 @@ def test_shifts_dialog_opens_and_drives_controller(api):
     assert c._dt_shift == 3.0
     dlg._clear("energy")
     assert not c._egain_applied
+    dlg.close()
+
+
+def test_constant_commits_previewed_time_alignment(api):
+    # Reported bug: Preview the time alignment (not Apply), then apply a constant
+    # Δt. The constant must commit the previewed alignment first and layer on top,
+    # not discard it by shifting raw dt.
+    import numpy as np
+    _w, c = api
+    c._load()
+    c._open_shifts()
+    dlg = c._shifts_dlg
+    dlg.f_nseg["time"].setText("4")
+    dlg._preview("time", prospective=True)            # preview only, not applied
+    assert dlg._time_preview_pending and not c._dt_segments_applied
+    dlg.f_const.setText("-10.0"); dlg._apply_constant()
+    assert c._dt_segments_applied and c._dt_shift == -10.0
+    np.testing.assert_allclose(c.df_api["dt_cal"].to_numpy(),
+                               c.df_api["dt_aligned"].to_numpy() - 10.0)
+    dlg.close()
+
+
+def test_constant_without_preview_uses_raw_dt(api):
+    # Bypass case: no alignment previewed -> a constant shifts raw dt directly.
+    import numpy as np
+    _w, c = api
+    c._load()
+    c._open_shifts()
+    dlg = c._shifts_dlg
+    raw = c.df_api["dt"].to_numpy().copy()
+    dlg.f_const.setText("4.0"); dlg._apply_constant()
+    assert not c._dt_segments_applied and c._dt_shift == 4.0
+    np.testing.assert_allclose(c.df_api["dt_cal"].to_numpy(), raw + 4.0)
     dlg.close()
 
 

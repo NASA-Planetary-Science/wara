@@ -44,6 +44,8 @@ from the *filtered* data after an X-Y selection).
 """
 import traceback
 import time
+import shutil
+from datetime import datetime
 
 import numpy as np
 
@@ -60,16 +62,23 @@ from PyQt5.QtWidgets import (
     QWidget, QLabel, QPushButton, QVBoxLayout, QHBoxLayout, QScrollArea,
     QLineEdit, QCheckBox, QSizePolicy, QDialog,
     QGridLayout, QMessageBox, QColorDialog, QDialogButtonBox, QTabWidget,
-    QComboBox,
+    QComboBox, QTableWidget, QTableWidgetItem, QHeaderView, QAbstractItemView,
 )
 from PyQt5.QtGui import QColor
 from PyQt5.QtCore import Qt, QSize, QTimer, QUrl
 
-from wara import read_parquet_api, apicalc
+from wara import read_parquet_api, apicalc, combine_runs as cr
 from wara import spectrum as sp
+from wara import peaksearch as ps
 
 from . import theme as T
 from .widgets import hsep, header, labeled_row
+from .slicefit import (
+    plot_slice_spectra, plot_slice_offset, plot_slice_waterfall,
+    SliceFitWindow, band_snr, ratio_to_ref, MAX_SLICES,
+    TECHNIQUE_LABELS, TECHNIQUE_FROM_LABEL, YLABELS,
+    TECH_FIT, TECH_SNR,
+)
 
 API_PLOT_BG = T.BG_PLOT
 COLORMAP = "plasma"
@@ -84,11 +93,23 @@ DEFAULT_HEXBINS = 80
 # counts brighten to a dim gray so the selections stay the focus.
 GRAY_CMAP = LinearSegmentedColormap.from_list("api_gray", [API_PLOT_BG, T.TEXT_DIM])
 
-# Send-to-Spectrum button: resting label vs the green "Sent" confirmation. Kept
-# short (and the same length) so the button fits the original-width options panel
-# without forcing it wider; the green styling is the "sent" signal.
+# Send-to-Spectrum button label. The click is confirmed with a brief green blink
+# (see ApiController._flash_button), not a persistent label change.
 SEND_DEFAULT_TEXT = "Send to spectrum"
-SEND_SENT_TEXT = "Sent to spectrum"
+
+
+def _combo_row(label_text, widget):
+    """A 'label  [widget]' row where the widget expands to fill the width  --
+    unlike labeled_row's fixed-width inputs, so a long combo entry isn't cut
+    off."""
+    row = QWidget()
+    rl = QHBoxLayout(row)
+    rl.setContentsMargins(0, 0, 0, 0)
+    rl.setSpacing(6)
+    rl.addWidget(QLabel(label_text))
+    widget.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+    rl.addWidget(widget, 1)
+    return row
 
 
 class ApiFilterDialog(QDialog):
@@ -343,10 +364,19 @@ class ShiftsDialog(QDialog):
         self.fig = {}
         self.f_nseg = {}
         self.f_method = {}
+        self.f_bins = {}
         self.f_xmin = {}
         self.f_xmax = {}
         self.lbl_state = {}
         self.btn_clear = {}
+        self.btn_apply = {}
+        # When the user previews a time-segment alignment, cache the per-event
+        # aligned dt (and its description) so a constant Δt can be applied
+        # straight on top of the *previewed* data -- no re-alignment, no separate
+        # "Apply alignment" step.
+        self._time_preview_pending = False
+        self._previewed_aligned = None
+        self._previewed_seg_desc = ""
 
         lay = QVBoxLayout(self)
         self.tabs = QTabWidget()
@@ -400,6 +430,14 @@ class ShiftsDialog(QDialog):
         r, _ = labeled_row("Method", method); side.addWidget(r)
         self.f_method[kind] = method
 
+        default_bins = self.c.ebins if kind == "energy" else self.c.tbins
+        bins = QLineEdit(str(default_bins)); bins.setFixedWidth(70)
+        bins.setToolTip("Number of histogram bins used to align the segments"
+                        + (" (time range focuses on the 1%–99% dt span)"
+                           if kind == "time" else ""))
+        r, _ = labeled_row("Bins", bins); side.addWidget(r)
+        self.f_bins[kind] = bins
+
         xmin = QLineEdit(); xmin.setPlaceholderText("min"); xmin.setFixedWidth(70)
         xmax = QLineEdit(); xmax.setPlaceholderText("max"); xmax.setFixedWidth(70)
         xr = QHBoxLayout(); xr.setContentsMargins(0, 0, 0, 0)
@@ -413,9 +451,17 @@ class ShiftsDialog(QDialog):
         btn_prev.clicked.connect(lambda _=False, k=kind: self._preview(k, prospective=True))
         side.addWidget(btn_prev)
 
-        btn_apply = QPushButton("Apply alignment"); btn_apply.setObjectName("open_btn")
+        btn_apply = QPushButton("Apply alignment")
+        # Distinct colour per axis (green = energy panel, cyan = dt panel). Idle =
+        # outlined (transparent fill); pressing fills it solid, and it returns to
+        # the outline once the alignment is applied  -- so the user sees exactly
+        # when the action takes place.
+        btn_apply._color = T.ACCENT_GREEN if kind == "energy" else T.ACCENT_CYAN
+        btn_apply._base_css = self._apply_css(btn_apply._color, solid=False)
+        btn_apply.setStyleSheet(btn_apply._base_css)
         btn_apply.setCursor(Qt.PointingHandCursor)
         btn_apply.clicked.connect(lambda _=False, k=kind: self._apply_segments(k))
+        self.btn_apply[kind] = btn_apply
         side.addWidget(btn_apply)
 
         if kind == "time":
@@ -462,13 +508,22 @@ class ShiftsDialog(QDialog):
             xr = None
         return nseg, method, xr
 
+    def _bins(self, kind):
+        """User-defined histogram bin count for the tab (falls back to the main
+        view's energy/time bins on a bad entry)."""
+        default = self.c.ebins if kind == "energy" else self.c.tbins
+        try:
+            return max(2, int(float(self.f_bins[kind].text().strip())))
+        except ValueError:
+            return default
+
     def _axis_cfg(self, kind):
         """(base column, out column, bins, base erange) for the tab's axis."""
         c = self.c
         if kind == "energy":
             return (c._chan_base or "energy_orig", "energy_drift",
-                    c.ebins, c._chan_erange())
-        return ("dt", "dt_cal", c.tbins, c._dt_erange())
+                    self._bins("energy"), c._chan_erange())
+        return ("dt", "dt_cal", self._bins("time"), c._dt_erange())
 
     def _segment_spectra(self, col, n_segments, bins, erange):
         """Per-segment histograms of *col* (no alignment, nothing committed)."""
@@ -493,8 +548,17 @@ class ShiftsDialog(QDialog):
         try:
             raw_spectra = self._segment_spectra(base, nseg, bins, base_erange)
             if applied and out_col in c.df_api.columns:
-                vals = c.df_api[out_col].astype(float)
-                erange = (float(vals.min()), float(vals.max()))
+                # Histogram the corrected column over the SAME kind of range as the
+                # raw panel (time: 0.2%–99.5% percentile; energy: [0, max]) so the
+                # shared-x view keeps the percentile zoom instead of snapping back
+                # to the full dt span after applying.
+                vals = c.df_api[out_col].astype(float).to_numpy()
+                if kind == "time":
+                    lo, hi = np.percentile(vals, [0.2, 99.5])
+                    erange = ((float(lo), float(hi)) if hi > lo
+                              else (float(vals.min()), float(vals.max())))
+                else:
+                    erange = (0.0, float(vals.max()))
                 bottom = self._segment_spectra(out_col, nseg, bins, erange)
                 bottom_title = "Corrected"
             elif prospective:
@@ -503,6 +567,12 @@ class ShiftsDialog(QDialog):
                 gs.align(method=method, xrange=xr)
                 bottom = gs._aligned_spectra
                 bottom_title = f"Aligned ({method})"
+                # Cache the per-event aligned dt so a constant Δt can be applied
+                # directly on top of this preview (see _apply_constant).
+                if kind == "time":
+                    self._time_preview_pending = True
+                    self._previewed_aligned = gs.df[out_col].astype(float).to_numpy()
+                    self._previewed_seg_desc = f"{nseg} seg · {method}"
             else:
                 bottom_title = "Press Preview to compute the alignment"
         except Exception as exc:  # noqa: BLE001  -- surface to the state label
@@ -529,13 +599,13 @@ class ShiftsDialog(QDialog):
         ax.clear()
         ax.set_ylim(0.1, 1.0)          # positive, so a log scale doesn't warn
         ax.set_yscale(yscale)
-        ax.set_xlabel(xlabel, color=T.TEXT_DIM, fontsize=9)
+        ax.set_xlabel(xlabel, color=T.TEXT_DIM, fontsize=12)
         ax.set_facecolor(API_PLOT_BG)
-        ax.tick_params(colors=T.TEXT_DIM, which="both", length=3, labelsize=8)
+        ax.tick_params(colors=T.TEXT_DIM, which="both", length=3, labelsize=11)
         for sp_ in ax.spines.values():
             sp_.set_color(T.BORDER)
         ax.text(0.5, 0.5, message, transform=ax.transAxes, ha="center", va="center",
-                color=T.TEXT_DIM, fontsize=9)
+                color=T.TEXT_DIM, fontsize=12)
 
     def _draw_overlay(self, ax, spectra, n_seg, title, xlabel, yscale="log"):
         ax.clear()
@@ -544,27 +614,64 @@ class ShiftsDialog(QDialog):
             ax.step(spe.energies, spe.counts, where="mid",
                     color=colors[i], lw=0.8, alpha=0.8)
         ax.set_yscale(yscale)
-        ax.set_title(title, color=T.TEXT_PRIMARY, fontsize=10)
-        ax.set_xlabel(xlabel, color=T.TEXT_DIM, fontsize=9)
+        ax.set_title(title, color=T.TEXT_PRIMARY, fontsize=12)
+        ax.set_xlabel(xlabel, color=T.TEXT_DIM, fontsize=12)
         ax.set_facecolor(API_PLOT_BG)
-        ax.tick_params(colors=T.TEXT_DIM, which="both", length=3, labelsize=8)
+        ax.tick_params(colors=T.TEXT_DIM, which="both", length=3, labelsize=11)
         for sp_ in ax.spines.values():
             sp_.set_color(T.BORDER)
         handles = [
             Line2D([0], [0], color=cm.viridis(0.0), lw=1.5, label="earlier"),
             Line2D([0], [0], color=cm.viridis(1.0), lw=1.5, label="later"),
         ]
-        ax.legend(handles=handles, loc="upper right", fontsize=7,
+        ax.legend(handles=handles, loc="upper right", fontsize=11,
                   facecolor=API_PLOT_BG, edgecolor=T.BORDER,
                   labelcolor=T.TEXT_DIM, framealpha=0.7)
 
+    @staticmethod
+    def _apply_css(color, solid):
+        """Stylesheet for an Apply button. ``solid`` fills it with *color* (the
+        pressed/active state); otherwise it is an outline with a transparent
+        fill (the idle state)."""
+        bg = color if solid else "transparent"
+        fg = T.BG_DARK if solid else color
+        weight = 800 if solid else 700
+        return (f"background-color:{bg}; color:{fg}; "
+                f"border:2px solid {color}; border-radius:5px; "
+                f"padding:8px 13px; font-size:14px; font-weight:{weight};")
+
     def _apply_segments(self, kind):
+        # Fill the button solid for the (blocking) alignment so the press is
+        # visible, then revert to the outline once it is applied.
+        b = self.btn_apply[kind]
+        b.setStyleSheet(self._apply_css(b._color, solid=True))
+        b.repaint()
         nseg, method, xr = self._params(kind)
+        recal = False
         if kind == "energy":
-            self.c.apply_energy_gainshift(nseg, method=method, xrange=xr)
+            recal = self.c.apply_energy_gainshift(nseg, method=method, xrange=xr,
+                                                  bins=self._bins("energy"))
         else:
-            self.c.apply_dt_gainshift(nseg, method=method, xrange=xr)
+            self.c.apply_dt_gainshift(nseg, method=method, xrange=xr,
+                                      bins=self._bins("time"))
+            self._time_preview_pending = False
+            self._previewed_aligned = None
         self._preview(kind)
+        QTimer.singleShot(220, lambda: b.setStyleSheet(b._base_css))
+        # Confirm the action with a clear message (the controller already pushed
+        # the descriptive label into lbl_state via _refresh_shift_labels).
+        label = self.c._egain_label if kind == "energy" else self.c._dt_label
+        axis = "Energy" if kind == "energy" else "Time"
+        self.lbl_state[kind].setText(f"✓ {axis} alignment applied  --  {label}")
+        # The energy shift recomputed the energy axis, dropping a file-provided
+        # calibration  -- tell the user it must be redone.
+        if recal:
+            QMessageBox.information(
+                self, "Re-calibrate after shifting",
+                "The energy gain-shift recomputed the energy axis from the raw "
+                "channels, so the run's previous energy calibration was "
+                "removed.\n\nRe-calibrate the energy before any quantitative "
+                "analysis.")
 
     def _apply_constant(self):
         txt = self.f_const.text().strip()
@@ -573,14 +680,27 @@ class ShiftsDialog(QDialog):
         except ValueError:
             self.lbl_state["time"].setText("Constant shift must be a number (ns)")
             return
-        self.c.apply_dt_shift(shift)
+        # If a segment alignment was previewed (and not yet committed), apply the
+        # constant directly on top of that previewed data -- using the exact
+        # aligned values the user saw, not a fresh re-alignment.
+        prev = self._previewed_aligned
+        if (self._time_preview_pending and prev is not None
+                and not self.c._dt_segments_applied
+                and self.c.df_api is not None and len(prev) == len(self.c.df_api)):
+            self.c.apply_dt_preview_shift(prev, shift, self._previewed_seg_desc)
+        else:
+            self.c.apply_dt_shift(shift)
         self._preview("time")
+        self.lbl_state["time"].setText(
+            f"✓ Time correction applied  --  {self.c._dt_label}")
 
     def _clear(self, kind):
         if kind == "energy":
             self.c.clear_energy_gainshift()
         else:
             self.c._clear_dt_shift()
+            self._time_preview_pending = False
+            self._previewed_aligned = None
         self._preview(kind)
 
     # ── state sync (called by the controller) ───────────────────────────────────
@@ -597,6 +717,407 @@ class ShiftsDialog(QDialog):
             return
         for kind in ("energy", "time"):
             self._preview(kind)
+
+
+class CombineRunsDialog(QDialog):
+    """Visualize and stitch several API runs (any dates) into one.
+
+    The Energy and Time tabs overlay the per-run spectra for the selected channel
+    so you can compare the runs before combining; "Combine & save" simply
+    concatenates the runs (in table order) and writes the result as a new run
+    (settings copied from the first run + provenance README). No drift correction
+    is applied here  -- if the combined run needs gain/time alignment, do it
+    afterwards with the single-run Shifts window (combine first, then shift)."""
+
+    def __init__(self, controller):
+        super().__init__(controller.app)
+        self.c = controller
+        self.setWindowTitle("Combine multiple runs")
+        self.setStyleSheet(T.STYLESHEET)
+        self.setWindowFlag(Qt.WindowMaximizeButtonHint, True)
+        self.setWindowFlag(Qt.WindowMinimizeButtonHint, True)
+        self.resize(1100, 720)
+
+        self.runs_data = None        # list of (date, runnr, df) once loaded
+        self.channels = []           # channels common to all loaded runs
+        self._data_path = None       # data path of the first seeded/loaded run
+
+        self.ax_raw = {}
+        self.canvas = {}
+        self.toolbar = {}
+        self.fig = {}
+
+        root = QHBoxLayout(self); root.setContentsMargins(8, 8, 8, 8); root.setSpacing(8)
+
+        # Plot side: Energy / Time tabs, each raw-over-aligned.
+        self.tabs = QTabWidget()
+        self.tabs.addTab(self._build_plot_tab("energy"), "Energy")
+        self.tabs.addTab(self._build_plot_tab("time"), "Time")
+        root.addWidget(self.tabs, 1)
+
+        # Control side.
+        root.addWidget(self._build_controls(), 0)
+
+    # ── construction ──────────────────────────────────────────────────────────
+    def _build_plot_tab(self, kind):
+        tab = QWidget()
+        col = QVBoxLayout(tab); col.setContentsMargins(0, 0, 0, 0); col.setSpacing(2)
+        fig = Figure(figsize=(6, 6), facecolor=API_PLOT_BG)
+        self.fig[kind] = fig
+        self.ax_raw[kind] = fig.add_subplot(111)
+        canvas = FigureCanvas(fig)
+        canvas.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        canvas.setMinimumWidth(540)
+        self.canvas[kind] = canvas
+        toolbar = NavToolbar(canvas, self)
+        toolbar.setObjectName("plot_toolbar")
+        toolbar.setIconSize(QSize(22, 22))
+        T.recolor_toolbar_icons(toolbar, T.TEXT_PRIMARY)
+        self.toolbar[kind] = toolbar
+        col.addWidget(toolbar)
+        col.addWidget(canvas, 1)
+        self._draw_placeholder(self.ax_raw[kind], "Add runs and press Load runs",
+                               self._xlabel(kind), self._yscale(kind))
+        return tab
+
+    def _build_controls(self):
+        side = QVBoxLayout(); side.setSpacing(6)
+        side.addWidget(header("RUNS TO COMBINE"))
+        note = QLabel("Runs are concatenated in table order (dates may differ). "
+                      "No shifting is applied  -- align the combined run later "
+                      "with the Shifts window if needed.")
+        note.setObjectName("stat_key"); note.setWordWrap(True)
+        side.addWidget(note)
+
+        self.table = QTableWidget(0, 2)
+        self.table.setHorizontalHeaderLabels(["Date", "Run"])
+        self.table.horizontalHeader().setSectionResizeMode(0, QHeaderView.Stretch)
+        self.table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeToContents)
+        self.table.setSelectionBehavior(QAbstractItemView.SelectRows)
+        self.table.setMinimumHeight(150)
+        side.addWidget(self.table)
+
+        rowbtns = QHBoxLayout(); rowbtns.setContentsMargins(0, 0, 0, 0)
+        btn_add = QPushButton("+ Add row"); btn_add.setObjectName("mini_btn")
+        btn_add.setCursor(Qt.PointingHandCursor)
+        btn_add.clicked.connect(lambda: self._add_row())
+        btn_del = QPushButton("Remove selected"); btn_del.setObjectName("mini_btn")
+        btn_del.setCursor(Qt.PointingHandCursor)
+        btn_del.clicked.connect(self._remove_selected)
+        rowbtns.addWidget(btn_add); rowbtns.addWidget(btn_del)
+        rw = QWidget(); rw.setLayout(rowbtns); side.addWidget(rw)
+
+        btn_load = QPushButton("Load runs"); btn_load.setObjectName("primary_btn")
+        btn_load.setCursor(Qt.PointingHandCursor)
+        btn_load.clicked.connect(self._load_runs)
+        side.addWidget(btn_load)
+
+        side.addWidget(hsep()); side.addWidget(header("VISUALIZATION"))
+        self.cb_channel = QComboBox()
+        self.cb_channel.setToolTip("Channel shown in the overlay plots")
+        self.cb_channel.currentIndexChanged.connect(lambda *_: self._preview_all())
+        r, _ = labeled_row("Preview ch", self.cb_channel); side.addWidget(r)
+
+        self.ed_ebins = QLineEdit(str(DEFAULT_EBINS)); self.ed_ebins.setFixedWidth(70)
+        self.ed_ebins.setToolTip("Number of energy bins in the overlay plot")
+        r, _ = labeled_row("Energy bins", self.ed_ebins); side.addWidget(r)
+        self.ed_tbins = QLineEdit(str(DEFAULT_TBINS)); self.ed_tbins.setFixedWidth(70)
+        self.ed_tbins.setToolTip("Number of time (dt) bins in the overlay plot")
+        r, _ = labeled_row("Time bins", self.ed_tbins); side.addWidget(r)
+
+        btn_prev = QPushButton("Preview"); btn_prev.setObjectName("action_btn")
+        btn_prev.setCursor(Qt.PointingHandCursor)
+        btn_prev.clicked.connect(self._preview_all)
+        side.addWidget(btn_prev)
+
+        side.addWidget(hsep()); side.addWidget(header("SAVE COMBINED RUN"))
+        self.ed_date = QLineEdit(); self.ed_date.setFixedWidth(150)
+        r, _ = labeled_row("Date", self.ed_date); side.addWidget(r)
+        self.ed_run = QLineEdit(); self.ed_run.setFixedWidth(150)
+        self.ed_run.setPlaceholderText("new run number")
+        r, _ = labeled_row("Run", self.ed_run); side.addWidget(r)
+
+        btn_save = QPushButton("Combine && save"); btn_save.setObjectName("open_btn")
+        btn_save.setCursor(Qt.PointingHandCursor)
+        btn_save.clicked.connect(self._combine_save)
+        side.addWidget(btn_save)
+
+        self.lbl_state = QLabel(""); self.lbl_state.setObjectName("stat_key")
+        self.lbl_state.setWordWrap(True); side.addWidget(self.lbl_state)
+        side.addStretch(1)
+
+        holder = QWidget(); holder.setFixedWidth(300); holder.setLayout(side)
+        return holder
+
+    # ── runs table ──────────────────────────────────────────────────────────
+    def _add_row(self, date="", runnr=""):
+        r = self.table.rowCount()
+        self.table.insertRow(r)
+        self.table.setItem(r, 0, QTableWidgetItem(str(date)))
+        self.table.setItem(r, 1, QTableWidgetItem(str(runnr)))
+
+    def _remove_selected(self):
+        rows = sorted({i.row() for i in self.table.selectedIndexes()}, reverse=True)
+        for r in rows:
+            self.table.removeRow(r)
+
+    def _table_runs(self):
+        """Parse the table into a list of (date, runnr); skips blank rows and
+        returns None on a bad run number (with a status message)."""
+        runs = []
+        for r in range(self.table.rowCount()):
+            d_item = self.table.item(r, 0)
+            n_item = self.table.item(r, 1)
+            date = d_item.text().strip() if d_item else ""
+            ntxt = n_item.text().strip() if n_item else ""
+            if not date and not ntxt:
+                continue
+            try:
+                runnr = int(ntxt)
+            except ValueError:
+                self.lbl_state.setText(f"Row {r + 1}: run number must be an integer")
+                return None
+            runs.append((date, runnr))
+        return runs
+
+    def seed(self, date, runnr, data_path):
+        """Pre-fill the first run (the one currently open in the API tab) when the
+        table is still empty, so the common 'this run plus a few more' flow starts
+        ready to go."""
+        self._data_path = data_path
+        if self.table.rowCount() == 0:
+            self._add_row(date, runnr)
+            self._add_row()  # one blank row ready for the next run
+        if not self.ed_date.text().strip():
+            self.ed_date.setText(str(date or ""))
+
+    # ── load / preview ────────────────────────────────────────────────────────
+    def _load_runs(self):
+        runs = self._table_runs()
+        if runs is None:
+            return
+        if len(runs) < 2:
+            self.lbl_state.setText("Add at least two runs to combine")
+            return
+        self.lbl_state.setText("Loading runs...")
+        try:
+            self.runs_data = cr.read_runs(runs, data_path=self._data_path)
+        except Exception as exc:  # noqa: BLE001
+            traceback.print_exc()
+            self.lbl_state.setText(f"Could not load runs: {exc}")
+            self.runs_data = None
+            return
+        self.channels = cr.channels_in_common(self.runs_data)
+        self.cb_channel.blockSignals(True)
+        self.cb_channel.clear()
+        self.cb_channel.addItems([str(ch) for ch in self.channels])
+        self.cb_channel.blockSignals(False)
+        n = sum(len(df) for _, _, df in self.runs_data)
+        chan_txt = (', '.join(str(c) for c in self.channels)
+                    if self.channels else "none shared (preview off)")
+        self.lbl_state.setText(
+            f"Loaded {len(self.runs_data)} runs · channels {chan_txt} "
+            f"· {n:,} events")
+        self._preview_all()
+
+    def _preview_channel(self):
+        try:
+            return self.channels[self.cb_channel.currentIndex()]
+        except (IndexError, ValueError):
+            return None
+
+    def _bins(self, kind):
+        ed = self.ed_ebins if kind == "energy" else self.ed_tbins
+        default = DEFAULT_EBINS if kind == "energy" else DEFAULT_TBINS
+        try:
+            return max(2, int(float(ed.text().strip())))
+        except ValueError:
+            return default
+
+    def _preview_all(self):
+        if self.runs_data is None:
+            return
+        for kind in ("energy", "time"):
+            self._preview(kind)
+
+    def _preview(self, kind):
+        ch = self._preview_channel()
+        if self.runs_data is None or ch is None:
+            return
+        try:
+            spectra = cr.run_spectra(self.runs_data, ch, kind,
+                                     bins=self._bins(kind))
+        except Exception as exc:  # noqa: BLE001
+            self.lbl_state.setText(f"Preview failed: {exc}")
+            return
+        labels = [f"{d}-{r}" for d, r, _ in self.runs_data]
+        self._draw_overlay(self.ax_raw[kind], spectra, labels,
+                           f"Runs overlay  -- ch {ch}",
+                           self._xlabel(kind), self._yscale(kind))
+        self.fig[kind].tight_layout()
+        self.canvas[kind].draw_idle()
+        self.toolbar[kind].update()
+
+    # ── drawing ───────────────────────────────────────────────────────────────
+    @staticmethod
+    def _xlabel(kind):
+        return "Raw channel" if kind == "energy" else "dt (ns)"
+
+    @staticmethod
+    def _yscale(kind):
+        return "log" if kind == "energy" else "linear"
+
+    def _style_axis(self, ax, xlabel, yscale):
+        ax.set_yscale(yscale)
+        ax.set_xlabel(xlabel, color=T.TEXT_DIM, fontsize=12)
+        ax.set_facecolor(API_PLOT_BG)
+        ax.tick_params(colors=T.TEXT_DIM, which="both", length=3, labelsize=11)
+        for sp_ in ax.spines.values():
+            sp_.set_color(T.BORDER)
+
+    def _draw_placeholder(self, ax, message, xlabel, yscale="log"):
+        ax.clear()
+        ax.set_ylim(0.1, 1.0)
+        self._style_axis(ax, xlabel, yscale)
+        if message:
+            ax.text(0.5, 0.5, message, transform=ax.transAxes, ha="center",
+                    va="center", color=T.TEXT_DIM, fontsize=12)
+
+    def _draw_overlay(self, ax, spectra, labels, title, xlabel, yscale="log"):
+        ax.clear()
+        # Start above viridis's dark-blue end so the first (reference) run reads
+        # as a light teal that stands out against the dark plot background.
+        n = max(len(spectra), 1)
+        colors = cm.viridis(np.linspace(0.35, 1.0, n))
+        for i, spe in enumerate(spectra):
+            ax.step(spe.energies, spe.counts, where="mid", color=colors[i],
+                    lw=0.9, alpha=0.85, label=labels[i] if i < len(labels) else None)
+        ax.set_title(title, color=T.TEXT_PRIMARY, fontsize=12)
+        self._style_axis(ax, xlabel, yscale)
+        ax.legend(loc="upper right", fontsize=9, facecolor=API_PLOT_BG,
+                  edgecolor=T.BORDER, labelcolor=T.TEXT_DIM, framealpha=0.7,
+                  ncol=2 if len(spectra) > 4 else 1)
+
+    # ── combine & save ──────────────────────────────────────────────────────
+    def _combine_save(self):
+        if self.runs_data is None:
+            self.lbl_state.setText("Load the runs first")
+            return
+        new_date = self.ed_date.text().strip()
+        if not new_date:
+            self.lbl_state.setText("Enter a date for the combined run")
+            return
+        try:
+            new_runnr = int(self.ed_run.text().strip())
+        except ValueError:
+            self.lbl_state.setText("New run number must be an integer")
+            return
+
+        try:
+            run_dir, _, _ = read_parquet_api.run_parquet_path(
+                new_date, new_runnr, self._data_path)
+        except Exception as exc:  # noqa: BLE001
+            self.lbl_state.setText(f"Bad destination date/run: {exc}")
+            return
+        if run_dir.exists():
+            resp = QMessageBox.question(
+                self, "Overwrite run?",
+                f"Run {new_date}-{new_runnr} already exists at:\n{run_dir}\n\n"
+                "Overwrite its combined parquet data?",
+                QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
+            if resp != QMessageBox.Yes:
+                self.lbl_state.setText("Combine cancelled")
+                return
+
+        self.lbl_state.setText("Combining...")
+        try:
+            combined, info = cr.combine_runs(self.runs_data)
+            out = read_parquet_api.save_combined_run(
+                combined, new_date, new_runnr, self._data_path, overwrite=True)
+        except Exception as exc:  # noqa: BLE001
+            traceback.print_exc()
+            self.lbl_state.setText(f"Could not combine/save: {exc}")
+            return
+
+        extra = self._write_metadata(run_dir, new_date, new_runnr, info)
+        msg = (f"Saved combined run {new_date}-{new_runnr} "
+               f"({info['n_events']:,} events from {len(info['sources'])} runs) "
+               f"→ {out}")
+        if extra:
+            msg += f"  ·  {extra}"
+        self.lbl_state.setText(msg)
+        self.c._status(msg)
+
+        # Combining invalidates any per-run calibration; warn that the dropped
+        # columns mean the combined run must be re-calibrated before analysis.
+        if info["dropped_cal"]:
+            QMessageBox.information(
+                self, "Combined run is uncalibrated",
+                f"Saved combined run {new_date}-{new_runnr}.\n\n"
+                f"The source runs carried calibration columns "
+                f"({', '.join(info['dropped_cal'])}) which were removed  -- "
+                "combining runs invalidates them.\n\n"
+                "Re-calibrate the energy (and re-align the time, if needed) on "
+                "the combined run before any quantitative analysis.")
+
+    def _write_metadata(self, dst_run_dir, new_date, new_runnr, info):
+        """Copy the first run's settings folder as a starting point and write a
+        provenance README listing every source run. Best-effort; returns a short
+        note. Combined live-time is *not* summed automatically  -- the README
+        flags that the settings come from the first run only."""
+        notes = []
+        first_date, first_runnr, _ = self.runs_data[0]
+        try:
+            src_run_dir, _, _ = read_parquet_api.run_parquet_path(
+                first_date, first_runnr, self._data_path)
+        except Exception:  # noqa: BLE001
+            src_run_dir = None
+
+        if src_run_dir is not None:
+            src_settings = src_run_dir / "settings"
+            if src_settings.is_dir():
+                try:
+                    shutil.copytree(src_settings, dst_run_dir / "settings",
+                                    dirs_exist_ok=True)
+                    notes.append("settings copied (from first run)")
+                except Exception:  # noqa: BLE001
+                    traceback.print_exc()
+                    notes.append("settings copy failed")
+
+        try:
+            stamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            lines = [
+                "This run was combined (concatenated) from multiple source runs "
+                "by the wara API tab. No drift correction was applied.",
+                "",
+                f"Combined on : {stamp}",
+                f"New run     : {new_date}-{new_runnr}",
+                f"Total events: {info['n_events']:,}",
+                "",
+                "Source runs (in combine order):",
+            ]
+            for d, r, n in info["sources"]:
+                lines.append(f"  - {d}-{r}  ({n:,} events)")
+            if info["dropped_cal"]:
+                lines += [
+                    "",
+                    f"Calibration columns removed: {', '.join(info['dropped_cal'])}"
+                    "  -- combining invalidates per-run calibration. "
+                    "RE-CALIBRATE the energy (and re-align time, if needed) on "
+                    "this combined run before analysis.",
+                ]
+            lines += [
+                "",
+                "NOTE: the settings/ folder was copied from the first run only; "
+                "live-time and count totals across the combined runs are NOT "
+                "summed automatically and may need manual adjustment.",
+            ]
+            (dst_run_dir / "README.txt").write_text("\n".join(lines) + "\n",
+                                                    encoding="utf-8")
+            notes.append("README written")
+        except Exception:  # noqa: BLE001
+            traceback.print_exc()
+        return "; ".join(notes)
 
 
 # ── Plot column ───────────────────────────────────────────────────────────────
@@ -713,13 +1234,21 @@ class ApiPage(QWidget):
             val = 10 ** val
         return val
 
+    # Minimum readable font sizes shared across the API plots.
+    LABEL_FS = 12
+    TICK_FS = 11
+
     def _style(self, ax, grid=False):
         ax.set_facecolor(API_PLOT_BG)
-        ax.tick_params(colors=T.TEXT_DIM, which="both", length=3)
+        ax.tick_params(colors=T.TEXT_DIM, which="both", length=3,
+                       labelsize=self.TICK_FS)
         ax.xaxis.label.set_color(T.TEXT_DIM)
         ax.yaxis.label.set_color(T.TEXT_DIM)
+        ax.xaxis.label.set_fontsize(self.LABEL_FS)
+        ax.yaxis.label.set_fontsize(self.LABEL_FS)
         if ax.get_title():
             ax.title.set_color(T.TEXT_PRIMARY)
+            ax.title.set_fontsize(self.LABEL_FS)
         for sp_ in ax.spines.values():
             sp_.set_color(T.BORDER)
         # All three panels read cleaner without grid lines (the hexbin, and the
@@ -761,22 +1290,41 @@ class SelectionsDialog(QDialog):
     """Non-modal window for managing energy selections and plotting S/B vs dt.
 
     The dialog holds the full Add / Remove / Clear selection workflow that used
-    to live inline in the options panel, plus the significance-vs-dt controls.
+    to live inline in the options panel, plus the time-slice-fits controls
+    (pick a selection, dt slice width and technique to profile a line vs dt).
     Designed to grow: future tabs will add dt and X-Y selection management here.
     """
 
     def __init__(self, controller):
         super().__init__(controller.app)
         self.c = controller
-        self.setWindowTitle("Energy Selections")
+        self.setWindowTitle("E / dt / X-Y Selections")
         self.setStyleSheet(T.STYLESHEET)
         self.setWindowFlag(Qt.WindowMaximizeButtonHint, True)
         self.setWindowFlag(Qt.WindowMinimizeButtonHint, True)
-        self.resize(420, 540)
+        self.resize(1180, 620)
 
-        lay = QVBoxLayout(self)
-        lay.setContentsMargins(10, 10, 10, 10)
+        # Three tabs: Energy (implemented), dt and X-Y (placeholders for now).
+        root = QVBoxLayout(self)
+        root.setContentsMargins(8, 8, 8, 8)
+        root.setSpacing(6)
+        self.tabs = QTabWidget()
+        root.addWidget(self.tabs)
+
+        # ── Energy selections tab ─────────────────────────────────────
+        energy_tab = QWidget()
+        outer = QHBoxLayout(energy_tab)
+        outer.setContentsMargins(8, 8, 8, 8)
+        outer.setSpacing(12)
+
+        # Left: a compact, fixed-width controls column so the buttons and boxes
+        # stay nicely sized instead of stretching across the wide window.
+        left_w = QWidget()
+        left_w.setFixedWidth(320)
+        lay = QVBoxLayout(left_w)
+        lay.setContentsMargins(0, 0, 0, 0)
         lay.setSpacing(6)
+        outer.addWidget(left_w, 0)
 
         # ── Selection list ────────────────────────────────────────────
         lay.addWidget(header("ENERGY SELECTIONS"))
@@ -809,76 +1357,146 @@ class SelectionsDialog(QDialog):
             "Overlay each selection on the energy, dt and X-Y panels")
         lay.addWidget(self.btn_plot_sel)
 
-        self.cb_norm_dt = QCheckBox("Plot S/B vs dt (straight-line background)")
-        self.cb_norm_dt.setChecked(True)
-        self.cb_norm_dt.setToolTip(
-            "Plot each selection's dt overlay as a peak-to-background ratio S/B "
-            "on a secondary y-axis, where the background B is the area under the "
-            "straight line joining the band edges (Emin, Emax) and S is the area "
-            "above it.\nUnchecked: plot the raw selected counts instead.")
-        self.cb_norm_dt.toggled.connect(self._on_norm_toggled)
-        lay.addWidget(self.cb_norm_dt)
-
-        # ── Significance controls ─────────────────────────────────────
+        # ── Time-slice fits vs dt ─────────────────────────────────────
         lay.addWidget(hsep())
-        lay.addWidget(header("SIGNIFICANCE vs dt"))
+        lay.addWidget(header("TIME-SLICE FITS vs dt"))
         note = QLabel(
-            "For each dt slice compute S/B (net / background).  "
-            "Points with S/√B below the threshold are set to zero.")
+            "Split dt into slices and measure one selection's line in each, "
+            "then overlay the value vs dt on the dt panel.")
         note.setObjectName("stat_key")
         note.setWordWrap(True)
         lay.addWidget(note)
 
-        self.ed_sideband = QLineEdit("100")
-        self.ed_sideband.setFixedWidth(80)
-        self.ed_sideband.setToolTip(
-            "Width of each sideband region (same units as the energy axis)")
-        srow, _ = labeled_row("Sideband width", self.ed_sideband)
-        lay.addWidget(srow)
+        self.cmb_sel = QComboBox()
+        self.cmb_sel.setToolTip("Which selection (energy line) to profile vs dt")
+        lay.addWidget(_combo_row("Selection", self.cmb_sel))
 
-        self.ed_dt_slice = QLineEdit("")
+        self.cmb_tech = QComboBox()
+        self.cmb_tech.addItems([TECHNIQUE_LABELS[k]
+                                for k in (TECH_FIT, TECH_SNR)])
+        self.cmb_tech.setToolTip(
+            "Fit: open the interactive slice-fit window; its Method selector "
+            "chooses peak fit vs net area − linear bkg per slice.\n"
+            "SNR: peak signal-to-noise from the kernel search (no fitting).")
+        lay.addWidget(_combo_row("Technique", self.cmb_tech))
+
+        self.ed_dt_slice = QLineEdit("2")
         self.ed_dt_slice.setFixedWidth(80)
         self.ed_dt_slice.setPlaceholderText("auto")
         self.ed_dt_slice.setToolTip(
-            "dt slice width (ns).  Leave blank to use the current dt bin width.")
+            "dt slice width (ns).  Leave blank for ~10 slices over the dt range.")
         drow, _ = labeled_row("dt slice (ns)", self.ed_dt_slice)
         lay.addWidget(drow)
 
-        self.ed_min_sigma = QLineEdit("5.0")
-        self.ed_min_sigma.setFixedWidth(80)
-        self.ed_min_sigma.setToolTip(
-            "Significance threshold: points with S/√B below this are plotted as zero")
-        sigrow, _ = labeled_row("Min σ", self.ed_min_sigma)
-        lay.addWidget(sigrow)
+        self.ed_min_snr = QLineEdit("3")
+        self.ed_min_snr.setFixedWidth(80)
+        self.ed_min_snr.setToolTip(
+            "Minimum SNR for the per-slice peak search.  Lower finds weaker "
+            "peaks (more candidates in the fit window); higher is stricter.\n"
+            "Change it and click Slice & fit again to re-find peaks.")
+        snrrow, _ = labeled_row("Min SNR", self.ed_min_snr)
+        lay.addWidget(snrrow)
 
-        sig_btn_row = QHBoxLayout()
-        sig_btn_row.setContentsMargins(0, 0, 0, 0)
-        sig_btn_row.setSpacing(6)
-        self.btn_plot_sig = QPushButton("Plot significance")
-        self.btn_plot_sig.setObjectName("primary_btn")
-        self.btn_plot_sig.setCursor(Qt.PointingHandCursor)
-        self.btn_plot_sig.setToolTip(
-            "Overlay S/B vs dt on the dt histogram (secondary y-axis)")
-        self.btn_clear_sig = QPushButton("Clear")
-        self.btn_clear_sig.setObjectName("mini_btn")
-        self.btn_clear_sig.setCursor(Qt.PointingHandCursor)
-        self.btn_clear_sig.setToolTip("Remove the significance overlay")
-        sig_btn_row.addWidget(self.btn_plot_sig, 1)
-        sig_btn_row.addWidget(self.btn_clear_sig, 0)
-        lay.addLayout(sig_btn_row)
+        sf_btn_row = QHBoxLayout()
+        sf_btn_row.setContentsMargins(0, 0, 0, 0)
+        sf_btn_row.setSpacing(6)
+        self.btn_slice_fit = QPushButton("Slice && fit")
+        self.btn_slice_fit.setObjectName("primary_btn")
+        self.btn_slice_fit.setCursor(Qt.PointingHandCursor)
+        self.btn_slice_fit.setToolTip(
+            "Build the per-slice spectra, open the spectra figure and "
+            "(for fit techniques) the interactive slice-fit window")
+        self.btn_clear_slice = QPushButton("Clear")
+        self.btn_clear_slice.setObjectName("mini_btn")
+        self.btn_clear_slice.setCursor(Qt.PointingHandCursor)
+        self.btn_clear_slice.setToolTip("Remove the vs-dt overlay and stored results")
+        sf_btn_row.addWidget(self.btn_slice_fit, 1)
+        sf_btn_row.addWidget(self.btn_clear_slice, 0)
+        lay.addLayout(sf_btn_row)
 
-        lay.addStretch(1)
+        # Normalize the vs-dt overlay by a reference selection (e.g. Mg/Si).
+        # Enabled once at least two selections have a stored vs-dt curve.
+        self.cmb_ratio_ref = QComboBox()
+        self.cmb_ratio_ref.setEnabled(False)
+        self.cmb_ratio_ref.setToolTip(
+            "Plot each selection's vs-dt curve divided by this reference "
+            "selection (e.g. Mg/Si, Fe/Si).  Needs at least two plotted "
+            "selections; choose “(absolute)” for the raw values.")
+        self.cmb_ratio_ref.currentIndexChanged.connect(self._on_ratio_ref_changed)
+        lay.addWidget(_combo_row("Ratio to", self.cmb_ratio_ref))
+        lay.addStretch(1)   # keep the controls packed at the top
+
+        # Right: the per-slice energy spectra take the rest of the wide window
+        # (embedded canvas + navigation toolbar for zoom/pan).
+        right_w = QWidget()
+        rlay = QVBoxLayout(right_w)
+        rlay.setContentsMargins(0, 0, 0, 0)
+        rlay.setSpacing(6)
+        # Header row with a view toggle: overlaid spectra vs waterfall (offset).
+        hdr_row = QHBoxLayout()
+        hdr_row.setContentsMargins(0, 0, 0, 0)
+        hdr_row.addWidget(header("PER-SLICE SPECTRA"))
+        hdr_row.addStretch(1)
+        view_lbl = QLabel("View:"); view_lbl.setObjectName("stat_key")
+        hdr_row.addWidget(view_lbl)
+        self.cmb_spectra_view = QComboBox()
+        self.cmb_spectra_view.addItems(["Overlay", "Offset", "Waterfall"])
+        self.cmb_spectra_view.setToolTip(
+            "Overlay: all per-slice spectra on one log axis.\n"
+            "Offset: spectra offset vertically per dt slice (earliest at the "
+            "bottom), coloured by dt.\n"
+            "Waterfall: 2-D heatmap of energy × dt, colour = counts (log).")
+        self.cmb_spectra_view.currentIndexChanged.connect(
+            self._on_spectra_view_changed)
+        hdr_row.addWidget(self.cmb_spectra_view)
+        rlay.addLayout(hdr_row)
+        # Remembered args so the view toggle can redraw without re-slicing.
+        self._spectra_args = None
+        self.spectra_fig = Figure(facecolor=API_PLOT_BG)
+        self.spectra_canvas = FigureCanvas(self.spectra_fig)
+        self.spectra_canvas.setMinimumHeight(300)
+        self.spectra_canvas.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        self.spectra_toolbar = NavToolbar(self.spectra_canvas, self)
+        self.spectra_toolbar.setObjectName("plot_toolbar")
+        self.spectra_toolbar.setIconSize(QSize(22, 22))
+        T.recolor_toolbar_icons(self.spectra_toolbar, T.TEXT_PRIMARY)
+        rlay.addWidget(self.spectra_toolbar)
+        rlay.addWidget(self.spectra_canvas, 1)
+        outer.addWidget(right_w, 1)
+
+        self.tabs.addTab(energy_tab, "Energy selections")
+        self.tabs.addTab(
+            self._placeholder_tab("dt selections — coming soon."),
+            "dt selections")
+        self.tabs.addTab(
+            self._placeholder_tab("X-Y selections — coming soon."),
+            "X-Y selections")
 
         # ── Wire internal buttons to the controller ───────────────────
         self.btn_add.clicked.connect(self.c._arm_selection)
         self.btn_clear_sel.clicked.connect(self.c._clear_selections)
         self.btn_plot_sel.clicked.connect(self.c._plot_selections)
-        self.btn_plot_sig.clicked.connect(self._on_plot_significance)
-        self.btn_clear_sig.clicked.connect(self.c._clear_significance)
+        self.btn_slice_fit.clicked.connect(self._on_slice_fit)
+        self.btn_clear_slice.clicked.connect(self.c._clear_slice_overlay)
+
+    @staticmethod
+    def _placeholder_tab(message):
+        """A simple centred 'coming soon' tab for not-yet-implemented sections."""
+        w = QWidget()
+        lay = QVBoxLayout(w)
+        lbl = QLabel(message)
+        lbl.setObjectName("stat_key")
+        lbl.setAlignment(Qt.AlignCenter)
+        lay.addStretch(1)
+        lay.addWidget(lbl)
+        lay.addStretch(1)
+        return w
 
     # ── public API (called by controller) ─────────────────────────────────────
     def refresh_list(self):
         """Rebuild the selection rows from the controller's current list."""
+        self._refresh_sel_combo()
+        self.refresh_ratio_combo()
         box = self.sel_box
         while box.count():
             item = box.takeAt(0)
@@ -924,22 +1542,49 @@ class SelectionsDialog(QDialog):
             b.setStyleSheet("")
 
     # ── internal ──────────────────────────────────────────────────────────────
-    def _on_norm_toggled(self, _checked):
-        """Live-refresh the dt overlay when the normalize toggle changes, but
-        only if selections are already on the plot (don't force a first plot)."""
-        if self.c.selections and self.c.df_current is not None:
-            self.c._plot_time_overlays()
-            self.c.page.reset_nav()
-            self.c.page.canvas.draw_idle()
+    def _refresh_sel_combo(self):
+        """Keep the selection picker in sync with the controller's list,
+        preserving the current choice by label where possible."""
+        cmb = self.cmb_sel
+        prev = cmb.currentText()
+        cmb.blockSignals(True)
+        cmb.clear()
+        for sel in self.c.selections:
+            cmb.addItem(f"{sel['label']}  [{sel['emin']:g}–{sel['emax']:g}]")
+        idx = cmb.findText(prev)
+        if idx >= 0:
+            cmb.setCurrentIndex(idx)
+        cmb.blockSignals(False)
 
-    def _on_plot_significance(self):
-        try:
-            sideband_w = float(self.ed_sideband.text().strip())
-        except ValueError:
-            self.c._status("Sideband width must be a number")
+    def refresh_ratio_combo(self):
+        """Sync the reference picker with the stored vs-dt results; enable it
+        only when at least two selections have a curve to ratio."""
+        cmb = self.cmb_ratio_ref
+        prev = cmb.currentText()
+        cmb.blockSignals(True)
+        cmb.clear()
+        cmb.addItem("(absolute)")
+        for label in self.c._slice_results:
+            cmb.addItem(label)
+        idx = cmb.findText(prev)
+        cmb.setCurrentIndex(idx if idx >= 0 else 0)
+        cmb.setEnabled(len(self.c._slice_results) >= 2)
+        cmb.blockSignals(False)
+
+    def _on_ratio_ref_changed(self, _idx):
+        txt = self.cmb_ratio_ref.currentText()
+        ref = None if (not txt or txt == "(absolute)") else txt
+        self.c._set_slice_ratio_ref(ref)
+
+    def _on_slice_fit(self):
+        idx = self.cmb_sel.currentIndex()
+        if idx < 0 or idx >= len(self.c.selections):
+            self.c._status("Add and select an energy selection first")
             return
+        sel = self.c.selections[idx]
+        technique = TECHNIQUE_FROM_LABEL.get(self.cmb_tech.currentText(), TECH_FIT)
         dt_slice_txt = self.ed_dt_slice.text().strip()
-        dt_slice_w = None   # None → derive from current tbins
+        dt_slice_w = None   # None → ~10 slices over the dt range
         if dt_slice_txt:
             try:
                 dt_slice_w = float(dt_slice_txt)
@@ -949,10 +1594,36 @@ class SelectionsDialog(QDialog):
                 self.c._status("dt slice width must be a positive number")
                 return
         try:
-            min_sigma = float(self.ed_min_sigma.text().strip())
+            min_snr = float(self.ed_min_snr.text().strip())
+            if min_snr <= 0:
+                raise ValueError
         except ValueError:
-            min_sigma = 5.0
-        self.c._plot_significance(sideband_w, dt_slice_w, min_sigma)
+            self.c._status("Min SNR must be a positive number")
+            return
+        self.c._open_slice_fits(sel, dt_slice_w, technique, min_snr)
+
+    def show_slice_spectra(self, slices, band, x_label):
+        """Render the per-slice energy spectra into the embedded canvas, in the
+        currently selected view (overlay or waterfall)."""
+        self._spectra_args = (slices, band, x_label)
+        self._draw_spectra()
+
+    def _draw_spectra(self):
+        """(Re)draw the embedded spectra in the current view mode."""
+        if self._spectra_args is None:
+            return
+        slices, band, x_label = self._spectra_args
+        view = self.cmb_spectra_view.currentText()
+        if view == "Offset":
+            plot_slice_offset(self.spectra_fig, slices, band, x_label)
+        elif view == "Waterfall":
+            plot_slice_waterfall(self.spectra_fig, slices, band, x_label)
+        else:
+            plot_slice_spectra(self.spectra_fig, slices, band, x_label)
+        self.spectra_canvas.draw_idle()
+
+    def _on_spectra_view_changed(self, _idx):
+        self._draw_spectra()
 
 
 # ── Options column ────────────────────────────────────────────────────────────
@@ -1053,7 +1724,25 @@ class ApiOptions(QScrollArea):
         self.btn_filters.setCursor(Qt.PointingHandCursor)
         lay.addWidget(self.btn_filters)
 
-        # ── Energy calibration ───────────────────────────────────────
+        # ── Combine multiple runs ────────────────────────────────────
+        # First step in the pipeline: stitch several runs  -- possibly on different
+        # dates  -- into one by concatenating them, then correct drift and
+        # calibrate the *combined* run below.
+        lay.addWidget(hsep()); lay.addWidget(header("COMBINE RUNS"))
+        comb_note = QLabel(
+            "Combine several runs (any dates) into one by concatenating them. "
+            "Calibration columns are dropped  -- re-shift and re-calibrate the "
+            "combined run afterwards.")
+        comb_note.setObjectName("stat_key"); comb_note.setWordWrap(True)
+        lay.addWidget(comb_note)
+        self.btn_combine = QPushButton("Combine multiple...")
+        self.btn_combine.setObjectName("yellow_btn")
+        self.btn_combine.setCursor(Qt.PointingHandCursor)
+        self.btn_combine.setToolTip(
+            "Open the multi-run combine window: visualize and stitch several runs "
+            "into one new run")
+        lay.addWidget(self.btn_combine)
+
         # ── Drift correction (time + energy shifts) ──────────────────
         # Comes before calibration: drift is corrected on the raw channels first,
         # then the calibration maps the corrected channels to energy.
@@ -1097,13 +1786,13 @@ class ApiOptions(QScrollArea):
         self.lbl_cal.setObjectName("stat_key"); self.lbl_cal.setWordWrap(True)
         lay.addWidget(self.lbl_cal)
 
-        # ── Energy selections ────────────────────────────────────────
-        lay.addWidget(hsep()); lay.addWidget(header("ENERGY SELECTIONS"))
+        # ── E / dt / X-Y selections ──────────────────────────────────
+        lay.addWidget(hsep()); lay.addWidget(header("E/dt/XY SELECTIONS"))
         self.btn_selections = QPushButton("Selections...")
         self.btn_selections.setObjectName("open_btn")
         self.btn_selections.setCursor(Qt.PointingHandCursor)
         self.btn_selections.setToolTip(
-            "Manage energy selections and plot significance vs dt")
+            "Manage energy / dt / X-Y selections and run time-slice fits vs dt")
         lay.addWidget(self.btn_selections)
         self.lbl_sel_count = QLabel("No selections")
         self.lbl_sel_count.setObjectName("stat_key")
@@ -1173,9 +1862,16 @@ class ApiController:
         self._arm_temp_selector = False
         self._sel_color_idx = 0
         self._sel_dlg = None        # SelectionsDialog (created lazily)
-        self._sig_active = False    # significance overlay currently shown
-        self._ax_sig = None         # the twinx axes carrying the S/B curves
-        self._ax_norm = None        # the twinx axes carrying normalized dt overlays
+        self._sig_active = False    # dt-panel twin overlay currently shown
+        self._ax_sig = None         # the twinx axes carrying the vs-dt curves
+        # Time-slice fits vs dt: stored per-selection results (label -> payload)
+        # and the open slice-fit windows.
+        self._slice_results = {}
+        self._slice_fit_wins = set()
+        # When set to a selection label, the dt overlay shows every other
+        # selection normalized by this reference (e.g. Mg/Si); None ⇒ absolute.
+        self._slice_ratio_ref = None
+        self._selections_plotted = False   # selection band overlays on screen
         # Energy calibration: the channel column the histogram is binned from
         # (set in _configure_keys), the polynomial coeffs retrieved from the
         # Calibration tab, and the energy units once calibrated (None ⇒ raw
@@ -1193,15 +1889,20 @@ class ApiController:
         # _chan_key points at it (so it layers under the polynomial calibration).
         self._egain_applied = False
         self._egain_label = ""
-        # Time correction (Shifts... window): a constant added to ``dt`` or a
-        # segment alignment, both writing the ``dt_cal`` column. _dt_shift holds
-        # the constant (float) when that mode is used; _dt_segments_applied marks
-        # the segment-alignment mode. Either makes _dt_key switch to "dt_cal".
+        # Time correction (Shifts... window): a segment alignment and/or a
+        # constant offset, composed together. The segment alignment is written
+        # to ``dt_aligned``; the final ``dt_cal`` is ``dt_aligned`` (or raw
+        # ``dt`` when no alignment) plus the constant. _dt_shift holds the
+        # constant (float) when applied; _dt_segments_applied marks the
+        # alignment; _dt_seg_desc is its descriptive text. Either makes _dt_key
+        # switch to "dt_cal".
         self._dt_shift = None
         self._dt_segments_applied = False
+        self._dt_seg_desc = ""
         self._dt_label = "No time shift"
         self._dt_key = "dt"
         self._shifts_dlg = None
+        self._combine_dlg = None
         self._wire()
         self._refresh_sel_list()
 
@@ -1224,6 +1925,7 @@ class ApiController:
         o.btn_retrieve_cal.clicked.connect(self._retrieve_calibration)
         o.btn_clear_cal.clicked.connect(self._clear_calibration)
         o.btn_shifts.clicked.connect(self._open_shifts)
+        o.btn_combine.clicked.connect(self._open_combine)
         o.cb_spe_log.toggled.connect(self._toggle_spe_log)
         o.cb_xy_log.toggled.connect(lambda *_: self._replot_xy())
         o.ed_vmax.returnPressed.connect(self._apply_vmax)
@@ -1273,6 +1975,9 @@ class ApiController:
         else:
             b.setStyleSheet("")
             self._detach_selectors()
+            # Force a redraw so the (now-hidden) span/rectangle selectors
+            # actually disappear from the panels instead of lingering.
+            self.page.canvas.draw_idle()
             self._status("Interactive cuts disabled")
 
     def _status(self, msg):
@@ -1282,7 +1987,7 @@ class ApiController:
     def _load(self):
         # Brighten the Load button so the click registers before the (blocking)
         # file read freezes the UI  -- purple to match its open_btn identity.
-        self._flash_button(self.opts.btn_load, bg=T.SNR_PURPLE, fg=T.BG_DARK)
+        self._flash_button(self.opts.btn_load)
         try:
             self._load_file()
         except Exception as exc:  # noqa: BLE001  -- surface load errors to the user
@@ -1362,6 +2067,7 @@ class ApiController:
         # ...and any drift corrections: the fresh dataframe has no derived columns.
         self._dt_shift = None
         self._dt_segments_applied = False
+        self._dt_seg_desc = ""
         self._dt_label = "No time shift"
         self._dt_key = "dt"
         self._egain_applied = False
@@ -1469,7 +2175,6 @@ class ApiController:
         # twinx references don't keep a stale handle to the old axes.
         self._sig_active = False
         self._ax_sig = None
-        self._ax_norm = None
         self.page.build_axes(flood_field=self.flood_field)
         self._detach_selectors()
         if self.flood_field:
@@ -1534,9 +2239,6 @@ class ApiController:
         # Always (re)compute the histogram, even if the axis isn't ready yet, so
         # Send has data to work with regardless of draw timing.
         self._compute_energy_hist(df)
-        # The energy histogram just changed  -- clear any "✓ Sent" confirmation so
-        # the button reflects that this spectrum hasn't been sent yet.
-        self._reset_send_button()
         ax = self.page.ax_spe
         if ax is None:
             return
@@ -1546,12 +2248,23 @@ class ApiController:
         ax.set_ylabel("Counts")
         self.page._style(ax)
 
+    def _axis_units(self):
+        """Units of the energy axis *as currently shown*, or None for a channel
+        axis.  Single source of truth shared by the panel x-label, the per-slice
+        spectra and send-to-spectrum so they can never disagree.
+
+        For API dataframes only an applied calibration (the ``energy_cal``
+        column, which sets ``e_units``) counts as a real energy axis; every
+        other column — ``energy``, ``energy_orig``, the drift-corrected
+        ``energy_drift`` — is treated and labelled as raw channels."""
+        if self.e_units and self.ekey == "energy_cal":
+            return self.e_units
+        return None
+
     def _energy_xlabel(self):
-        """Energy-panel x-label: the calibrated units once a calibration is
-        applied, MeV for simulated/calibrated data, else raw channels."""
-        if self.e_units:
-            return f"Energy ({self.e_units})"
-        return "Energy (MeV)" if self.ekey == "energy" else "Channels"
+        """Energy-panel x-label, derived from :meth:`_axis_units`."""
+        units = self._axis_units()
+        return f"Energy ({units})" if units else "Channels"
 
     def _plot_time(self, df):
         ax = self.page.ax_dt
@@ -1575,7 +2288,7 @@ class ApiController:
         ax.set_xlabel("dt (ns, shifted)" if self._dt_corrected else "dt (ns)")
         ax.set_ylabel("Counts")
         if corrected:
-            ax.legend(loc="upper right", fontsize=8, facecolor=API_PLOT_BG,
+            ax.legend(loc="upper right", fontsize=11, facecolor=API_PLOT_BG,
                       edgecolor=T.BORDER, labelcolor=T.TEXT_PRIMARY)
         self.page._style(ax)
 
@@ -1824,12 +2537,57 @@ class ApiController:
             self.selections.remove(sel)
         except ValueError:
             return
-        self._clear_significance()
+        # Forget this selection's stored time-slice result so its curve doesn't
+        # linger on the dt overlay after the selection is gone.
+        self._slice_results.pop(sel["label"], None)
+        if self._slice_ratio_ref == sel["label"]:
+            self._slice_ratio_ref = None       # the reference itself is gone
+        if self._sel_dlg is not None:
+            self._sel_dlg.refresh_ratio_combo()
         self._refresh_sel_list()
+        self._redraw_after_removal()
         self._status(f"Removed selection '{sel['label']}'")
 
+    def _redraw_after_removal(self):
+        """Refresh the panels after a selection is removed: its overlays
+        disappear, while any remaining selections / vs-dt curves stay."""
+        if self.df_current is None:
+            return
+        # Energy + X-Y band overlays (only if selections are currently plotted).
+        if self._selections_plotted:
+            if self.selections:
+                self._plot_energy_overlays()
+                self._plot_xy_overlays()
+            else:
+                # Nothing left to overlay — restore the plain energy / X-Y panels.
+                self._selections_plotted = False
+                if self.page.ax_spe is not None:
+                    self.page.ax_spe.clear()
+                    self._plot_energy(self.df_current)
+                self._replot_xy()
+        # dt panel: the slice-fit vs-dt overlay wins; else the selection dt
+        # overlay (if plotted); else the plain histogram (drawn by the empty
+        # overlay path).
+        if self._slice_results or not (self._selections_plotted and self.selections):
+            self._draw_slice_overlay()
+        else:
+            self._plot_time_overlays()
+        self.page.reset_nav()
+        self.page.canvas.draw_idle()
+
     def _open_selections(self):
-        """Open (or raise) the SelectionsDialog."""
+        """Open (or raise) the SelectionsDialog.
+
+        Interactive cuts are turned off first so its span/rectangle selectors
+        (and any leftover span on the dt spectrum) don't linger while the user
+        works with selections."""
+        if self.opts.btn_interactive.isChecked():
+            # Unchecking fires _toggle_interactive(False), which detaches the
+            # selectors and redraws the panels.
+            self.opts.btn_interactive.setChecked(False)
+        else:
+            self._detach_selectors()
+            self.page.canvas.draw_idle()
         if self._sel_dlg is None:
             self._sel_dlg = SelectionsDialog(self)
             self._sel_dlg.refresh_list()
@@ -1841,125 +2599,230 @@ class ApiController:
         if not self.selections:
             return
         self.selections = []
+        # Drop the stored time-slice results too, otherwise the cleared
+        # selections' curves reappear the next time the dt overlay is redrawn.
+        self._slice_results.clear()
+        self._slice_ratio_ref = None
+        self._selections_plotted = False
+        if self._sel_dlg is not None:
+            self._sel_dlg.refresh_ratio_combo()
         self._clear_significance()
         self._refresh_sel_list()
         self._status("Cleared all selections")
 
-    # -- significance vs dt --------------------------------------------------------
-    def _compute_sig_vs_dt(self, sel, sideband_w, dt_edges, sig_threshold):
-        """For each dt bin return S/B; zero where S/√B < *sig_threshold*.
+    # -- time-slice fits vs dt -----------------------------------------------------
+    def _build_slices(self, dt_slice_w, min_snr=3.0):
+        """Split the current dt range into slices and build one energy
+        Spectrum + PeakSearch per slice (shared energy binning/range).
 
-        Background B is estimated from symmetric sidebands of width *sideband_w*
-        on each side of the selection and scaled to the selection width, so it
-        represents the expected background under the peak.
+        Returns a list of dicts ``{idx, t0, t1, tc, spe, search}``; an empty
+        list if the data isn't ready.  ``dt_slice_w`` of None gives ~10 slices.
+        ``min_snr`` sets the per-slice peak-search threshold.
         """
-        emin, emax = sel["emin"], sel["emax"]
-        ewidth = emax - emin
-        if ewidth <= 0 or sideband_w <= 0:
-            return None
-
+        if self.df_current is None or self.ekey is None:
+            return []
+        dt_col = self._dt_key
+        dt = self.df_current[dt_col].to_numpy(dtype=float)
         e = self.df_current[self.ekey].to_numpy(dtype=float)
-        dt = self.df_current[self._dt_key].to_numpy(dtype=float)
-        n_slices = len(dt_edges) - 1
-        s_over_b = np.zeros(n_slices)
+        dt_lo, dt_hi = np.percentile(dt, [0.2, 99.5])
+        if not np.isfinite(dt_hi - dt_lo) or dt_hi <= dt_lo:
+            return []
+        if dt_slice_w is None or dt_slice_w <= 0:
+            dt_slice_w = (dt_hi - dt_lo) / 10.0
+        n = max(1, int(round((dt_hi - dt_lo) / dt_slice_w)))
+        if n > MAX_SLICES:
+            n = MAX_SLICES
+            self._status(f"Too many slices for that width; capped at {MAX_SLICES}")
+        edges = np.linspace(dt_lo, dt_hi, n + 1)
 
-        for i in range(n_slices):
-            mask_dt = (dt >= dt_edges[i]) & (dt < dt_edges[i + 1])
-            e_sl = e[mask_dt]
-            if len(e_sl) == 0:
-                continue
-            S_raw = float(np.sum((e_sl >= emin) & (e_sl <= emax)))
-            B_raw = float(np.sum(
-                ((e_sl >= emin - sideband_w) & (e_sl < emin)) |
-                ((e_sl > emax) & (e_sl <= emax + sideband_w))
-            ))
-            if B_raw <= 0:
-                continue
-            B = B_raw * ewidth / (2.0 * sideband_w)
-            if B <= 0:
-                continue
-            S = S_raw - B
-            significance = S / np.sqrt(B)
-            s_over_b[i] = (S / B) if significance >= sig_threshold else 0.0
+        # PeakSearch reference (channels) scaled to the current binning, matching
+        # the example file (420 ch / 12 ch FWHM tuned at 2**11 bins).
+        ref_x = max(1.0, 420.0 * self.ebins / 2 ** 11)
+        ref_fwhm = max(1.0, 12.0 * self.ebins / 2 ** 11)
 
-        return s_over_b
+        # Carry the energy units onto each slice Spectrum so the fit window
+        # labels them like the panel (see _axis_units): only an applied
+        # calibration is energy; everything else is raw channels (no units).
+        e_units = self._axis_units()
 
-    def _plot_significance(self, sideband_w, dt_slice_w, sig_threshold=5.0):
-        """Overlay S/B vs dt on the dt panel with a secondary y-axis."""
+        slices = []
+        for i in range(n):
+            m = (dt >= edges[i]) & (dt < edges[i + 1])
+            cts, edg = np.histogram(e[m], bins=self.ebins, range=self.erange)
+            centers = (edg[1:] + edg[:-1]) / 2
+            spe = sp.Spectrum(counts=cts, energies=centers, e_units=e_units,
+                              label=f"t=[{edges[i]:.1f},{edges[i + 1]:.1f}]")
+            search = ps.PeakSearch(spe, ref_x, ref_fwhm, fwhm_at_0=1.0,
+                                   min_snr=min_snr)
+            slices.append(dict(idx=i, t0=float(edges[i]), t1=float(edges[i + 1]),
+                               tc=0.5 * (edges[i] + edges[i + 1]),
+                               spe=spe, search=search))
+        return slices
+
+    def _open_slice_fits(self, sel, dt_slice_w, technique, min_snr=3.0):
+        """Build the per-slice spectra, show the spectra figure, and (for the
+        fit techniques) open the interactive slice-fit window."""
         if self.df_current is None or self.page.ax_dt is None:
             self._status("Load an API file first")
             return
-        if not self.selections:
-            self._status("Add at least one energy selection first")
+        band = (float(sel["emin"]), float(sel["emax"]))
+        if band[1] <= band[0]:
+            self._status("This selection has an empty energy band")
+            return
+        slices = self._build_slices(dt_slice_w, min_snr)
+        if not slices:
+            self._status("Could not build dt slices from the current data")
             return
 
+        # Spectra-per-dt figure (example figure 1), embedded in the Selections
+        # dialog right below the Slice & fit button.
+        if self._sel_dlg is not None:
+            self._sel_dlg.show_slice_spectra(slices, band, self._energy_xlabel())
+
+        if technique == TECH_SNR:
+            # SNR needs no fitting — compute per slice and overlay directly.
+            centers = [s["tc"] for s in slices]
+            vals = [band_snr(s["search"], band) for s in slices]
+            errs = [0.0] * len(slices)
+            self._receive_slice_results(dict(
+                label=sel["label"], color=sel["color"], technique=TECH_SNR,
+                dt_centers=centers, vals=vals, errs=errs,
+                ylabel=YLABELS[TECH_SNR]))
+            return
+
+        # Fit → interactive, slice-stepping fit window (its Method selector
+        # picks peak fit vs net area − linear bkg per slice).
+        win = SliceFitWindow(self.app, slices, band, sel["label"], sel["color"])
+        win.results_ready.connect(self._receive_slice_results)
+        win.finished.connect(lambda *_: self._slice_fit_wins.discard(win))
+        self._slice_fit_wins.add(win)
+        win.show()
+        win.raise_()
+        self._status(
+            f"Slice-fit '{sel['label']}' — {len(slices)} slices · "
+            f"{TECHNIQUE_LABELS[technique]}")
+
+    def _receive_slice_results(self, payload):
+        """Store one selection's vs-dt curve and (re)draw the dt overlay."""
+        self._slice_results[payload["label"]] = payload
+        if self._sel_dlg is not None:
+            self._sel_dlg.refresh_ratio_combo()
+        self._draw_slice_overlay()
+        self._status(
+            f"{payload['label']} ({TECHNIQUE_LABELS[payload['technique']]}) vs dt "
+            f"overlaid on the dt panel")
+
+    def _set_slice_ratio_ref(self, ref):
+        """Switch the dt overlay between absolute values and ratios to *ref*."""
+        self._slice_ratio_ref = ref
+        self._draw_slice_overlay()
+        self._status(f"Plotting ratios to {ref}" if ref
+                     else "Plotting absolute slice values")
+
+    def _ratio_active(self):
+        """True when a valid reference with ≥2 results is selected."""
+        return (self._slice_ratio_ref in self._slice_results
+                and len(self._slice_results) >= 2)
+
+    def _slice_overlay_ylabel(self):
+        """y-label for the overlay: ratio label, shared technique, else generic."""
+        if self._ratio_active():
+            return f"Ratio to {self._slice_ratio_ref}"
+        techs = {r["technique"] for r in self._slice_results.values()}
+        if len(techs) == 1:
+            return YLABELS[next(iter(techs))]
+        return "Slice value"
+
+    def _draw_slice_overlay(self):
+        """Redraw the dt panel with a gray base histogram and every stored
+        selection's value-vs-dt curve (or ratio to a reference) on a shared
+        secondary y-axis."""
+        ax = self.page.ax_dt
+        if ax is None or self.df_current is None:
+            return
+        # Reuse the significance overlay slots (_ax_sig / _sig_active) so the
+        # existing clear/redraw plumbing keeps working unchanged.
+        self._clear_dt_twin()
         dt_col = self._dt_key
         dt_lo, dt_hi = np.percentile(self.df_current[dt_col], [0.2, 99.5])
-
-        # Derive dt slice width from current tbins when the user left it blank.
-        if dt_slice_w is None:
-            dt_slice_w = (dt_hi - dt_lo) / max(1, self.tbins)
-
-        n_slices = max(1, int(round((dt_hi - dt_lo) / dt_slice_w)))
-        dt_edges = np.linspace(dt_lo, dt_hi, n_slices + 1)
-        dt_centers = 0.5 * (dt_edges[:-1] + dt_edges[1:])
-
-        # Clear any previous significance overlay first.
-        self._clear_significance()
-
-        ax = self.page.ax_dt
         ax.clear()
-        # Gray base dt histogram.
         ax.hist(self.df_current[dt_col], bins=self.tbins, range=(dt_lo, dt_hi),
                 color=T.TEXT_DIM, alpha=0.35, edgecolor=API_PLOT_BG, linewidth=0.3)
         ax.set_xlabel("dt (ns, shifted)" if self._dt_corrected else "dt (ns)")
         ax.set_ylabel("Counts", color=T.TEXT_DIM)
         self.page._style(ax)
 
-        # Secondary y-axis for S/B curves.
-        ax_sig = ax.twinx()
-        ax_sig.set_ylabel("S/B", color=T.TEXT_DIM)
-        ax_sig.tick_params(colors=T.TEXT_DIM, which="both", length=3)
-        ax_sig.spines["right"].set_color(T.BORDER)
-        ax_sig.spines["top"].set_color(T.BORDER)
-        ax_sig.set_facecolor("none")   # transparent so the dt hist shows through
-        ax_sig.set_ylim(bottom=0)
+        if not self._slice_results:
+            self.page.canvas.draw_idle()
+            return
 
-        handles, labels = [], []
-        for sel in self.selections:
-            sb = self._compute_sig_vs_dt(sel, sideband_w, dt_edges, sig_threshold)
-            if sb is None:
-                continue
-            ax_sig.plot(dt_centers, sb, color=sel["color"], lw=1.5,
-                        label=sel["label"], zorder=3)
-            handles.append(
-                Line2D([0], [0], color=sel["color"], lw=1.5, label=sel["label"]))
-            labels.append(sel["label"])
+        ax_val = ax.twinx()
+        ax_val.set_ylabel(self._slice_overlay_ylabel(), color=T.TEXT_DIM,
+                          fontsize=self.page.LABEL_FS)
+        ax_val.tick_params(colors=T.TEXT_DIM, which="both", length=3,
+                           labelsize=self.page.TICK_FS)
+        ax_val.spines["right"].set_color(T.BORDER)
+        ax_val.spines["top"].set_color(T.BORDER)
+        ax_val.set_facecolor("none")
 
+        handles = []
+        if self._ratio_active():
+            ref = self._slice_results[self._slice_ratio_ref]
+            rc = np.asarray(ref["dt_centers"], dtype=float)
+            rv = np.asarray(ref["vals"], dtype=float)
+            re_ = np.asarray(ref["errs"], dtype=float)
+            for label, r in self._slice_results.items():
+                if label == self._slice_ratio_ref:
+                    continue
+                c = np.asarray(r["dt_centers"], dtype=float)
+                v = np.asarray(r["vals"], dtype=float)
+                e = np.asarray(r["errs"], dtype=float)
+                # Align the reference onto this curve's dt centres (selections
+                # may have been sliced with different widths).
+                ref_v = np.interp(c, rc, rv)
+                ref_e = np.interp(c, rc, re_)
+                ratio, rerr = ratio_to_ref(v, e, ref_v, ref_e)
+                lbl = f"{label}/{self._slice_ratio_ref}"
+                ax_val.errorbar(c, ratio, yerr=rerr, color=r["color"], lw=1.5,
+                                marker="o", ms=4, capsize=3, zorder=3)
+                handles.append(Line2D([0], [0], color=r["color"], lw=1.5, label=lbl))
+        else:
+            for r in self._slice_results.values():
+                centers = np.asarray(r["dt_centers"], dtype=float)
+                vals = np.asarray(r["vals"], dtype=float)
+                errs = np.asarray(r["errs"], dtype=float)
+                ax_val.errorbar(centers, vals, yerr=errs, color=r["color"], lw=1.5,
+                                marker="o", ms=4, capsize=3, zorder=3)
+                handles.append(Line2D([0], [0], color=r["color"], lw=1.5,
+                                      label=r["label"]))
         if handles:
-            ax_sig.legend(handles, labels, loc="upper right", fontsize=8,
-                          facecolor=API_PLOT_BG, edgecolor=T.BORDER,
-                          labelcolor=T.TEXT_PRIMARY)
+            ax_val.legend(handles, [h.get_label() for h in handles],
+                          loc="upper right", fontsize=11, facecolor=API_PLOT_BG,
+                          edgecolor=T.BORDER, labelcolor=T.TEXT_PRIMARY)
 
         self._sig_active = True
-        self._ax_sig = ax_sig
+        self._ax_sig = ax_val
         self.page.canvas.draw_idle()
-        self._status(
-            f"S/B vs dt  ·  sideband {sideband_w:g}  ·  "
-            f"slice {dt_slice_w:.1f} ns  ·  threshold {sig_threshold:g} σ")
+
+    def _clear_slice_overlay(self):
+        """Forget all stored vs-dt results and restore the plain dt histogram."""
+        self._slice_results.clear()
+        self._slice_ratio_ref = None
+        if self._sel_dlg is not None:
+            self._sel_dlg.refresh_ratio_combo()
+        self._clear_significance()
+        self._status("Cleared time-slice overlay")
 
     def _clear_dt_twin(self):
-        """Drop any secondary (twinx) axes on the dt panel  -- the S/B curve or
-        the normalized selection overlay  -- so a fresh redraw of the dt panel
-        doesn't stack ghost axes on top of the old ones."""
-        for attr in ("_ax_sig", "_ax_norm"):
-            ax = getattr(self, attr, None)
-            if ax is not None:
-                try:
-                    self.page.fig.delaxes(ax)
-                except Exception:  # noqa: BLE001  -- axes may already be gone
-                    pass
-                setattr(self, attr, None)
+        """Drop the secondary (twinx) axes carrying the vs-dt overlay so a fresh
+        redraw of the dt panel doesn't stack ghost axes on top of the old one."""
+        ax = self._ax_sig
+        if ax is not None:
+            try:
+                self.page.fig.delaxes(ax)
+            except Exception:  # noqa: BLE001  -- axes may already be gone
+                pass
+            self._ax_sig = None
         self._sig_active = False
 
     def _clear_significance(self):
@@ -1986,6 +2849,11 @@ class ApiController:
         self._sel_color_idx = 0
         self._arming_selection = False
         self._set_add_armed(False)
+        self._slice_results.clear()
+        self._slice_ratio_ref = None
+        self._selections_plotted = False
+        if self._sel_dlg is not None:
+            self._sel_dlg.refresh_ratio_combo()
         self._clear_significance()
         self._refresh_sel_list()
 
@@ -1997,17 +2865,17 @@ class ApiController:
             self._status("No selections to plot  -- open Selections and drag a band")
             return
         if self._sel_dlg is not None:
-            self._flash_button(self._sel_dlg.btn_plot_sel, bg=T.SNR_PURPLE, fg=T.BG_DARK)
+            self._flash_button(self._sel_dlg.btn_plot_sel)
         self._plot_energy_overlays()
         self._plot_time_overlays()
         self._plot_xy_overlays()
+        self._selections_plotted = True
         self.page.reset_nav()
         self.page.canvas.draw_idle()
         self._status(f"Plotted {len(self.selections)} selection(s)")
 
     def _plot_energy_overlays(self):
         self._compute_energy_hist(self.df_current)
-        self._reset_send_button()
         ax = self.page.ax_spe
         if ax is None:
             return
@@ -2021,41 +2889,9 @@ class ApiController:
         ax.set_yscale("log" if self.opts.cb_spe_log.isChecked() else "linear")
         ax.set_xlabel(self._energy_xlabel())
         ax.set_ylabel("Counts")
-        ax.legend(loc="upper right", fontsize=8, facecolor=API_PLOT_BG,
+        ax.legend(loc="upper right", fontsize=11, facecolor=API_PLOT_BG,
                   edgecolor=T.BORDER, labelcolor=T.TEXT_PRIMARY)
         self.page._style(ax)
-
-    def _sb_linear_vs_dt(self, sel, dt_lo, dt_hi, n_energy=40):
-        """S/B vs dt for one selection with a straight-line band background.
-
-        For each dt bin the band events are histogrammed in energy; the
-        background is the trapezoid under the line joining the spectrum heights
-        at the two band edges (Emin/Emax), the signal is the area above it
-        (total band counts - background), and the per-bin ratio S/B is returned
-        as ``(centres, ratio)``. Edge heights are averaged over the outer ~10%
-        of energy bins so a single noisy edge bin doesn't dominate; bins with a
-        non-positive background (or negative net signal) are clamped to 0.
-        Returns ``(None, None)`` when the selection has no events."""
-        df = sel["df"]
-        if df.shape[0] == 0 or sel["emax"] <= sel["emin"]:
-            return None, None
-        t = df[self._dt_key].to_numpy()
-        e = df[self.ekey].to_numpy()
-        # H[i, j] = counts in dt bin i, energy bin j across the band.
-        H, dt_edges, _ = np.histogram2d(
-            t, e, bins=[self.tbins, n_energy],
-            range=[[dt_lo, dt_hi], [sel["emin"], sel["emax"]]])
-        k = max(1, n_energy // 10)
-        h_lo = H[:, :k].mean(axis=1)
-        h_hi = H[:, -k:].mean(axis=1)
-        bkg = 0.5 * (h_lo + h_hi) * n_energy        # trapezoid area, in counts
-        total = H.sum(axis=1)
-        sig = total - bkg
-        with np.errstate(divide="ignore", invalid="ignore"):
-            ratio = np.where(bkg > 0, sig / bkg, 0.0)
-        ratio = np.clip(ratio, 0.0, None)
-        centers = 0.5 * (dt_edges[:-1] + dt_edges[1:])
-        return centers, ratio
 
     def _plot_time_overlays(self):
         ax = self.page.ax_dt
@@ -2068,60 +2904,19 @@ class ApiController:
             self.page._style(ax)
             return
         low, high = np.percentile(base[self._dt_key], [0.2, 99.5])
-        # Gray base histogram of the full run on the primary (counts) axis.
+        # Gray base histogram of the full run, then each selection's dt
+        # distribution as a coloured step outline on the same counts axis.
         ax.hist(base[self._dt_key], bins=self.tbins, range=(low, high),
                 color=T.TEXT_DIM, alpha=0.30, edgecolor=API_PLOT_BG, linewidth=0.3)
         ax.set_xlabel("dt (ns)")
-
-        normalize = (self._sel_dlg is not None
-                     and self._sel_dlg.cb_norm_dt.isChecked())
-        if normalize:
-            # Peak-to-background view: for each dt slice, S/B where the background
-            # B is the area under the straight line joining the band's edge
-            # heights (the spectrum value at Emin and at Emax) and the signal S is
-            # the area above that line (total counts in band - B).  Drawn on a
-            # secondary y-axis so the ratio is readable against the gray counts
-            # histogram behind it.  (SIGNIFICANCE vs dt instead estimates the
-            # background from sidebands outside the band.)
-            ax.set_ylabel("Counts", color=T.TEXT_DIM)
-            self.page._style(ax)
-            ax_norm = ax.twinx()
-            # Tint the secondary axis (label/ticks/spine) so it reads as distinct
-            # from the primary counts axis at a glance.
-            ax_norm.set_ylabel("S / B", color=T.SNR_PURPLE)
-            ax_norm.tick_params(colors=T.SNR_PURPLE, which="both", length=3)
-            ax_norm.spines["right"].set_color(T.SNR_PURPLE)
-            ax_norm.spines["top"].set_color(T.BORDER)
-            ax_norm.set_facecolor("none")   # let the dt hist show through
-            ymax = 0.0
-            for sel in self.selections:
-                centers, ratio = self._sb_linear_vs_dt(sel, low, high)
-                if centers is None:
-                    continue
-                ymax = max(ymax, float(np.nanmax(ratio)) if ratio.size else 0.0)
-                ax_norm.step(centers, ratio, where="mid",
-                             color=sel["color"], linewidth=1.3, label=sel["label"])
-            # Pin the secondary axis to the data range (set last so it isn't
-            # frozen before the curves are drawn  -- which left the ratios off
-            # screen). Top gets a 12% headroom so peaks aren't clipped.
-            ax_norm.set_ylim(0, ymax * 1.12 if ymax > 0 else 1.0)
-            handles = [Line2D([0], [0], color=s["color"], lw=1.3, label=s["label"])
-                       for s in self.selections]
-            if handles:
-                ax_norm.legend(handles=handles, loc="upper right", fontsize=8,
-                               facecolor=API_PLOT_BG, edgecolor=T.BORDER,
-                               labelcolor=T.TEXT_PRIMARY)
-            self._ax_norm = ax_norm
-        else:
-            # Raw counts overlay: each selection as a coloured step outline.
-            ax.set_ylabel("Counts")
-            for sel in self.selections:
-                d = sel["df"][self._dt_key]
-                if len(d) == 0:
-                    continue
-                ax.hist(d, bins=self.tbins, range=(low, high), histtype="step",
-                        color=sel["color"], linewidth=1.3)
-            self.page._style(ax)
+        ax.set_ylabel("Counts")
+        for sel in self.selections:
+            d = sel["df"][self._dt_key]
+            if len(d) == 0:
+                continue
+            ax.hist(d, bins=self.tbins, range=(low, high), histtype="step",
+                    color=sel["color"], linewidth=1.3)
+        self.page._style(ax)
 
     def _plot_xy_overlays(self):
         ax = self.page.ax_xy
@@ -2153,7 +2948,7 @@ class ApiController:
         handles = [Patch(facecolor=s["color"], edgecolor="none", label=s["label"])
                    for s in self.selections]
         if handles:
-            ax.legend(handles=handles, loc="upper right", fontsize=8,
+            ax.legend(handles=handles, loc="upper right", fontsize=11,
                       facecolor=API_PLOT_BG, edgecolor=T.BORDER,
                       labelcolor=T.TEXT_PRIMARY)
         ax.set_xlim(self.xyplane[0], self.xyplane[1])
@@ -2169,6 +2964,7 @@ class ApiController:
         to the Spectrum tab carrying its *real* channel values (see
         _send_to_spectrum), that polynomial maps the same channel axis as the
         dataframe's raw energy column  -- so it applies directly."""
+        self._flash_button(self.opts.btn_retrieve_cal)
         if self.df_current is None:
             self._status("Load an API file first")
             return
@@ -2221,6 +3017,7 @@ class ApiController:
     def _clear_calibration(self):
         """Drop the calibration and revert the panels to the original raw
         channels (rebuilds the view from the master frame, like reset)."""
+        self._flash_button(self.opts.btn_clear_cal)
         if self.e_units is None:
             self._status("Already uncalibrated")
             return
@@ -2258,25 +3055,51 @@ class ApiController:
         return (0.0, float(self.df_api[base].max()))
 
     def _dt_erange(self):
-        dt = self.df_api["dt"].astype(float)
+        """Histogram range for the time axis: the 0.2%–99.5% span of dt, so the
+        dt peak fills the histogram instead of being squashed by a few stray edge
+        events. Matches the API view's dt range and the multi-run Combine window
+        (see ``combine_runs``)."""
+        dt = self.df_api["dt"].to_numpy(dtype=float)
+        lo, hi = np.percentile(dt, [0.2, 99.5])
+        if hi > lo:
+            return (float(lo), float(hi))
         return (float(dt.min()), float(dt.max()))
 
     # energy gain shift ........................................................
-    def apply_energy_gainshift(self, n_segments, method="shift", xrange=None):
+    def apply_energy_gainshift(self, n_segments, method="shift", xrange=None,
+                               bins=None):
         """Drift-correct the energy channels: split into time segments and align
         each onto the first, writing corrected channels to ``energy_drift``.
         ``_chan_key`` then reads that column, so the histogram, send-to-spectrum
         and any polynomial calibration all layer on the corrected channels. The
-        column lives on df_api, so it survives Reset."""
+        column lives on df_api, so it survives Reset. ``bins`` overrides the
+        histogram bin count used for the alignment (defaults to ``self.ebins``).
+
+        Returns ``True`` when a pre-existing *file-provided* energy calibration
+        was dropped (the shift recomputed the energy axis), so the caller can
+        prompt the user to re-calibrate."""
         if self.df_api is None:
             self._status("Load an API file first")
-            return
+            return False
         base = self._chan_base or "energy_orig"
         gs = apicalc.GainShift(self.df_api, n_segments=int(n_segments),
-                               bins=self.ebins, erange=self._chan_erange(),
+                               bins=int(bins) if bins else self.ebins,
+                               erange=self._chan_erange(),
                                col=base, out_col="energy_drift")
         gs.align(method=method, xrange=xrange)
         self.df_api = gs.df
+        # A gain-shift recomputes the energy axis from the raw channels, so a
+        # file-provided energy_cal (one we have no polynomial to reproduce) is no
+        # longer valid: drop it and mark the run uncalibrated so the corrected
+        # channels are what's shown/sent. A GUI calibration (self._cal_coeffs) is
+        # a polynomial we *can* re-apply to the corrected channels, so it stays.
+        recal = False
+        if self._cal_coeffs is None and "energy_cal" in self.df_api.columns:
+            self.df_api = self.df_api.drop(columns=["energy_cal"])
+            self.e_units = None
+            self.opts.lbl_cal.setText("Uncalibrated (channels)")
+            self.opts.btn_clear_cal.setEnabled(False)
+            recal = True
         self._egain_applied = True
         self._egain_label = f"Gain-shift: {int(n_segments)} seg · {method}"
         self._rebuild_from_master()
@@ -2284,7 +3107,11 @@ class ApiController:
         if self._cal_coeffs is not None:
             self.apply_calibration(self._cal_coeffs, self.e_units)
         self._refresh_shift_labels()
-        self._status(f"Applied energy gain-shift ({int(n_segments)} seg, {method})")
+        msg = f"Applied energy gain-shift ({int(n_segments)} seg, {method})"
+        if recal:
+            msg += "  -- energy calibration removed; re-calibrate"
+        self._status(msg)
+        return recal
 
     def clear_energy_gainshift(self):
         if not self._egain_applied:
@@ -2301,51 +3128,105 @@ class ApiController:
         self._status("Energy gain-shift cleared")
 
     # time correction ..........................................................
+    def _compose_dt_label(self):
+        """Human-readable label describing the active time correction(s)."""
+        parts = []
+        if self._dt_segments_applied:
+            parts.append(f"aligned ({self._dt_seg_desc})")
+        if self._dt_shift:
+            parts.append(f"{self._dt_shift:+g} ns constant")
+        if not parts:
+            return "No time shift"
+        return "Time " + " + ".join(parts)
+
+    def _dt_const_base(self, df):
+        """Column the constant shift builds on: the segment-aligned ``dt_aligned``
+        when an alignment is active (so the alignment is retained), else raw
+        ``dt``."""
+        if self._dt_segments_applied and "dt_aligned" in df.columns:
+            return df["dt_aligned"].astype(float)
+        return df["dt"].astype(float)
+
     def apply_dt_shift(self, shift):
-        """Constant time shift: dt_cal = dt + shift (from the original dt, so
-        re-applying is not cumulative). Replaces any segment alignment. The
-        column lives on df_api so it survives Reset; independent of the energy
-        correction."""
+        """Constant time shift composed on top of the current baseline: when a
+        segment alignment is applied the constant builds on the aligned
+        ``dt_aligned`` (so the alignment is preserved), otherwise on the raw
+        ``dt``. Re-applying replaces the previous constant rather than
+        accumulating. Writes ``dt_cal``; the columns live on df_api so they
+        survive Reset; independent of the energy correction."""
         if self.df_api is None:
             return
         shift = float(shift)
         df = self.df_api.copy()
-        df["dt_cal"] = df["dt"].astype(float) + shift
+        df["dt_cal"] = self._dt_const_base(df) + shift
         self.df_api = df
         self._dt_shift = shift
-        self._dt_segments_applied = False
-        self._dt_label = f"Time shifted by {shift:+g} ns"
+        self._dt_label = self._compose_dt_label()
         self._rebuild_from_master()
         self._refresh_shift_labels()
         self._status(f"Applied time shift {shift:+g} ns")
 
-    def apply_dt_gainshift(self, n_segments, method="shift", xrange=None):
+    def apply_dt_preview_shift(self, aligned, shift, seg_desc):
+        """Commit a *previewed* segment alignment together with a constant Δt in
+        one step: ``dt_aligned`` is set to the per-event aligned dt the user saw
+        in the preview, and ``dt_cal = dt_aligned + shift``. No re-alignment is
+        run -- the preview is the base. Re-applying a different constant later
+        composes on this same ``dt_aligned`` (see ``apply_dt_shift``)."""
+        if self.df_api is None:
+            return
+        shift = float(shift)
+        df = self.df_api.copy()
+        df["dt_aligned"] = np.asarray(aligned, dtype=float)
+        df["dt_cal"] = df["dt_aligned"] + shift
+        self.df_api = df
+        self._dt_segments_applied = True
+        self._dt_seg_desc = seg_desc
+        self._dt_shift = shift
+        self._dt_label = self._compose_dt_label()
+        self._rebuild_from_master()
+        self._refresh_shift_labels()
+        self._status(f"Applied previewed alignment + {shift:+g} ns")
+
+    def apply_dt_gainshift(self, n_segments, method="shift", xrange=None,
+                           bins=None):
         """Segment-based time alignment: split dt into time segments and align
-        each onto the first, writing ``dt_cal``. Replaces any constant shift."""
+        each onto the first, writing ``dt_aligned``. Any active constant shift
+        is re-layered on top so ``dt_cal = dt_aligned + constant`` -- the two
+        corrections compose and are order-independent. ``bins`` overrides the
+        histogram bin count (defaults to ``self.tbins``); the alignment range is
+        the 1%–99% dt span (see ``_dt_erange``)."""
         if self.df_api is None:
             self._status("Load an API file first")
             return
         gs = apicalc.GainShift(self.df_api, n_segments=int(n_segments),
-                               bins=self.tbins, erange=self._dt_erange(),
-                               col="dt", out_col="dt_cal")
+                               bins=int(bins) if bins else self.tbins,
+                               erange=self._dt_erange(),
+                               col="dt", out_col="dt_aligned")
         gs.align(method=method, xrange=xrange)
-        self.df_api = gs.df
-        self._dt_shift = None
+        df = gs.df
         self._dt_segments_applied = True
-        self._dt_label = f"Time aligned: {int(n_segments)} seg · {method}"
+        self._dt_seg_desc = f"{int(n_segments)} seg · {method}"
+        # Layer any existing constant on top of the freshly aligned dt.
+        df["dt_cal"] = df["dt_aligned"].astype(float) + (self._dt_shift or 0.0)
+        self.df_api = df
+        self._dt_label = self._compose_dt_label()
         self._rebuild_from_master()
         self._refresh_shift_labels()
         self._status(f"Applied time alignment ({int(n_segments)} seg, {method})")
 
     def _clear_dt_shift(self):
-        """Drop the time correction (constant or segment) and revert to raw dt."""
+        """Drop the time correction (constant and/or segment) and revert to raw dt."""
         if not self._dt_corrected:
             self._status("No time correction applied")
             return
-        if self.df_api is not None and "dt_cal" in self.df_api.columns:
-            self.df_api = self.df_api.drop(columns=["dt_cal"])
+        if self.df_api is not None:
+            drop = [c for c in ("dt_cal", "dt_aligned")
+                    if c in self.df_api.columns]
+            if drop:
+                self.df_api = self.df_api.drop(columns=drop)
         self._dt_shift = None
         self._dt_segments_applied = False
+        self._dt_seg_desc = ""
         self._dt_label = "No time shift"
         self._rebuild_from_master()
         self._refresh_shift_labels()
@@ -2360,6 +3241,7 @@ class ApiController:
         dlg.set_time_state(self._dt_corrected, self._dt_label)
 
     def _open_shifts(self):
+        self._flash_button(self.opts.btn_shifts)
         if self.df_api is None:
             self._status("Load an API file first")
             return
@@ -2370,8 +3252,22 @@ class ApiController:
         self._shifts_dlg.show()
         self._shifts_dlg.raise_()
 
+    def _open_combine(self):
+        self._flash_button(self.opts.btn_combine)
+        if self._combine_dlg is None:
+            self._combine_dlg = CombineRunsDialog(self)
+        # Seed the runs list with the currently loaded run (and its data path) so
+        # the common case  -- "this run plus a few more"  -- starts pre-filled.
+        if self._src_date is not None:
+            self._combine_dlg.seed(self._src_date, self._src_runnr,
+                                   self._src_data_path)
+        self._combine_dlg.show()
+        self._combine_dlg.raise_()
+        self._combine_dlg.activateWindow()
+
     # -- 3D volume -------------------------------------------------------------
     def _open_3d(self):
+        self._flash_button(self.opts.btn_3d)
         if self.df_current is None:
             self._status("Load an API file first")
             return
@@ -2578,6 +3474,42 @@ class ApiController:
         self._status(
             f"Bins → energy {self.ebins:,} · dt {self.tbins:,} · X-Y {self.hexbins:,}")
 
+    def _confirm_uncalibrated_energy(self):
+        """Warn that the energy is being saved into ``energy_cal`` without a
+        calibration curve (gain-shift/alignment only). Returns True to proceed."""
+        resp = QMessageBox.warning(
+            self.app, "Energy not calibrated",
+            "The energy axis has been gain-shifted/aligned but no calibration "
+            "curve is applied (none retrieved). It will be saved into the "
+            "energy_cal column, but the spectrum may not be in true energy "
+            "units.\n\nRetrieve/apply a calibration first for a proper energy "
+            "scale.\n\nSave the shifted (uncalibrated) energy anyway?",
+            QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
+        return resp == QMessageBox.Yes
+
+    def _confirm_existing_run(self, new_date, new_runnr, run_dir):
+        """Ask what to do when the destination run already exists. Returns
+        ``"merge"`` (add this channel, keeping the others), ``"overwrite"``
+        (rebuild the run from the source) or ``"cancel"``."""
+        box = QMessageBox(self.app)
+        box.setWindowTitle("Run already exists")
+        box.setText(
+            f"Run {new_date}-{new_runnr} already exists at:\n{run_dir}\n\n"
+            f"Add channel {self._src_ch}'s calibration to the existing run "
+            "(keeping other channels), or overwrite the whole run from the "
+            "source?")
+        add_btn = box.addButton("Add channel", QMessageBox.AcceptRole)
+        over_btn = box.addButton("Overwrite", QMessageBox.DestructiveRole)
+        box.addButton(QMessageBox.Cancel)
+        box.setDefaultButton(add_btn)
+        box.exec_()
+        clicked = box.clickedButton()
+        if clicked is add_btn:
+            return "merge"
+        if clicked is over_btn:
+            return "overwrite"
+        return "cancel"
+
     def _apply_to_data(self):
         """Bake the active energy/time corrections into a *new* on-disk run.
 
@@ -2596,7 +3528,7 @@ class ApiController:
         time correction is active. Time units follow the on-disk convention:
         raw ``dt`` stays in seconds, ``dt_cal`` is in ns (already so on
         df_api)."""
-        self._flash_button(self.opts.btn_apply_data, bg=T.SNR_PURPLE, fg=T.BG_DARK)
+        self._flash_button(self.opts.btn_apply_data)
         if self.df_api is None or self._src_date is None:
             self._status("Load an API file first")
             return
@@ -2609,6 +3541,15 @@ class ApiController:
             self._status("No energy or time changes to apply")
             return
 
+        # Energy is written into the canonical ``energy_cal`` column, but when no
+        # calibration curve is active (e_units is None) it only carries a
+        # gain-shift/alignment of the raw channels -- not a true energy
+        # calibration. Warn the user before baking it in as ``energy_cal``.
+        if energy_changed and self.e_units is None:
+            if not self._confirm_uncalibrated_energy():
+                self._status("Apply to data cancelled  -- energy not calibrated")
+                return
+
         dlg = ApplyToDataDialog(self._src_date, self._src_runnr, self.app)
         if dlg.exec_() != QDialog.Accepted:
             return
@@ -2620,18 +3561,45 @@ class ApiController:
             self._status("New run number must be an integer")
             return
 
-        # Re-read every channel of the source run (dt stays in seconds, the
-        # on-disk convention  -- the loader scales it to ns at load time).
+        # Resolve the destination run folder up front so we can tell whether we
+        # are creating a new run or adding a channel to an existing one.
+        try:
+            run_dir, _, _ = read_parquet_api.run_parquet_path(
+                new_date, new_runnr, self._src_data_path)
+        except Exception as exc:  # noqa: BLE001
+            self._status(f"Bad destination date/run: {exc}")
+            return
+
+        # When the destination run already exists, default to *merging* this
+        # channel's calibration into it -- so each channel can be saved one at a
+        # time into the same run, accumulating, instead of overwriting the whole
+        # run from the source (which would discard previously-saved channels).
+        # The user can still choose to overwrite the run from scratch.
+        merge = False
+        if run_dir.exists():
+            choice = self._confirm_existing_run(new_date, new_runnr, run_dir)
+            if choice == "cancel":
+                self._status("Apply to data cancelled")
+                return
+            merge = (choice == "merge")
+
+        # Base table to write: when merging, the existing destination run (so the
+        # other channels' previously-saved calibration is preserved); otherwise a
+        # fresh re-read of every channel of the source run. dt stays in seconds
+        # on disk (the loader scales it to ns at load time).
+        read_date, read_runnr = ((new_date, new_runnr) if merge
+                                 else (self._src_date, self._src_runnr))
+        which = "destination" if merge else "source"
         try:
             full = read_parquet_api.read_parquet_file(
-                date=self._src_date, runnr=self._src_runnr, ch=None,
+                date=read_date, runnr=read_runnr, ch=None,
                 data_path_txt=self._src_data_path)
         except Exception as exc:  # noqa: BLE001
             traceback.print_exc()
-            self._status(f"Could not re-read source run: {exc}")
+            self._status(f"Could not re-read {which} run: {exc}")
             return
         if full is None:
-            self._status("Could not re-read the source run's parquet files")
+            self._status(f"Could not re-read the {which} run's parquet files")
             return
 
         # The loaded channel's rows, in load order, line up with df_api's rows.
@@ -2639,41 +3607,40 @@ class ApiController:
         n = int(mask.to_numpy().sum())
         if n != len(self.df_api):
             self._status(
-                f"Row mismatch for ch {self._src_ch} ({n} on disk vs "
+                f"Row mismatch for ch {self._src_ch} ({n} in the {which} run vs "
                 f"{len(self.df_api)} loaded)  -- cannot align; aborting")
             return
 
+        # Fill only the loaded channel's rows. Create the column (NaN elsewhere)
+        # only when it does not already exist, so any calibration a previous
+        # channel wrote into the destination run is preserved.
         applied = []
         # When calibrated, self.ekey is "energy_cal"; gain-shift only ⇒
         # "energy_drift". Either way it becomes the canonical energy_cal column.
         if energy_changed and self.ekey in self.df_api.columns:
-            full["energy_cal"] = np.nan
+            if "energy_cal" not in full.columns:
+                full["energy_cal"] = np.nan
             full.loc[mask, "energy_cal"] = self.df_api[self.ekey].to_numpy()
             applied.append("energy_cal")
         if dt_changed and self._dt_key in self.df_api.columns:
-            full["dt_cal"] = np.nan
+            if "dt_cal" not in full.columns:
+                full["dt_cal"] = np.nan
             full.loc[mask, "dt_cal"] = self.df_api[self._dt_key].to_numpy()
             applied.append("dt_cal")
         if not applied:
             self._status("No energy or time changes to apply")
             return
 
-        # Warn before clobbering an existing run.
-        try:
-            run_dir, _, _ = read_parquet_api.run_parquet_path(
-                new_date, new_runnr, self._src_data_path)
-        except Exception as exc:  # noqa: BLE001
-            self._status(f"Bad destination date/run: {exc}")
-            return
-        if run_dir.exists():
-            resp = QMessageBox.question(
-                self.app, "Overwrite run?",
-                f"Run {new_date}-{new_runnr} already exists at:\n{run_dir}\n\n"
-                "Overwrite its combined parquet data?",
-                QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
-            if resp != QMessageBox.Yes:
-                self._status("Apply to data cancelled")
-                return
+        # A dt_cal column means "the time to use" for every event. Channels (or
+        # rows) without their own time correction keep their raw dt -- convert it
+        # to ns and backfill, so they are never left NaN. Without this, merging a
+        # shifted channel into a run leaves the un-shifted channels with no time
+        # at all (the column exists run-wide but their rows are NaN).
+        if "dt_cal" in full.columns:
+            missing = full["dt_cal"].isna()
+            if missing.any():
+                full.loc[missing, "dt_cal"] = (
+                    full.loc[missing, "dt"].astype(float) * 1e9)
 
         try:
             out = read_parquet_api.save_combined_run(
@@ -2682,9 +3649,75 @@ class ApiController:
             traceback.print_exc()
             self._status(f"Could not save calibrated run: {exc}")
             return
-        self._status(
-            f"Saved calibrated run {new_date}-{new_runnr} "
-            f"({', '.join(applied)}) → {out}")
+
+        # Copy the source run's settings folder (live_time / count-rate stats the
+        # API calculations read) and drop/append a README recording provenance,
+        # so the re-processed run carries the same metadata as its source.
+        extra = self._copy_run_metadata(run_dir, new_date, new_runnr, applied,
+                                        merge=merge)
+
+        action = "Updated" if merge else "Saved"
+        msg = (f"{action} calibrated run {new_date}-{new_runnr} "
+               f"(ch {self._src_ch}: {', '.join(applied)}) → {out}")
+        if extra:
+            msg += f"  ·  {extra}"
+        self._status(msg)
+
+    def _copy_run_metadata(self, dst_run_dir, new_date, new_runnr, applied,
+                           merge=False):
+        """Copy the source run's ``settings/`` folder into the destination run and
+        write a ``README.txt`` documenting where the data was re-processed from.
+        When ``merge`` is set (a channel is being added to an existing run), the
+        provenance entry is *appended* so each channel's origin is recorded.
+
+        Best-effort: returns a short status note describing what was written, or
+        an empty string if neither could be produced (the parquet save still
+        stands on its own)."""
+        notes = []
+        try:
+            src_run_dir, _, _ = read_parquet_api.run_parquet_path(
+                self._src_date, self._src_runnr, self._src_data_path)
+        except Exception:  # noqa: BLE001
+            src_run_dir = None
+
+        # 1) Copy the settings folder verbatim, if the source has one.
+        if src_run_dir is not None:
+            src_settings = src_run_dir / "settings"
+            if src_settings.is_dir():
+                dst_settings = dst_run_dir / "settings"
+                try:
+                    shutil.copytree(src_settings, dst_settings, dirs_exist_ok=True)
+                    notes.append("settings copied")
+                except Exception:  # noqa: BLE001
+                    traceback.print_exc()
+                    notes.append("settings copy failed")
+
+        # 2) Provenance README. Append a per-channel entry when adding a channel
+        #    to an existing run; otherwise write a fresh README for the new run.
+        try:
+            readme = dst_run_dir / "README.txt"
+            src_loc = str(src_run_dir) if src_run_dir is not None else "(unknown)"
+            stamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            entry = (
+                f"\n--- channel {self._src_ch} added on {stamp} ---\n"
+                f"Source run      : {self._src_date}-{self._src_runnr} "
+                f"(channel {self._src_ch})\n"
+                f"Source location : {src_loc}\n"
+                f"Applied columns : {', '.join(applied)}\n")
+            if merge and readme.exists():
+                with readme.open("a", encoding="utf-8") as fh:
+                    fh.write(entry)
+                notes.append("README updated")
+            else:
+                readme.write_text(
+                    "This run was re-processed by the wara API tab.\n\n"
+                    f"New run         : {new_date}-{new_runnr}\n"
+                    + entry, encoding="utf-8")
+                notes.append("README written")
+        except Exception:  # noqa: BLE001
+            traceback.print_exc()
+
+        return "; ".join(notes)
 
     # -- reset / send ----------------------------------------------------------
     def _reset(self):
@@ -2707,15 +3740,30 @@ class ApiController:
         self._initialize_plots()
         self._status("API view reset")
 
-    def _flash_button(self, button, bg=T.ACCENT_RED, fg="#ffffff"):
-        """Briefly brighten a button so the user sees the click registered, then
-        revert to its themed style. ``repaint()`` paints the bright state *now*,
-        before the (blocking) load/reset work freezes the event loop  -- otherwise
-        the flash would never reach the screen."""
+    # Bright fill for the click-blink, keyed by button style (objectName): each is
+    # a brightened version of that button's *own* accent hue, so the blink keeps
+    # the button's colour instead of switching to a different one.
+    _FLASH_BG = {
+        "open_btn":    "#c4a8ff",      # purple
+        "primary_btn": T.ACCENT_CYAN,  # cyan
+        "danger_btn":  T.ACCENT_RED,   # red
+        "yellow_btn":  T.ACCENT_AMBER, # amber
+        "find_btn":    "#9fb0ff",      # blue
+        "mini_btn":    T.ACCENT_CYAN,
+        "action_btn":  T.ACCENT_CYAN,
+    }
+
+    def _flash_button(self, button):
+        """Briefly brighten a button -- a solid, bright version of its own colour
+        -- so the user sees the click registered, then revert to its themed style.
+        Only the colours are overridden (padding/radius come from the theme, so
+        the button keeps its size), and ``repaint()`` paints the bright state
+        *now*, before any blocking work freezes the event loop, so the flash
+        reaches the screen."""
+        bg = self._FLASH_BG.get(button.objectName(), T.ACCENT_CYAN)
         button.setStyleSheet(
-            f"background-color:{bg}; color:{fg}; "
-            f"border:2px solid {bg}; border-radius:5px; "
-            f"padding:8px 13px; font-size:14px; font-weight:800;")
+            f"background-color:{bg}; border-color:{bg}; "
+            f"color:{T.BG_DARK}; font-weight:800;")
         button.repaint()
         QTimer.singleShot(220, lambda: button.setStyleSheet(""))
 
@@ -2729,12 +3777,10 @@ class ApiController:
                 self._status("Nothing to send  -- load an API file first")
                 return
             self._compute_energy_hist(self.df_current)
-        # Prefer an energy axis when one exists: a smart calibration we applied,
-        # else the native MeV of physical-energy data; raw channels stay unitless.
-        if self.e_units is not None:
-            units = self.e_units
-        else:
-            units = self._native_units
+        # Send exactly what the panel shows (see _axis_units): a calibration's
+        # units, MeV for a native physical-energy axis, else raw channels. This
+        # keeps the Spectrum-tab axis label consistent with the API panel.
+        units = self._axis_units()
         try:
             if units is not None:
                 spect = sp.Spectrum(counts=self.gam, energies=self.gam_x, e_units=units)
@@ -2750,19 +3796,8 @@ class ApiController:
         except Exception as exc:  # noqa: BLE001
             self._status(f"Could not build spectrum: {exc}")
             return
-        # Load it as the active spectrum but stay on the API tab; the button turns
-        # green to confirm instead of yanking the user away.
+        # Load it as the active spectrum but stay on the API tab; a brief green
+        # blink confirms the send instead of yanking the user away.
         self.app.load_external_spectrum(spect, "API spectrum", switch_tab=False)
-        self._mark_send_sent()
+        self._flash_button(self.opts.btn_send)
         self._status("Sent energy spectrum to the Spectrum tab")
-
-    def _mark_send_sent(self):
-        b = self.opts.btn_send
-        b.setText(SEND_SENT_TEXT); b.setObjectName("sent_btn")
-        b.style().unpolish(b); b.style().polish(b)
-
-    def _reset_send_button(self):
-        b = self.opts.btn_send
-        if b.objectName() != "open_btn":
-            b.setObjectName("open_btn"); b.setText(SEND_DEFAULT_TEXT)
-            b.style().unpolish(b); b.style().polish(b)
