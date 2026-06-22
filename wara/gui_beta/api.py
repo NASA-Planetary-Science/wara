@@ -52,7 +52,7 @@ import numpy as np
 from matplotlib.figure import Figure
 from matplotlib import cm
 from matplotlib.colors import LinearSegmentedColormap, to_rgba
-from matplotlib.patches import Patch
+from matplotlib.patches import Patch, Rectangle
 from matplotlib.lines import Line2D
 from matplotlib.widgets import SpanSelector, RectangleSelector
 from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
@@ -1855,6 +1855,14 @@ class ApiController:
         self._api3d_dlg = None
         self._api3d_tmp = None      # last temp HTML file, removed on the next plot
         self._selectors = []
+        # Persistent markers for the last applied interactive cut, kept on the
+        # panels after the span/rectangle selector is removed so the active cut
+        # stays visible. (emin, emax) / (tmin, tmax) / (xlo, xhi, ylo, yhi), or
+        # None when no cut of that kind is active.
+        self._cut_energy = None
+        self._cut_time = None
+        self._cut_xy = None
+        self._cut_artists = []      # matplotlib artists for the markers above
         # Energy selections: list of dict(label, color, emin, emax, df). Each
         # snapshots the energy-cut dataframe at creation time.
         self.selections = []
@@ -1938,6 +1946,7 @@ class ApiController:
             self.df_current.copy(),
             self.df_previous.copy(),
             self.en_flag, self.dt_flag, self.xy_flag,
+            self._cut_energy, self._cut_time, self._cut_xy,
         )
         self.opts.btn_undo.setEnabled(True)
 
@@ -1946,10 +1955,12 @@ class ApiController:
         if self._undo_state is None:
             return
         self._clear_significance()
-        df_cur, df_prev, en_flag, dt_flag, xy_flag = self._undo_state
+        (df_cur, df_prev, en_flag, dt_flag, xy_flag,
+         cut_e, cut_t, cut_xy) = self._undo_state
         self.df_current = df_cur
         self.df_previous = df_prev
         self.en_flag, self.dt_flag, self.xy_flag = en_flag, dt_flag, xy_flag
+        self._cut_energy, self._cut_time, self._cut_xy = cut_e, cut_t, cut_xy
         self._undo_state = None
         self.opts.btn_undo.setEnabled(False)
         if self.page.ax_spe is not None:
@@ -2247,6 +2258,7 @@ class ApiController:
         ax.set_xlabel(self._energy_xlabel())
         ax.set_ylabel("Counts")
         self.page._style(ax)
+        self._draw_cut_markers()
 
     def _axis_units(self):
         """Units of the energy axis *as currently shown*, or None for a channel
@@ -2291,6 +2303,7 @@ class ApiController:
             ax.legend(loc="upper right", fontsize=11, facecolor=API_PLOT_BG,
                       edgecolor=T.BORDER, labelcolor=T.TEXT_PRIMARY)
         self.page._style(ax)
+        self._draw_cut_markers()
 
     def _replot_xy(self):
         """Redraw the X-Y hexbin from df_current with the current scale/vmax."""
@@ -2310,6 +2323,7 @@ class ApiController:
         if df.shape[0] == 0:
             self.page.set_xy_lookup(None, log, 0.0)
             self.page._style(ax, grid=False)
+            self._draw_cut_markers()
             self.page.canvas.draw_idle()
             return
         df.plot.hexbin(
@@ -2329,6 +2343,7 @@ class ApiController:
         ax.set_ylim(self.xyplane[2], self.xyplane[3])
         ax.set_xlabel("X"); ax.set_ylabel("Y")
         self.page._style(ax, grid=False)
+        self._draw_cut_markers()
         self.page.canvas.draw_idle()
 
     # -- selectors -------------------------------------------------------------
@@ -2361,6 +2376,36 @@ class ApiController:
                 pass
         self._selectors = []
 
+    def _draw_cut_markers(self):
+        """Re-draw the persistent markers for the last applied interactive cut:
+        red dotted vertical lines bounding the energy / dt cuts and a red dashed
+        rectangle around the X-Y cut.  Called at the end of every panel redraw so
+        the markers survive across replots until a new cut or a reset.
+
+        Any previously drawn marker artists are removed first so repeated cuts
+        (which don't always clear their panel) don't accumulate stale lines."""
+        for art in self._cut_artists:
+            try:
+                art.remove()
+            except (ValueError, NotImplementedError):
+                pass  # already gone with an ax.clear()
+        self._cut_artists = []
+        if self._cut_energy is not None and self.page.ax_spe is not None:
+            for x in self._cut_energy:
+                self._cut_artists.append(self.page.ax_spe.axvline(
+                    x, color=T.ACCENT_RED, linestyle=":", linewidth=1.3, zorder=6))
+        if self._cut_time is not None and self.page.ax_dt is not None:
+            for x in self._cut_time:
+                self._cut_artists.append(self.page.ax_dt.axvline(
+                    x, color=T.ACCENT_RED, linestyle=":", linewidth=1.3, zorder=6))
+        if self._cut_xy is not None and self.page.ax_xy is not None:
+            xlo, xhi, ylo, yhi = self._cut_xy
+            rect = Rectangle(
+                (xlo, ylo), xhi - xlo, yhi - ylo, fill=False,
+                edgecolor=T.ACCENT_RED, linestyle="--", linewidth=1.3, zorder=6)
+            self.page.ax_xy.add_patch(rect)
+            self._cut_artists.append(rect)
+
     def _on_energy_span(self, xmin, xmax):
         if xmax <= xmin:
             return
@@ -2386,6 +2431,7 @@ class ApiController:
             return
         self._clear_significance()
         self._save_undo_snapshot()
+        self._cut_energy = (xmin, xmax)
         if self.en_flag == 0:
             mask = (self.df_current[self.ekey] > xmin) & (self.df_current[self.ekey] < xmax)
             self.df_previous = self.df_current.copy()
@@ -2408,6 +2454,7 @@ class ApiController:
             return
         self._clear_significance()
         self._save_undo_snapshot()
+        self._cut_time = (tmin, tmax)
         if self.dt_flag == 0:
             mask = (self.df_current[self._dt_key] > tmin) & (self.df_current[self._dt_key] < tmax)
             self.df_previous = self.df_current.copy()
@@ -2432,6 +2479,7 @@ class ApiController:
         self._save_undo_snapshot()
         xlo, xhi = sorted((x1, x2))
         ylo, yhi = sorted((y1, y2))
+        self._cut_xy = (xlo, xhi, ylo, yhi)
         if self.xy_flag == 0:
             base = self.df_current
             self.df_previous = self.df_current.copy()
@@ -3731,6 +3779,7 @@ class ApiController:
         self.df_current = self.df_api.copy()
         self.df_previous = self.df_api.copy()
         self.en_flag = self.dt_flag = self.xy_flag = 0
+        self._cut_energy = self._cut_time = self._cut_xy = None
         self._undo_state = None
         self.opts.btn_undo.setEnabled(False)
         self.vmax = None
