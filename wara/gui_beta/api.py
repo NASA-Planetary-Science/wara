@@ -1298,7 +1298,7 @@ class SelectionsDialog(QDialog):
     def __init__(self, controller):
         super().__init__(controller.app)
         self.c = controller
-        self.setWindowTitle("E / dt / X-Y Selections")
+        self.setWindowTitle("E / X-Y Selections")
         self.setStyleSheet(T.STYLESHEET)
         self.setWindowFlag(Qt.WindowMaximizeButtonHint, True)
         self.setWindowFlag(Qt.WindowMinimizeButtonHint, True)
@@ -1356,6 +1356,13 @@ class SelectionsDialog(QDialog):
         self.btn_plot_sel.setToolTip(
             "Overlay each selection on the energy, dt and X-Y panels")
         lay.addWidget(self.btn_plot_sel)
+
+        self.btn_clear_plots = QPushButton("Clear plots")
+        self.btn_clear_plots.setObjectName("mini_btn")
+        self.btn_clear_plots.setCursor(Qt.PointingHandCursor)
+        self.btn_clear_plots.setToolTip(
+            "Remove selection overlays from the energy, dt and X-Y panels")
+        lay.addWidget(self.btn_clear_plots)
 
         # ── Time-slice fits vs dt ─────────────────────────────────────
         lay.addWidget(hsep())
@@ -1466,9 +1473,6 @@ class SelectionsDialog(QDialog):
 
         self.tabs.addTab(energy_tab, "Energy selections")
         self.tabs.addTab(
-            self._placeholder_tab("dt selections — coming soon."),
-            "dt selections")
-        self.tabs.addTab(
             self._placeholder_tab("X-Y selections — coming soon."),
             "X-Y selections")
 
@@ -1476,6 +1480,7 @@ class SelectionsDialog(QDialog):
         self.btn_add.clicked.connect(self.c._arm_selection)
         self.btn_clear_sel.clicked.connect(self.c._clear_selections)
         self.btn_plot_sel.clicked.connect(self.c._plot_selections)
+        self.btn_clear_plots.clicked.connect(self.c._clear_selection_plots)
         self.btn_slice_fit.clicked.connect(self._on_slice_fit)
         self.btn_clear_slice.clicked.connect(self.c._clear_slice_overlay)
 
@@ -1493,9 +1498,9 @@ class SelectionsDialog(QDialog):
         return w
 
     # ── public API (called by controller) ─────────────────────────────────────
-    def refresh_list(self):
+    def refresh_list(self, select_latest=False):
         """Rebuild the selection rows from the controller's current list."""
-        self._refresh_sel_combo()
+        self._refresh_sel_combo(select_latest=select_latest)
         self.refresh_ratio_combo()
         box = self.sel_box
         while box.count():
@@ -1542,7 +1547,7 @@ class SelectionsDialog(QDialog):
             b.setStyleSheet("")
 
     # ── internal ──────────────────────────────────────────────────────────────
-    def _refresh_sel_combo(self):
+    def _refresh_sel_combo(self, select_latest=False):
         """Keep the selection picker in sync with the controller's list,
         preserving the current choice by label where possible."""
         cmb = self.cmb_sel
@@ -1551,9 +1556,12 @@ class SelectionsDialog(QDialog):
         cmb.clear()
         for sel in self.c.selections:
             cmb.addItem(f"{sel['label']}  [{sel['emin']:g}–{sel['emax']:g}]")
-        idx = cmb.findText(prev)
-        if idx >= 0:
-            cmb.setCurrentIndex(idx)
+        if select_latest and cmb.count():
+            cmb.setCurrentIndex(cmb.count() - 1)
+        else:
+            idx = cmb.findText(prev)
+            if idx >= 0:
+                cmb.setCurrentIndex(idx)
         cmb.blockSignals(False)
 
     def refresh_ratio_combo(self):
@@ -1729,51 +1737,40 @@ class ApiOptions(QScrollArea):
         # dates  -- into one by concatenating them, then correct drift and
         # calibrate the *combined* run below.
         lay.addWidget(hsep()); lay.addWidget(header("COMBINE RUNS"))
-        comb_note = QLabel(
-            "Combine several runs (any dates) into one by concatenating them. "
-            "Calibration columns are dropped  -- re-shift and re-calibrate the "
-            "combined run afterwards.")
-        comb_note.setObjectName("stat_key"); comb_note.setWordWrap(True)
-        lay.addWidget(comb_note)
         self.btn_combine = QPushButton("Combine multiple...")
         self.btn_combine.setObjectName("yellow_btn")
         self.btn_combine.setCursor(Qt.PointingHandCursor)
         self.btn_combine.setToolTip(
             "Open the multi-run combine window: visualize and stitch several runs "
-            "into one new run")
+            "into one new run.\n"
+            "Combines runs from any dates by concatenation; calibration columns are "
+            "dropped — re-shift and re-calibrate the combined run afterwards.")
         lay.addWidget(self.btn_combine)
 
         # ── Drift correction (time + energy shifts) ──────────────────
         # Comes before calibration: drift is corrected on the raw channels first,
         # then the calibration maps the corrected channels to energy.
         lay.addWidget(hsep()); lay.addWidget(header("DRIFT CORRECTION"))
-        shift_note = QLabel(
-            "Correct gain/time drift over the run: split into time segments and "
-            "align them, or shift dt by a constant  -- independently for the "
-            "energy and time axes.")
-        shift_note.setObjectName("stat_key"); shift_note.setWordWrap(True)
-        lay.addWidget(shift_note)
         self.btn_shifts = QPushButton("Shifts...")
         self.btn_shifts.setObjectName("yellow_btn")
         self.btn_shifts.setCursor(Qt.PointingHandCursor)
         self.btn_shifts.setToolTip(
-            "Open the energy gain-shift and time-shift correction window")
+            "Open the energy gain-shift and time-shift correction window.\n"
+            "Corrects gain/time drift over the run: split into time segments and "
+            "align them, or shift dt by a constant — independently for the "
+            "energy and time axes.")
         lay.addWidget(self.btn_shifts)
 
         # ── Energy calibration ───────────────────────────────────────
         lay.addWidget(hsep()); lay.addWidget(header("ENERGY CALIBRATION"))
-        cal_note = QLabel(
-            "Send the spectrum to the Spectrum tab, build a calibration on the "
-            "Calibration tab, then retrieve it here to convert the dataframe to "
-            "energy.")
-        cal_note.setObjectName("stat_key"); cal_note.setWordWrap(True)
-        lay.addWidget(cal_note)
         self.btn_retrieve_cal = QPushButton("Retrieve calibration")
         self.btn_retrieve_cal.setObjectName("primary_btn")
         self.btn_retrieve_cal.setCursor(Qt.PointingHandCursor)
         self.btn_retrieve_cal.setToolTip(
             "Apply the Calibration tab's current calibration curve/equation to "
-            "the API dataframe so the panels read in energy")
+            "the API dataframe so the panels read in energy.\n"
+            "Workflow: send the spectrum to the Spectrum tab, build a calibration "
+            "on the Calibration tab, then click here to apply it.")
         lay.addWidget(self.btn_retrieve_cal)
         self.btn_clear_cal = QPushButton("Clear calibration")
         self.btn_clear_cal.setObjectName("mini_btn")
@@ -1787,12 +1784,12 @@ class ApiOptions(QScrollArea):
         lay.addWidget(self.lbl_cal)
 
         # ── E / dt / X-Y selections ──────────────────────────────────
-        lay.addWidget(hsep()); lay.addWidget(header("E/dt/XY SELECTIONS"))
+        lay.addWidget(hsep()); lay.addWidget(header("E/XY SELECTIONS"))
         self.btn_selections = QPushButton("Selections...")
         self.btn_selections.setObjectName("open_btn")
         self.btn_selections.setCursor(Qt.PointingHandCursor)
         self.btn_selections.setToolTip(
-            "Manage energy / dt / X-Y selections and run time-slice fits vs dt")
+            "Manage energy / X-Y selections and run time-slice fits vs dt")
         lay.addWidget(self.btn_selections)
         self.lbl_sel_count = QLabel("No selections")
         self.lbl_sel_count.setObjectName("stat_key")
@@ -2061,6 +2058,10 @@ class ApiController:
         self._src_ch = ch
         self._src_data_path = data_path
         self.en_flag = self.dt_flag = self.xy_flag = 0
+        self._cut_energy = self._cut_time = self._cut_xy = None
+        self._cut_artists = []
+        self._undo_state = None
+        self.opts.btn_undo.setEnabled(False)
         # A new run invalidates selections snapshotted from the old data.
         self._reset_selections()
         # ...and any calibration we applied. Energy priority: a file-provided
@@ -2527,6 +2528,14 @@ class ApiController:
 
     # -- energy selections -----------------------------------------------------
     def _arm_selection(self):
+        if self._arming_selection:
+            self._arming_selection = False
+            self._set_add_armed(False)
+            if self._arm_temp_selector:
+                self._arm_temp_selector = False
+                self._detach_selectors()
+            self._status("Selection arming cancelled")
+            return
         if self.df_current is None or self.page.ax_spe is None:
             self._status("Load an API file with an energy panel first")
             return
@@ -2568,17 +2577,19 @@ class ApiController:
         self.selections.append(dict(
             label=label, color=dlg.color(), emin=emin, emax=emax, df=sub))
         self._sel_color_idx += 1
-        self._refresh_sel_list()
+        self._refresh_sel_list(select_latest=True)
+        self._plot_energy_overlays()
+        self.page.canvas.draw_idle()
         self._status(f"Added '{label}'  ·  {sub.shape[0]:,} events "
                      f"[{emin:g}, {emax:g}]")
 
-    def _refresh_sel_list(self):
+    def _refresh_sel_list(self, select_latest=False):
         """Update the count label in the options panel and the dialog list if open."""
         n = len(self.selections)
         self.opts.lbl_sel_count.setText(
             f"{n} selection{'s' if n != 1 else ''}" if n else "No selections")
         if self._sel_dlg is not None:
-            self._sel_dlg.refresh_list()
+            self._sel_dlg.refresh_list(select_latest=select_latest)
 
     def _remove_selection(self, sel):
         try:
@@ -2601,17 +2612,19 @@ class ApiController:
         disappear, while any remaining selections / vs-dt curves stay."""
         if self.df_current is None:
             return
-        # Energy + X-Y band overlays (only if selections are currently plotted).
+        # Energy: always reflect the current selections list.
+        if self.selections:
+            self._plot_energy_overlays()
+        else:
+            if self.page.ax_spe is not None:
+                self.page.ax_spe.clear()
+                self._plot_energy(self.df_current)
+        # X-Y overlay only if "Plot selections" is active.
         if self._selections_plotted:
             if self.selections:
-                self._plot_energy_overlays()
                 self._plot_xy_overlays()
             else:
-                # Nothing left to overlay — restore the plain energy / X-Y panels.
                 self._selections_plotted = False
-                if self.page.ax_spe is not None:
-                    self.page.ax_spe.clear()
-                    self._plot_energy(self.df_current)
                 self._replot_xy()
         # dt panel: the slice-fit vs-dt overlay wins; else the selection dt
         # overlay (if plotted); else the plain histogram (drawn by the empty
@@ -2656,6 +2669,10 @@ class ApiController:
             self._sel_dlg.refresh_ratio_combo()
         self._clear_significance()
         self._refresh_sel_list()
+        if self.df_current is not None and self.page.ax_spe is not None:
+            self.page.ax_spe.clear()
+            self._plot_energy(self.df_current)
+            self.page.canvas.draw_idle()
         self._status("Cleared all selections")
 
     # -- time-slice fits vs dt -----------------------------------------------------
@@ -2723,8 +2740,8 @@ class ApiController:
             return
 
         # Spectra-per-dt figure (example figure 1), embedded in the Selections
-        # dialog right below the Slice & fit button.
-        if self._sel_dlg is not None:
+        # dialog right below the Slice & fit button.  Skip if already drawn.
+        if self._sel_dlg is not None and self._sel_dlg._spectra_args is None:
             self._sel_dlg.show_slice_spectra(slices, band, self._energy_xlabel())
 
         if technique == TECH_SNR:
@@ -2902,6 +2919,9 @@ class ApiController:
         self._selections_plotted = False
         if self._sel_dlg is not None:
             self._sel_dlg.refresh_ratio_combo()
+            self._sel_dlg._spectra_args = None
+            self._sel_dlg.spectra_fig.clear()
+            self._sel_dlg.spectra_canvas.draw_idle()
         self._clear_significance()
         self._refresh_sel_list()
 
@@ -2920,7 +2940,55 @@ class ApiController:
         self._selections_plotted = True
         self.page.reset_nav()
         self.page.canvas.draw_idle()
+        if self._sel_dlg is not None:
+            self._refresh_slice_spectra()
         self._status(f"Plotted {len(self.selections)} selection(s)")
+
+    def _refresh_slice_spectra(self):
+        """Build per-slice spectra using the dialog's current settings and
+        render them in the embedded canvas.  Uses the active cmb_sel band."""
+        dlg = self._sel_dlg
+        if dlg is None or not self.selections:
+            return
+        dt_slice_txt = dlg.ed_dt_slice.text().strip()
+        dt_slice_w = None
+        if dt_slice_txt:
+            try:
+                v = float(dt_slice_txt)
+                if v > 0:
+                    dt_slice_w = v
+            except ValueError:
+                pass
+        try:
+            min_snr = float(dlg.ed_min_snr.text().strip())
+            if min_snr <= 0:
+                raise ValueError
+        except ValueError:
+            min_snr = 3.0
+        idx = dlg.cmb_sel.currentIndex()
+        if idx < 0 or idx >= len(self.selections):
+            idx = 0
+        sel = self.selections[idx]
+        if dlg._spectra_args is None:
+            slices = self._build_slices(dt_slice_w, min_snr)
+            if slices:
+                dlg.show_slice_spectra(
+                    slices, (float(sel["emin"]), float(sel["emax"])),
+                    self._energy_xlabel())
+
+    def _clear_selection_plots(self):
+        """Remove selection overlays from dt and X-Y panels.  The energy
+        spectrum keeps its coloured selection bands."""
+        if self.df_current is None:
+            return
+        self._selections_plotted = False
+        if self.page.ax_dt is not None:
+            self.page.ax_dt.clear()
+            self._plot_time(self.df_current)
+        self._replot_xy()
+        self.page.reset_nav()
+        self.page.canvas.draw_idle()
+        self._status("Selection plots cleared")
 
     def _plot_energy_overlays(self):
         self._compute_energy_hist(self.df_current)

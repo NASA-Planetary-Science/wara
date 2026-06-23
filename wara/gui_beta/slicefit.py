@@ -55,7 +55,7 @@ TECHNIQUE_LABELS = {
 TECHNIQUE_FROM_LABEL = {v: k for k, v in TECHNIQUE_LABELS.items()}
 
 YLABELS = {
-    TECH_FIT: "Area (counts)",
+    TECH_FIT: "Net peak area",
     TECH_SNR: "Peak SNR",
 }
 
