@@ -519,6 +519,29 @@ class WaraBetaApp(QMainWindow):
             self.nav_group.button(0).setChecked(True)
             self._on_nav(0)
 
+    def load_external_spectra(self, specs, switch_tab=True):
+        """Receive several spectra from another tab (e.g. the API diagnostics
+        MCA "send visible" action). *specs* is a list of ``(spect, name)``: the
+        first becomes the active spectrum, the rest are kept as visible overlays.
+        Honors the Spectrum tab's "keep visible" flag for the previously-active
+        spectrum (handled by :meth:`_set_active_spectrum`)."""
+        if not specs:
+            return
+        spect0, name0 = specs[0]
+        self._set_active_spectrum(spect0, name0)
+        for spect, name in specs[1:]:
+            self._overlays.append({
+                "spect": spect,
+                "name": self._unique_name(name),
+                "visible": True,
+            })
+        self._update_overlays()
+        self._rebuild_spectra_list()
+        self._refresh()
+        if switch_tab:
+            self.nav_group.button(0).setChecked(True)
+            self._on_nav(0)
+
     def _apply_cli_opts(self, opts):
         """Apply CLI options (--labr, --hpge, --min_snr, etc.) after loading."""
         if not opts or self.spect is None:

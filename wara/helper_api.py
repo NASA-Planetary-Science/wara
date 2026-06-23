@@ -48,6 +48,30 @@ def read_mca(date, runnr):
     return data
 
 
+def read_mca_stats(date, runnr):
+    """Per-channel MCA statistics for a run.
+
+    Reads the run's MCA stats JSON (``MCA-data/*-stats-*``). When a run dumped
+    several snapshots, the latest (last sorted by name, i.e. timestamp) is used.
+
+    Returns
+    -------
+    dict
+        The stats dictionary with per-channel lists (``real_time``,
+        ``live_time``, ``input_counts``, ``input_count_rate``,
+        ``output_counts``, ``output_count_rate``) plus the ``module`` index.
+    str
+        The name of the stats file that was read.
+    """
+    file_path = find_data_path(date, runnr)
+    files = sorted(file_path.glob("MCA-data/*-stats-*"))
+    if len(files) == 0:
+        raise FileNotFoundError(
+            f"No MCA stats file (*-stats-*) found in {file_path / 'MCA-data'}")
+    latest = files[-1]
+    return read_json(latest), latest.name
+
+
 def read_trace_data(date, runnr):
     file_path = find_data_path(date, runnr)
     # load data

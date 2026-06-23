@@ -310,7 +310,7 @@ def _area_panel(ax, results, axis, ylabel, unit):
     for sp_ in ax.spines.values():
         sp_.set_color(T.BORDER)
     ax.grid(True, color="#3c3c66", linewidth=0.6, alpha=0.7)
-    if n_drawn > 1:
+    if n_drawn >= 1:
         ax.legend(fontsize=10, facecolor=T.BG_PLOT, edgecolor=T.BORDER,
                   labelcolor=T.TEXT_PRIMARY)
 
