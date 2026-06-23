@@ -64,7 +64,7 @@ from PyQt5.QtWidgets import (
     QGridLayout, QMessageBox, QColorDialog, QDialogButtonBox, QTabWidget,
     QComboBox, QTableWidget, QTableWidgetItem, QHeaderView, QAbstractItemView,
 )
-from PyQt5.QtGui import QColor
+from PyQt5.QtGui import QColor, QFont
 from PyQt5.QtCore import Qt, QSize, QTimer, QUrl
 
 from wara import read_parquet_api, apicalc, combine_runs as cr
@@ -79,6 +79,7 @@ from .slicefit import (
     TECHNIQUE_LABELS, TECHNIQUE_FROM_LABEL, YLABELS,
     TECH_FIT, TECH_SNR,
 )
+from . import xyprofile as xyp
 
 API_PLOT_BG = T.BG_PLOT
 COLORMAP = "plasma"
@@ -1309,6 +1310,7 @@ class SelectionsDialog(QDialog):
         root.setContentsMargins(8, 8, 8, 8)
         root.setSpacing(6)
         self.tabs = QTabWidget()
+        self._fit_tabbar(self.tabs)
         root.addWidget(self.tabs)
 
         # ── Energy selections tab ─────────────────────────────────────
@@ -1472,9 +1474,7 @@ class SelectionsDialog(QDialog):
         outer.addWidget(right_w, 1)
 
         self.tabs.addTab(energy_tab, "Energy selections")
-        self.tabs.addTab(
-            self._placeholder_tab("X-Y selections — coming soon."),
-            "X-Y selections")
+        self.tabs.addTab(self._build_xy_tab(), "X-Y selections")
 
         # ── Wire internal buttons to the controller ───────────────────
         self.btn_add.clicked.connect(self.c._arm_selection)
@@ -1483,6 +1483,35 @@ class SelectionsDialog(QDialog):
         self.btn_clear_plots.clicked.connect(self.c._clear_selection_plots)
         self.btn_slice_fit.clicked.connect(self._on_slice_fit)
         self.btn_clear_slice.clicked.connect(self.c._clear_slice_overlay)
+
+        # X-Y tab wiring.
+        self.xy_btn_build.clicked.connect(self.c._xy_build_tiles)
+        self.xy_btn_all.clicked.connect(self.c._xy_select_all)
+        self.xy_btn_clear_tiles.clicked.connect(self.c._xy_clear_tiles)
+        self.xy_btn_add_band.clicked.connect(self.c._xy_arm_band)
+        self.xy_btn_clear_bands.clicked.connect(self.c._xy_clear_bands)
+        self.xy_btn_fit.clicked.connect(self.c._xy_fit_tiles)
+        self.xy_btn_clear_area.clicked.connect(self.c._xy_clear_area)
+
+    @staticmethod
+    def _fit_tabbar(tabw):
+        """Stop a QTabWidget clipping its labels.
+
+        The global stylesheet paints the tabs bold 14px, but the tab bar sizes
+        itself with the *default* font, so it ends up too narrow and the text is
+        chopped on both sides.  Give the bar the matching bold font (so the size
+        hint is right), disable eliding, and add a little width so the labels
+        sit comfortably."""
+        bar = tabw.tabBar()
+        f = bar.font()
+        f.setPixelSize(14)
+        f.setBold(True)
+        bar.setFont(f)
+        bar.setElideMode(Qt.ElideNone)
+        bar.setExpanding(False)
+        bar.setUsesScrollButtons(False)
+        # Merges with the app stylesheet (keeps the themed colours); only widens.
+        tabw.setStyleSheet("QTabBar::tab { padding: 7px 24px; min-width: 96px; }")
 
     @staticmethod
     def _placeholder_tab(message):
@@ -1497,11 +1526,288 @@ class SelectionsDialog(QDialog):
         lay.addStretch(1)
         return w
 
+    def _build_xy_tab(self):
+        """Build the X-Y tile-selections tab.
+
+        Left: tile the X-Y plane, manage energy bands and fit the tiles. Right:
+        three sub-tabs — the X-Y map (click tiles to select), the selected
+        tiles' overlaid spectra (drag energy bands), and the net-area-vs-X / vs-Y
+        plots.
+        """
+        tab = QWidget()
+        outer = QHBoxLayout(tab)
+        outer.setContentsMargins(8, 8, 8, 8)
+        outer.setSpacing(12)
+
+        left_w = QWidget()
+        left_w.setFixedWidth(320)
+        lay = QVBoxLayout(left_w)
+        lay.setContentsMargins(0, 0, 0, 0)
+        lay.setSpacing(6)
+        outer.addWidget(left_w, 0)
+
+        # ── Tiling ────────────────────────────────────────────────────
+        lay.addWidget(header("TILE THE X-Y PLANE"))
+        note = QLabel(
+            "Tile the current X-Y map into uniform rectangles, then click "
+            "tiles to overlay their energy spectra. Larger tiles pool more "
+            "counts; smaller tiles resolve position.")
+        note.setObjectName("stat_key")
+        note.setWordWrap(True)
+        lay.addWidget(note)
+
+        self.xy_ed_w = QLineEdit("0.3")
+        self.xy_ed_w.setFixedWidth(80)
+        self.xy_ed_w.setToolTip("Tile width along X, in plane units")
+        wrow, _ = labeled_row("Tile width (X)", self.xy_ed_w)
+        lay.addWidget(wrow)
+        self.xy_ed_h = QLineEdit("0.3")
+        self.xy_ed_h.setFixedWidth(80)
+        self.xy_ed_h.setToolTip("Tile length along Y, in plane units")
+        hrow, _ = labeled_row("Tile length (Y)", self.xy_ed_h)
+        lay.addWidget(hrow)
+
+        self.xy_btn_build = QPushButton("Build tiles")
+        self.xy_btn_build.setObjectName("primary_btn")
+        self.xy_btn_build.setCursor(Qt.PointingHandCursor)
+        self.xy_btn_build.setToolTip(
+            "Lay the tile grid over the current X-Y map and snapshot the events")
+        lay.addWidget(self.xy_btn_build)
+        self.xy_lbl_grid = QLabel("No grid")
+        self.xy_lbl_grid.setObjectName("stat_key")
+        lay.addWidget(self.xy_lbl_grid)
+
+        tile_btns = QHBoxLayout()
+        tile_btns.setContentsMargins(0, 0, 0, 0)
+        tile_btns.setSpacing(6)
+        self.xy_btn_all = QPushButton("Select all")
+        self.xy_btn_all.setObjectName("mini_btn")
+        self.xy_btn_all.setCursor(Qt.PointingHandCursor)
+        self.xy_btn_clear_tiles = QPushButton("Clear tiles")
+        self.xy_btn_clear_tiles.setObjectName("mini_btn")
+        self.xy_btn_clear_tiles.setCursor(Qt.PointingHandCursor)
+        tile_btns.addWidget(self.xy_btn_all)
+        tile_btns.addWidget(self.xy_btn_clear_tiles)
+        lay.addLayout(tile_btns)
+
+        # ── Energy bands ──────────────────────────────────────────────
+        lay.addWidget(hsep())
+        lay.addWidget(header("ENERGY BANDS"))
+        bnote = QLabel(
+            "Arm Add band, then drag a band on the Tile spectra sub-tab to tag "
+            "a line. Each band seeds the per-tile fit ROI.")
+        bnote.setObjectName("stat_key")
+        bnote.setWordWrap(True)
+        lay.addWidget(bnote)
+
+        self.xy_band_box = QVBoxLayout()
+        self.xy_band_box.setSpacing(3)
+        self.xy_band_box.setContentsMargins(0, 0, 0, 0)
+        band_holder = QWidget()
+        band_holder.setLayout(self.xy_band_box)
+        lay.addWidget(band_holder)
+
+        band_btns = QHBoxLayout()
+        band_btns.setContentsMargins(0, 0, 0, 0)
+        band_btns.setSpacing(6)
+        self.xy_btn_add_band = QPushButton("Add band")
+        self.xy_btn_add_band.setObjectName("yellow_btn")
+        self.xy_btn_add_band.setCursor(Qt.PointingHandCursor)
+        self.xy_btn_clear_bands = QPushButton("Clear all")
+        self.xy_btn_clear_bands.setObjectName("danger_btn")
+        self.xy_btn_clear_bands.setCursor(Qt.PointingHandCursor)
+        band_btns.addWidget(self.xy_btn_add_band, 1)
+        band_btns.addWidget(self.xy_btn_clear_bands, 0)
+        lay.addLayout(band_btns)
+
+        # ── Net area vs position ──────────────────────────────────────
+        lay.addWidget(hsep())
+        lay.addWidget(header("NET AREA vs POSITION"))
+        fnote = QLabel(
+            "Pick a band and fit each selected tile interactively; Plot vs X/Y "
+            "lands one point per tile on the position plots.")
+        fnote.setObjectName("stat_key")
+        fnote.setWordWrap(True)
+        lay.addWidget(fnote)
+
+        self.xy_cmb_band = QComboBox()
+        self.xy_cmb_band.setToolTip("Which energy band to fit across the tiles")
+        lay.addWidget(_combo_row("Band", self.xy_cmb_band))
+
+        self.xy_cmb_axis = QComboBox()
+        self.xy_cmb_axis.addItems(
+            ["Per tile — vs X & Y", "Combine → vs X", "Combine → vs Y"])
+        self.xy_cmb_axis.setToolTip(
+            "Per tile: one point per selected tile, plotted vs X and vs Y.\n"
+            "Combine → vs X: sum the selected tiles sharing each column into one "
+            "spectrum, one point per X (Y collapsed).\n"
+            "Combine → vs Y: sum tiles sharing each row, one point per Y.")
+        lay.addWidget(_combo_row("Plot", self.xy_cmb_axis))
+
+        fit_btns = QHBoxLayout()
+        fit_btns.setContentsMargins(0, 0, 0, 0)
+        fit_btns.setSpacing(6)
+        self.xy_btn_fit = QPushButton("Fit tiles")
+        self.xy_btn_fit.setObjectName("primary_btn")
+        self.xy_btn_fit.setCursor(Qt.PointingHandCursor)
+        self.xy_btn_fit.setToolTip(
+            "Open the interactive stepping fit window over the selected tiles")
+        self.xy_btn_clear_area = QPushButton("Clear")
+        self.xy_btn_clear_area.setObjectName("mini_btn")
+        self.xy_btn_clear_area.setCursor(Qt.PointingHandCursor)
+        fit_btns.addWidget(self.xy_btn_fit, 1)
+        fit_btns.addWidget(self.xy_btn_clear_area, 0)
+        lay.addLayout(fit_btns)
+
+        # Already-fitted bands: toggle each one's curve on the overlay.
+        flbl = QLabel("Fitted bands (toggle visibility):")
+        flbl.setObjectName("stat_key")
+        flbl.setWordWrap(True)
+        lay.addWidget(flbl)
+        self.xy_area_box = QVBoxLayout()
+        self.xy_area_box.setSpacing(3)
+        self.xy_area_box.setContentsMargins(0, 0, 0, 0)
+        area_holder = QWidget()
+        area_holder.setLayout(self.xy_area_box)
+        lay.addWidget(area_holder)
+        lay.addStretch(1)
+
+        # ── Right: two sub-tabs (spectra / profile). Tiling and tile
+        # selection happen on the main window's X-Y map, not here. ─────
+        self.xy_inner = QTabWidget()
+        self._fit_tabbar(self.xy_inner)
+        outer.addWidget(self.xy_inner, 1)
+        (self.xy_spec_fig, self.xy_spec_canvas, self.xy_spec_toolbar,
+         self.xy_spec_ax) = self._xy_canvas_tab("Tile spectra")
+        (self.xy_area_fig, self.xy_area_canvas, self.xy_area_toolbar,
+         _) = self._xy_canvas_tab("Area vs X / Y", with_axes=False)
+        return tab
+
+    def _xy_canvas_tab(self, title, with_axes=True):
+        """Add a titled sub-tab with a Matplotlib canvas + toolbar to the X-Y
+        inner tab widget; return ``(fig, canvas, toolbar, ax)``."""
+        w = QWidget()
+        v = QVBoxLayout(w)
+        v.setContentsMargins(0, 0, 0, 0)
+        v.setSpacing(6)
+        fig = Figure(facecolor=API_PLOT_BG)
+        canvas = FigureCanvas(fig)
+        canvas.setMinimumHeight(300)
+        canvas.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        toolbar = NavToolbar(canvas, self)
+        toolbar.setObjectName("plot_toolbar")
+        toolbar.setIconSize(QSize(22, 22))
+        T.recolor_toolbar_icons(toolbar, T.TEXT_PRIMARY)
+        v.addWidget(toolbar)
+        v.addWidget(canvas, 1)
+        self.xy_inner.addTab(w, title)
+        ax = None
+        if with_axes:
+            ax = fig.add_subplot(111)
+            ax.set_facecolor(API_PLOT_BG)
+        return fig, canvas, toolbar, ax
+
+    def refresh_xy_bands(self):
+        """Rebuild the X-Y band rows and Band picker from the controller list."""
+        cmb = self.xy_cmb_band
+        prev = cmb.currentText()
+        cmb.blockSignals(True)
+        cmb.clear()
+        for b in self.c._xy_bands:
+            cmb.addItem(f"{b['label']}  [{b['emin']:g}–{b['emax']:g}]")
+        idx = cmb.findText(prev)
+        if idx >= 0:
+            cmb.setCurrentIndex(idx)
+        cmb.blockSignals(False)
+        box = self.xy_band_box
+        while box.count():
+            item = box.takeAt(0)
+            wdg = item.widget()
+            if wdg is not None:
+                wdg.deleteLater()
+        if not self.c._xy_bands:
+            empty = QLabel("No bands yet.")
+            empty.setObjectName("stat_key")
+            box.addWidget(empty)
+            return
+        for b in self.c._xy_bands:
+            row_w = QWidget()
+            rl = QHBoxLayout(row_w)
+            rl.setContentsMargins(0, 0, 0, 0)
+            rl.setSpacing(6)
+            dot = QLabel("●")
+            dot.setStyleSheet(f"color:{b['color']}; font-size:15px;")
+            name = QLabel(f"{b['label']}  [{b['emin']:g}–{b['emax']:g}]")
+            name.setStyleSheet(f"color:{T.TEXT_PRIMARY}; font-size:12px;")
+            btn = QPushButton("✕")
+            btn.setObjectName("mini_btn")
+            btn.setFixedWidth(26)
+            btn.setCursor(Qt.PointingHandCursor)
+            btn.setToolTip("Remove this band")
+            btn.clicked.connect(lambda _=False, bb=b: self.c._xy_remove_band(bb))
+            rl.addWidget(dot)
+            rl.addWidget(name, 1)
+            rl.addWidget(btn, 0)
+            box.addWidget(row_w)
+
+    def refresh_xy_area_list(self):
+        """Rebuild the fitted-band visibility toggles from the controller's
+        area results."""
+        box = self.xy_area_box
+        while box.count():
+            item = box.takeAt(0)
+            wdg = item.widget()
+            if wdg is not None:
+                wdg.deleteLater()
+        results = self.c._xy_area_results
+        if not results:
+            empty = QLabel("No fitted bands yet.")
+            empty.setObjectName("stat_key")
+            box.addWidget(empty)
+            return
+        axis_hint = {"tile": "X & Y", "x": "X", "y": "Y"}
+        for r in results:
+            row_w = QWidget()
+            rl = QHBoxLayout(row_w)
+            rl.setContentsMargins(0, 0, 0, 0)
+            rl.setSpacing(6)
+            cb = QCheckBox()
+            cb.setChecked(r.get("visible", True))
+            cb.setCursor(Qt.PointingHandCursor)
+            cb.setToolTip("Show this band's curve on the overlay")
+            cb.toggled.connect(
+                lambda ch, rr=r: self.c._xy_toggle_area(rr, ch))
+            dot = QLabel("●")
+            dot.setStyleSheet(f"color:{r.get('color', T.TEXT_PRIMARY)}; "
+                              "font-size:15px;")
+            hint = axis_hint.get(r.get("mode", "tile"), "")
+            name = QLabel(f"{r.get('label', '')}  ({hint})")
+            name.setStyleSheet(f"color:{T.TEXT_PRIMARY}; font-size:12px;")
+            rl.addWidget(cb)
+            rl.addWidget(dot)
+            rl.addWidget(name, 1)
+            box.addWidget(row_w)
+
+    def set_xy_band_armed(self, armed):
+        """Reflect the armed/disarmed state on the X-Y Add-band button."""
+        b = self.xy_btn_add_band
+        if armed:
+            b.setText("Drag band on spectra...")
+            b.setStyleSheet(
+                f"background-color:{T.ACCENT_AMBER}; color:{T.BG_DARK}; "
+                f"border:2px solid {T.ACCENT_AMBER}; border-radius:5px; "
+                f"padding:8px 13px; font-weight:800;")
+        else:
+            b.setText("Add band")
+            b.setStyleSheet("")
+
     # ── public API (called by controller) ─────────────────────────────────────
     def refresh_list(self, select_latest=False):
         """Rebuild the selection rows from the controller's current list."""
         self._refresh_sel_combo(select_latest=select_latest)
         self.refresh_ratio_combo()
+        self.refresh_xy_bands()
+        self.refresh_xy_area_list()
         box = self.sel_box
         while box.count():
             item = box.takeAt(0)
@@ -1877,6 +2183,27 @@ class ApiController:
         # selection normalized by this reference (e.g. Mg/Si); None ⇒ absolute.
         self._slice_ratio_ref = None
         self._selections_plotted = False   # selection band overlays on screen
+        # X-Y tile selections (see xyprofile): a snapshot of the working frame
+        # taken on "Build tiles", the uniform tile grid laid over it, the
+        # per-tile energy spectra, the set of clicked (col, row) tiles, the
+        # energy bands dragged on the overlay, and the open per-tile fit windows.
+        self._xy_df = None
+        self._xy_keys = None        # dict(xkey, ykey, ekey, ebins, erange, ...)
+        self._xy_plane = None       # (xlo, xhi, ylo, yhi) at snapshot time
+        self._xy_tiles = None       # xyp.TileGrid
+        self._xy_grid_centers = None
+        self._xy_grid_counts = None
+        self._xy_selected = set()   # selected (col, row) tile indices
+        self._xy_overlay_artists = []  # grid/selection artists on the X-Y map
+        self._xy_bands = []         # list of dict(label, color, emin, emax)
+        self._xy_band_color_idx = 0
+        self._xy_arming_band = False
+        self._xy_band_selector = None
+        self._xy_fit_wins = set()
+        # Fitted area-vs-position results, one per band label, each a
+        # TileFitWindow payload plus a 'visible' flag so already-fitted bands
+        # can be kept on the overlay and toggled.
+        self._xy_area_results = []
         # Energy calibration: the channel column the histogram is binned from
         # (set in _configure_keys), the polynomial coeffs retrieved from the
         # Calibration tab, and the energy units once calibrated (None ⇒ raw
@@ -1909,6 +2236,9 @@ class ApiController:
         self._shifts_dlg = None
         self._combine_dlg = None
         self._wire()
+        # Tile selection happens on the main X-Y panel: a click toggles a tile
+        # while the Selections dialog's tiling is active (see _xy_on_map_click).
+        self.page.canvas.mpl_connect("button_press_event", self._xy_on_map_click)
         self._refresh_sel_list()
 
     @property
@@ -2325,6 +2655,7 @@ class ApiController:
             self.page.set_xy_lookup(None, log, 0.0)
             self.page._style(ax, grid=False)
             self._draw_cut_markers()
+            self._xy_reattach_overlay()
             self.page.canvas.draw_idle()
             return
         df.plot.hexbin(
@@ -2345,6 +2676,7 @@ class ApiController:
         ax.set_xlabel("X"); ax.set_ylabel("Y")
         self.page._style(ax, grid=False)
         self._draw_cut_markers()
+        self._xy_reattach_overlay()
         self.page.canvas.draw_idle()
 
     # -- selectors -------------------------------------------------------------
@@ -2652,9 +2984,15 @@ class ApiController:
         if self._sel_dlg is None:
             self._sel_dlg = SelectionsDialog(self)
             self._sel_dlg.refresh_list()
+            # Drop the tile overlay from the main X-Y map when the dialog closes.
+            self._sel_dlg.finished.connect(
+                lambda *_: self._xy_clear_map_overlay())
+        self._xy_redraw_area()
         self._sel_dlg.show()
         self._sel_dlg.raise_()
         self._sel_dlg.activateWindow()
+        # Lay the tile overlay back over the main X-Y map (if tiles are built).
+        self._xy_draw_map_overlay()
 
     def _clear_selections(self):
         if not self.selections:
@@ -2674,6 +3012,311 @@ class ApiController:
             self._plot_energy(self.df_current)
             self.page.canvas.draw_idle()
         self._status("Cleared all selections")
+
+    # -- X-Y tile selections ---------------------------------------------------
+    def _xy_overlay_active(self):
+        """True when the tile grid should be shown on the main X-Y panel: tiles
+        are built and the Selections dialog is open."""
+        return (self._xy_tiles is not None and self._sel_dlg is not None
+                and self._sel_dlg.isVisible())
+
+    def _xy_draw_map_overlay(self):
+        """(Re)draw the tile grid + selected-tile overlay on the *main* X-Y
+        panel, leaving the hexbin underneath untouched so clicks stay snappy."""
+        ax = self.page.ax_xy
+        if ax is None:
+            return
+        for art in self._xy_overlay_artists:
+            try:
+                art.remove()
+            except (ValueError, NotImplementedError):
+                pass
+        self._xy_overlay_artists = []
+        if self._xy_overlay_active():
+            self._xy_overlay_artists = xyp.draw_grid_overlay(
+                ax, self._xy_tiles, self._xy_selected)
+        self.page.canvas.draw_idle()
+
+    def _xy_reattach_overlay(self):
+        """Re-add the tile overlay after the main X-Y map redraws (its ``clear``
+        dropped the artists). No canvas draw — the caller's redraw handles it."""
+        self._xy_overlay_artists = []
+        if self._xy_overlay_active() and self.page.ax_xy is not None:
+            self._xy_overlay_artists = xyp.draw_grid_overlay(
+                self.page.ax_xy, self._xy_tiles, self._xy_selected)
+
+    def _xy_clear_map_overlay(self):
+        """Remove the tile overlay from the main X-Y panel (dialog closed)."""
+        if not self._xy_overlay_artists:
+            return
+        for art in self._xy_overlay_artists:
+            try:
+                art.remove()
+            except (ValueError, NotImplementedError):
+                pass
+        self._xy_overlay_artists = []
+        if self.page.ax_xy is not None:
+            self.page.canvas.draw_idle()
+
+    def _xy_build_tiles(self):
+        """Snapshot the current frame, tile the plane and build per-tile spectra."""
+        dlg = self._sel_dlg
+        if dlg is None:
+            return
+        if self.df_current is None or self.df_current.shape[0] == 0:
+            self._status("Load an API file with events first")
+            return
+        if self.ekey is None or self.xkey is None:
+            self._status("This run has no X-Y / energy columns to tile")
+            return
+        if self.page.ax_xy is None:
+            self._status("The X-Y map isn't available for this run")
+            return
+        try:
+            tw = float(dlg.xy_ed_w.text().strip())
+            th = float(dlg.xy_ed_h.text().strip())
+        except ValueError:
+            self._status("Tile width and length must be numbers")
+            return
+        self._xy_df = self.df_current.copy()
+        self._xy_plane = tuple(self.xyplane)
+        units = self._axis_units()
+        self._xy_keys = dict(
+            xkey=self.xkey, ykey=self.ykey, ekey=self.ekey,
+            ebins=self.ebins, erange=tuple(self.erange), e_units=units)
+        try:
+            tiles = xyp.make_tiles(self._xy_plane, tw, th)
+        except ValueError as exc:
+            self._status(str(exc))
+            return
+        k = self._xy_keys
+        centers, counts = xyp.tile_spectra(
+            self._xy_df, k["xkey"], k["ykey"], k["ekey"], tiles,
+            k["ebins"], k["erange"])
+        self._xy_tiles = tiles
+        self._xy_grid_centers, self._xy_grid_counts = centers, counts
+        self._xy_selected = set()
+        dlg.xy_lbl_grid.setText(f"{tiles.nx}×{tiles.ny} = {tiles.n_tiles} tiles")
+        self._xy_draw_map_overlay()
+        self._xy_redraw_overlay()
+        self._status(f"Built {tiles.nx}×{tiles.ny} tiles  ·  "
+                     "click tiles on the X-Y map (main window) to select them")
+
+    def _xy_on_map_click(self, event):
+        """Toggle the clicked tile on the main X-Y panel into/out of the set."""
+        if not self._xy_overlay_active():
+            return
+        if self.page.toolbar.mode:            # zoom/pan active
+            return
+        if event.inaxes is not self.page.ax_xy or event.xdata is None:
+            return
+        col, row, inside = self._xy_tiles.indices(
+            np.array([event.xdata]), np.array([event.ydata]))
+        if not inside[0]:
+            return
+        tile = (int(col[0]), int(row[0]))
+        if tile in self._xy_selected:
+            self._xy_selected.discard(tile)
+        else:
+            self._xy_selected.add(tile)
+        self._xy_draw_map_overlay()
+        self._xy_redraw_overlay()
+
+    def _xy_select_all(self):
+        if self._xy_tiles is None:
+            self._status("Build tiles first")
+            return
+        t = self._xy_tiles
+        self._xy_selected = {(c, r) for c in range(t.nx) for r in range(t.ny)}
+        self._xy_draw_map_overlay()
+        self._xy_redraw_overlay()
+
+    def _xy_clear_tiles(self):
+        if self._xy_tiles is None:
+            return
+        self._xy_selected = set()
+        self._xy_draw_map_overlay()
+        self._xy_redraw_overlay()
+
+    # -- tile spectra + energy bands -------------------------------------------
+    def _xy_redraw_overlay(self):
+        """Redraw the selected tiles' overlaid spectra and re-arm the band
+        SpanSelector on the (cleared) axes."""
+        dlg = self._sel_dlg
+        if dlg is None or self._xy_tiles is None:
+            return
+        xyp.plot_tile_overlay(
+            dlg.xy_spec_ax, self._xy_grid_centers, self._xy_grid_counts,
+            self._xy_selected, self._xy_tiles, self._xy_bands,
+            self._energy_xlabel())
+        self._xy_attach_band_selector()
+        dlg.xy_spec_canvas.draw_idle()
+
+    def _xy_attach_band_selector(self):
+        dlg = self._sel_dlg
+        if dlg is None:
+            return
+        if self._xy_band_selector is not None:
+            try:
+                self._xy_band_selector.disconnect_events()
+            except Exception:  # noqa: BLE001
+                pass
+        self._xy_band_selector = SpanSelector(
+            dlg.xy_spec_ax, self._xy_on_band_span, "horizontal",
+            useblit=True, interactive=True,
+            props=dict(alpha=0.3, facecolor=T.ACCENT_AMBER))
+
+    def _xy_arm_band(self):
+        dlg = self._sel_dlg
+        if dlg is None:
+            return
+        if self._xy_arming_band:
+            self._xy_arming_band = False
+            dlg.set_xy_band_armed(False)
+            self._status("Band arming cancelled")
+            return
+        if self._xy_tiles is None or not self._xy_selected:
+            self._status("Build tiles and select at least one tile first")
+            return
+        self._xy_arming_band = True
+        dlg.set_xy_band_armed(True)
+        dlg.xy_inner.setCurrentIndex(0)   # show the spectra to drag on
+        self._status("Drag a band on the Tile spectra overlay...")
+
+    def _xy_band_event_count(self, lo, hi):
+        """Events inside [lo, hi] pooled over the selected tiles (for the band
+        dialog's count readout)."""
+        if self._xy_grid_centers is None:
+            return 0
+        mask = (self._xy_grid_centers >= lo) & (self._xy_grid_centers <= hi)
+        total = 0
+        for (c, r) in self._xy_selected:
+            cc = self._xy_grid_counts[c, r]
+            if cc is not None:
+                total += int(cc[mask].sum())
+        return total
+
+    def _xy_on_band_span(self, emin, emax):
+        if not self._xy_arming_band or emax <= emin:
+            return
+        dlg = self._sel_dlg
+        self._xy_arming_band = False
+        if dlg is not None:
+            dlg.set_xy_band_armed(False)
+        emin, emax = round(emin, 4), round(emax, 4)
+        color = T.OVERLAY_COLORS[self._xy_band_color_idx % len(T.OVERLAY_COLORS)]
+        # Same name + colour picker as the energy selections.
+        bdlg = EnergySelectionDialog(
+            emin, emax, color, self._xy_band_event_count(emin, emax), self.app)
+        if bdlg.exec_() != QDialog.Accepted:
+            self._status("Band cancelled")
+            return
+        label = bdlg.label() or f"band {len(self._xy_bands) + 1}"
+        self._xy_band_color_idx += 1
+        self._xy_bands.append(dict(
+            label=label, color=bdlg.color(), emin=emin, emax=emax))
+        if dlg is not None:
+            dlg.refresh_xy_bands()
+        self._xy_redraw_overlay()
+        # Stay on the Tile spectra tab (drawing the band can otherwise leave the
+        # view on the Area tab); the user is still working with the spectra.
+        if dlg is not None:
+            dlg.xy_inner.setCurrentIndex(0)
+        self._status(f"Added band '{label}'  ·  [{emin:g}, {emax:g}]")
+
+    def _xy_remove_band(self, band):
+        try:
+            self._xy_bands.remove(band)
+        except ValueError:
+            return
+        if self._sel_dlg is not None:
+            self._sel_dlg.refresh_xy_bands()
+        self._xy_redraw_overlay()
+
+    def _xy_clear_bands(self):
+        if not self._xy_bands:
+            return
+        self._xy_bands = []
+        if self._sel_dlg is not None:
+            self._sel_dlg.refresh_xy_bands()
+        self._xy_redraw_overlay()
+        self._status("Cleared all bands")
+
+    # -- net area vs position --------------------------------------------------
+    def _xy_fit_tiles(self):
+        """Open the interactive per-tile fit window for the picked band."""
+        dlg = self._sel_dlg
+        if dlg is None:
+            return
+        if self._xy_tiles is None:
+            self._status("Build tiles first")
+            return
+        if not self._xy_selected:
+            self._status("Click at least one tile to select it")
+            return
+        idx = dlg.xy_cmb_band.currentIndex()
+        if not (0 <= idx < len(self._xy_bands)):
+            self._status("Add an energy band (drag on the Tile spectra) first")
+            return
+        band = self._xy_bands[idx]
+        mode = {0: "tile", 1: "x", 2: "y"}.get(dlg.xy_cmb_axis.currentIndex(),
+                                               "tile")
+        k = self._xy_keys
+        slices = xyp.tile_slices(
+            self._xy_grid_centers, self._xy_grid_counts, self._xy_selected,
+            self._xy_tiles, k["ebins"], k["e_units"], mode=mode)
+        if not slices:
+            self._status("No selected tiles to fit")
+            return
+        win = xyp.TileFitWindow(
+            self.app, slices, (band["emin"], band["emax"]), band["label"],
+            band["color"], mode=mode)
+        win.results_ready.connect(self._xy_receive_area)
+        win.finished.connect(lambda *_: self._xy_fit_wins.discard(win))
+        self._xy_fit_wins.add(win)
+        win.show()
+        win.raise_()
+        what = {"tile": "tiles", "x": "columns", "y": "rows"}[mode]
+        self._status(f"Fit {len(slices)} {what} for '{band['label']}' — step "
+                     "through them, then Plot")
+
+    def _xy_receive_area(self, payload):
+        """Store a band's fit result (replacing any prior fit of the same band)
+        and redraw the overlay with every visible band."""
+        dlg = self._sel_dlg
+        if dlg is None:
+            return
+        payload["visible"] = True
+        prev = next((r for r in self._xy_area_results
+                     if r.get("label") == payload.get("label")), None)
+        if prev is not None:
+            self._xy_area_results[self._xy_area_results.index(prev)] = payload
+        else:
+            self._xy_area_results.append(payload)
+        self._xy_redraw_area()
+        dlg.refresh_xy_area_list()
+        dlg.xy_inner.setCurrentIndex(1)
+        self._status(f"Plotted net area vs position for '{payload['label']}'")
+
+    def _xy_redraw_area(self):
+        dlg = self._sel_dlg
+        if dlg is None:
+            return
+        visible = [r for r in self._xy_area_results if r.get("visible", True)]
+        xyp.plot_area_overlays(dlg.xy_area_fig, visible)
+        dlg.xy_area_canvas.draw_idle()
+
+    def _xy_toggle_area(self, result, visible):
+        result["visible"] = bool(visible)
+        self._xy_redraw_area()
+
+    def _xy_clear_area(self):
+        dlg = self._sel_dlg
+        if dlg is None:
+            return
+        self._xy_area_results = []
+        self._xy_redraw_area()
+        dlg.refresh_xy_area_list()
 
     # -- time-slice fits vs dt -----------------------------------------------------
     def _build_slices(self, dt_slice_w, min_snr=3.0):

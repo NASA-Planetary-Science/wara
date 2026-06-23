@@ -340,11 +340,15 @@ class SliceFitWindow(FitWindow):
         self._building = False
         self._loaded = True
         self._refit()
-        self.lbl_slice.setText(
-            f"slice {i + 1}/{len(self.slices)}  ·  "
-            f"t = [{s['t0']:.1f}, {s['t1']:.1f}] ns")
+        self.lbl_slice.setText(self._slice_caption(i, s))
         self.btn_prev.setEnabled(i > 0)
         self.btn_next.setEnabled(i < len(self.slices) - 1)
+
+    def _slice_caption(self, i, s):
+        """Caption for the current slice; overridden for non-dt slicing
+        (e.g. the X-Y :class:`~wara.gui_beta.xyprofile.TileFitWindow`)."""
+        return (f"slice {i + 1}/{len(self.slices)}  ·  "
+                f"t = [{s['t0']:.1f}, {s['t1']:.1f}] ns")
 
     def _save_current(self):
         """Store the inner edges of the slice we're leaving (metric is captured
