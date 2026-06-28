@@ -278,6 +278,108 @@ class TestApiXyzNoMutation:
 
 
 # ---------------------------------------------------------------------------
+# api_xyz — full center-of-mass-corrected, relativistic model
+# ---------------------------------------------------------------------------
+
+def _xy_df(n=600, dt_ns=20.0, seed=3, with_corners=False):
+    """Synthetic alpha image filling the YAP square, dt in seconds."""
+    rng = np.random.default_rng(seed)
+    x2 = rng.uniform(-0.6, 0.6, n)
+    y2 = rng.uniform(-0.6, 0.6, n)
+    dt = rng.normal(dt_ns * 1e-9, 1e-9, n)
+    if with_corners:
+        # A,B,C,D such that calc_own_pos reproduces (x2, y2)
+        tot = 1.0
+        B = (1 + x2 + y2) / 4 * tot
+        A = (1 - x2 + y2) / 4 * tot
+        C = (1 + x2 - y2) / 4 * tot
+        D = (1 - x2 - y2) / 4 * tot
+        return pd.DataFrame({"A": A, "B": B, "C": C, "D": D, "dt": dt})
+    return pd.DataFrame({"X2": x2, "Y2": y2, "dt": dt})
+
+
+class TestApiXyzFull:
+    def test_returns_three_finite_arrays(self):
+        from wara.apicalc import api_xyz
+        df = _xy_df()
+        X, Y, Z = api_xyz(df, dt_unit="s", use_det=False)
+        assert len(X) == len(Y) == len(Z) == len(df)
+        for arr in (X, Y, Z):
+            assert np.isfinite(arr).all()
+
+    def test_central_alpha_points_down_and_on_axis(self):
+        from wara.apicalc import api_xyz
+        # uniform fill (defines the edges) plus central events appended
+        df = _xy_df(n=600)
+        df = pd.concat([df, pd.DataFrame({"X2": [0.0, 0.0, 0.0],
+                                          "Y2": [0.0, 0.0, 0.0],
+                                          "dt": [20e-9] * 3})],
+                       ignore_index=True)
+        X, Y, Z = api_xyz(df, dt_unit="s", use_det=False)
+        # the appended central rows are the last three
+        assert np.allclose(X[-3:], 0.0, atol=1.0)   # within 1 cm of axis
+        assert np.allclose(Y[-3:], 0.0, atol=1.0)
+        assert (Z[-3:] < 0).all()                   # downward (-z)
+
+    def test_builds_x2y2_from_corners(self):
+        from wara.apicalc import api_xyz
+        df = _xy_df(with_corners=True)
+        X, Y, Z = api_xyz(df, dt_unit="s", use_det=False)
+        assert np.isfinite(Z).all()
+        assert (np.nanmedian(Z) < 0)
+
+    def test_detector_term_changes_depth(self):
+        from wara.apicalc import api_xyz
+        df = _xy_df()
+        _, _, Z_det = api_xyz(df, dt_unit="s", use_det=True)
+        _, _, Z_ray = api_xyz(df, dt_unit="s", use_det=False)
+        assert not np.allclose(np.nanmedian(Z_det), np.nanmedian(Z_ray))
+
+    def test_relativistic_differs_from_nonrelativistic(self):
+        from wara.apicalc import api_xyz
+        df = _xy_df()
+        _, _, Z_rel = api_xyz(df, dt_unit="s", use_det=False, relativistic=True)
+        _, _, Z_nr = api_xyz(df, dt_unit="s", use_det=False, relativistic=False)
+        # ~1% neutron-speed difference -> measurable depth shift
+        assert abs(np.nanmedian(Z_rel) - np.nanmedian(Z_nr)) > 0.1
+
+    def test_com_correction_tilts_direction(self):
+        from wara.apicalc import api_xyz
+        df = _xy_df()
+        Xc, Yc, _ = api_xyz(df, dt_unit="s", use_det=False, use_com=True)
+        X0, Y0, _ = api_xyz(df, dt_unit="s", use_det=False, use_com=False)
+        assert not np.allclose(Xc, X0) or not np.allclose(Yc, Y0)
+
+    def test_dt_unit_ns_matches_seconds(self):
+        from wara.apicalc import api_xyz
+        df_s = _xy_df()
+        df_ns = df_s.copy()
+        df_ns["dt"] = df_s["dt"] * 1e9
+        Zs = api_xyz(df_s, dt_unit="s", use_det=False)[2]
+        Zns = api_xyz(df_ns, dt_unit="ns", use_det=False)[2]
+        np.testing.assert_allclose(Zs, Zns, rtol=1e-9)
+
+    def test_invalid_dt_unit_raises(self):
+        from wara.apicalc import api_xyz
+        with pytest.raises(ValueError, match="dt_unit"):
+            api_xyz(_xy_df(), dt_unit="minutes")
+
+
+class TestApiXyzSimpleStillAvailable:
+    def test_simple_returns_arrays(self):
+        from wara.apicalc import api_xyz_simple
+        rng = np.random.default_rng(8)
+        n = 400
+        df = pd.DataFrame({
+            "X2": rng.uniform(-0.6, 0.6, n),
+            "Y2": rng.uniform(-0.6, 0.6, n),
+            "dt": rng.uniform(10, 30, n),   # ns (legacy convention)
+        })
+        X, Y, Z = api_xyz_simple(df, use_det=False)
+        assert len(X) == len(Y) == len(Z) == n
+
+
+# ---------------------------------------------------------------------------
 # GainShift.align — gain-drift correction across time segments
 # ---------------------------------------------------------------------------
 

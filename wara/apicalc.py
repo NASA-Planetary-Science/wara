@@ -17,7 +17,40 @@ from wara.read_parquet_api import get_data_path
 from wara import read_parquet_api
 import matplotlib.cm as cm
 from scipy.signal import correlate
+import scipy.constants as SC
 from wara import spectrum as sp
+
+
+# ---------------------------------------------------------------------------
+# Physics constants for the full position reconstruction (see
+# docs/API_position_reconstruction.pdf for the derivation).
+# ---------------------------------------------------------------------------
+_E_ALPHA = 3.5      # MeV, alpha kinetic energy from D-T
+_E_NEUTRON = 14.1   # MeV, neutron kinetic energy from D-T
+_M_ALPHA = SC.physical_constants["alpha particle mass energy equivalent in MeV"][0]
+_M_NEUTRON = SC.physical_constants["neutron mass energy equivalent in MeV"][0]
+_M_DEUTERON = SC.physical_constants["deuteron mass energy equivalent in MeV"][0]
+_M_TRITON = SC.physical_constants["triton mass energy equivalent in MeV"][0]
+
+
+def _speed(E, m, relativistic=True):
+    """Particle speed [m/s] from kinetic energy E and rest mass m (both MeV)."""
+    if relativistic:
+        g = 1.0 + E / m
+        beta = np.sqrt(1.0 - 1.0 / g / g)
+    else:
+        beta = np.sqrt(2.0 * E / m)
+    return beta * SC.c
+
+
+def v_com_from_beam(ion_energy_kev):
+    """Center-of-mass speed [m/s] of the D-T reaction for a deuteron beam of
+    energy ``ion_energy_kev`` (keV) on a stationary triton. Reproduces the
+    ``center-of-mass.npy`` lookup used by ROOTS ``calcXYZ`` from kinematics:
+    v_com = sqrt(2 m_d E_d) / (m_d + m_t) * c."""
+    Ed = ion_energy_kev / 1000.0  # MeV
+    p_d = np.sqrt(2.0 * _M_DEUTERON * Ed)  # MeV/c
+    return p_d / (_M_DEUTERON + _M_TRITON) * SC.c
 
 
 def test_limits(df, elog=True, Vmax=None, ekey="energy", tkey="dt", xkey="X", ykey="Y"):
@@ -897,9 +930,168 @@ def plot_scatter_density(df):
     plt.show()
 
 
-def api_xyz(df, det_pos=[0, 22.2, -25.515], toffset=None, use_det=True):
+def _alpha_xy_cm(df, xkey="X2", ykey="Y2", a_side=4.8):
+    """Map the dimensionless corner ratios in ``xkey``/``ykey`` to centimetres on
+    the YAP face. The populated edges of the alpha image (histogram region above
+    ~1/3 of the peak) are mapped linearly onto [-a/2, +a/2] cm, assuming the
+    image fills the ``a_side`` cm active area. Returns (xa, ya) arrays in cm."""
+    X = df[xkey].to_numpy()
+    Y = df[ykey].to_numpy()
+    res, xed, yed = np.histogram2d(Y, X, bins=1000)
+    resx = res.sum(axis=0)
+    maskx = resx > resx.max() / 3
+    minx, maxx = xed[0:-1][maskx][0], xed[0:-1][maskx][-1]
+    resy = res.sum(axis=1)
+    masky = resy > resy.max() / 3
+    miny, maxy = yed[0:-1][masky][0], yed[0:-1][masky][-1]
+
+    mx = a_side / (maxx - minx)
+    my = a_side / (maxy - miny)
+    xa = mx * (X - maxx) + a_side / 2.0
+    ya = my * (Y - maxy) + a_side / 2.0
+    return xa, ya
+
+
+def api_xyz(
+    df,
+    det_pos=(-18.0, 0.0, -25.0),
+    z_t=6.7,
+    beam_axis=(0.0, 0.0, 1.0),
+    ion_energy_kev=50.0,
+    toffset=None,
+    dt_col="dt",
+    dt_unit="s",
+    use_det=True,
+    relativistic=True,
+    use_com=True,
+    xkey="X2",
+    ykey="Y2",
+):
+    r"""Full-model reconstruction of the neutron-interaction point (X, Y, Z).
+
+    This is the authoritative reconstruction documented in
+    ``docs/API_position_reconstruction.pdf`` (the ``calcXYZ`` level of rigour):
+    relativistic alpha/neutron speeds, the center-of-mass correction (the alpha
+    and neutron are back-to-back only in the reaction CM frame), and the exact
+    gamma-detector vector. For the legacy non-relativistic, point-source model
+    use :func:`api_xyz_simple`.
+
+    Geometry / convention
+    ---------------------
+    The origin is the neutron production point (source). ``+z`` points up, so
+    **-z points down**, toward the sample. The YAP alpha detector sits above the
+    source at ``z = +z_t``; the alpha hit is ``(x0, y0, +z_t)``. The neutron
+    travels downward and the interaction lands at negative ``z``. ``det_pos`` is
+    the gamma-detector centre in this frame.
+
+    Only ``xkey``/``ykey`` (the dimensionless corner ratios, default ``X2``/
+    ``Y2`` -- built with :func:`calc_own_pos` if missing) and ``dt_col`` are
+    used; any precomputed ``X``/``Y``/``Z`` columns are ignored.
+
+    Parameters
+    ----------
+    df : pandas.DataFrame
+        Must provide ``xkey``/``ykey`` (or ``A,B,C,D`` to build them) and
+        ``dt_col``.
+    det_pos : (x, y, z)
+        Gamma-detector centre in **cm**, measured from the source. Default
+        ``(-18, 0, -25)``.
+    z_t : float
+        Source-to-YAP-face distance in **cm** (default 6.7).
+    beam_axis : (x, y, z)
+        Ion-beam unit vector (direction of the CM drift). Magnitude is
+        normalised; the correction is small (~0.3%).
+    ion_energy_kev : float
+        Deuteron beam energy in keV, used for the CM speed.
+    toffset : float or None
+        Electronic/z-align timing offset subtracted from ``dt`` (same unit as
+        ``dt_unit``) before reconstruction. Calibrates the absolute depth.
+    dt_col : str
+        Column holding the measured alpha-gamma time difference (the alpha
+        flight time is added internally).
+    dt_unit : {"s", "ns"}
+        Unit of ``dt_col`` (and of ``toffset``).
+    use_det : bool
+        If False, ignore the detector and use the straight-ray estimate
+        ``|n| = v_n * dt_a``.
+    relativistic, use_com : bool
+        Toggle the relativistic speeds and the CM correction (for comparison).
+    xkey, ykey : str
+        Alpha-position columns.
+
+    Returns
+    -------
+    (X, Y, Z) : tuple of numpy.ndarray
+        Interaction coordinates in **cm**.
+    """
+    if not isinstance(df, pd.DataFrame):
+        raise TypeError("df must be a pandas dataframe")
+    if xkey not in df.columns or ykey not in df.columns:
+        df = calc_own_pos(df, xkey_new=xkey, ykey_new=ykey)
+
+    c = SC.c
+    va = _speed(_E_ALPHA, _M_ALPHA, relativistic)
+    vn = _speed(_E_NEUTRON, _M_NEUTRON, relativistic)
+    vcom = v_com_from_beam(ion_energy_kev) if use_com else 0.0
+    chat = np.asarray(beam_axis, dtype=float)
+    chat = chat / np.linalg.norm(chat)
+    vcv = vcom * chat  # CM velocity vector [m/s]
+
+    # alpha hit on the YAP face, in metres (z = +z_t, above the source)
+    xa_cm, ya_cm = _alpha_xy_cm(df, xkey, ykey)
+    ax = xa_cm / 100.0
+    ay = ya_cm / 100.0
+    az = z_t / 100.0  # scalar
+
+    # alpha flight time: |A - v_com t| = v_alpha t  -> quadratic, positive root
+    qa = va * va - vcom * vcom
+    qb = 2.0 * (ax * vcv[0] + ay * vcv[1] + az * vcv[2])
+    qc = -(ax * ax + ay * ay + az * az)
+    t_alpha = (-qb + np.sqrt(qb * qb - 4.0 * qa * qc)) / (2.0 * qa)
+
+    # neutron lab velocity vector: -(alpha CM velocity)/v_a * v_n + v_com
+    wx = (ax - vcv[0] * t_alpha) / t_alpha
+    wy = (ay - vcv[1] * t_alpha) / t_alpha
+    wz = (az - vcv[2] * t_alpha) / t_alpha
+    vnx = -wx / va * vn + vcv[0]
+    vny = -wy / va * vn + vcv[1]
+    vnz = -wz / va * vn + vcv[2]
+
+    # measured time difference -> dt_a = dt + t_alpha
+    dt = df[dt_col].to_numpy(dtype=float)
+    if dt_unit == "ns":
+        dt = dt * 1e-9
+        toff = (toffset or 0.0) * 1e-9
+    elif dt_unit == "s":
+        toff = (toffset or 0.0)
+    else:
+        raise ValueError("dt_unit must be 's' or 'ns'")
+    dta = dt - toff + t_alpha
+
+    if use_det:
+        dx, dy, dz = np.asarray(det_pos, dtype=float) / 100.0  # m
+        A2 = c * c - (vnx * vnx + vny * vny + vnz * vnz)
+        B2 = -(2.0 * c * c * dta - 2.0 * (dx * vnx + dy * vny + dz * vnz))
+        C2 = c * c * dta * dta - (dx * dx + dy * dy + dz * dz)
+        t_n = (-B2 - np.sqrt(B2 * B2 - 4.0 * A2 * C2)) / (2.0 * A2)
+    else:
+        # straight ray: |n| = v_n * dt_a  ->  |v_n_vec| * t_n = v_n * dt_a
+        vmag = np.sqrt(vnx * vnx + vny * vny + vnz * vnz)
+        t_n = dta * vn / vmag
+
+    X = vnx * t_n * 100.0
+    Y = vny * t_n * 100.0
+    Z = vnz * t_n * 100.0
+    return X, Y, Z
+
+
+def api_xyz_simple(df, det_pos=[0, 22.2, -25.515], toffset=None, use_det=True):
     """Returns X, Y, Z reconstructed positions. Use the raw dataframe.
-    if use_det=False, the location of the gamma detector is ignored"""
+    if use_det=False, the location of the gamma detector is ignored.
+
+    Legacy, non-relativistic, point-source model (origin at the YAP centre,
+    sample at +z). Kept for reference; prefer :func:`api_xyz` for the full
+    center-of-mass-corrected, relativistic reconstruction."""
     if not isinstance(df, pd.DataFrame):
         raise TypeError("df must be a pandas dataframe")
 
