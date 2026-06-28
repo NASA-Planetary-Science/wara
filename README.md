@@ -5,7 +5,7 @@
 <h1 align="center">Welcome to wara</h1>
 
 <p align="center">
-  <em>Gamma Ray &amp; Neutron Spectroscopy for Planetary Exploration</em>
+  <em>Gamma Ray &amp; Neutron Spectroscopy</em>
 </p>
 
 [![Documentation](https://readthedocs.org/projects/wara/badge/?version=latest)](https://wara.readthedocs.io/en/latest/)

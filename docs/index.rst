@@ -8,7 +8,7 @@ Welcome to wara
 ===============
 
 **wara** is a Python package for gamma-ray and neutron spectroscopy analysis,
-with an emphasis on neutron-induced gamma ray emission for planetary exploration.
+with an emphasis on neutron-induced gamma ray emission.
 
 .. toctree::
    :maxdepth: 1
