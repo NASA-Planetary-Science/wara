@@ -30,7 +30,8 @@ from wara import peaksearch as ps
 from . import theme as T
 from .theme import NAV_SECTIONS, TABS_WITH_OPTIONS, STYLESHEET, dot_icon, recolor_toolbar_icons, PlanetaryNavButton
 from .widgets import (
-    SpectrumCanvas, SpectrumOptions, PlaceholderOptions, PlaceholderPage, header, hsep,
+    SpectrumCanvas, SpectrumOptions, PlaceholderOptions, PlaceholderPage,
+    ComingSoonPage, header, hsep,
 )
 from .io import load_spectrum_file, OPEN_FILTER
 from .nuclear import NuclearDatabaseDialog
@@ -338,6 +339,12 @@ class WaraBetaApp(QMainWindow):
                 self.stack.addWidget(self.resolution_page)
             elif name == "API":
                 self.stack.addWidget(self.api_page)
+            elif name == "Planetary":
+                self.stack.addWidget(ComingSoonPage(
+                    name,
+                    "Planetary gamma-ray and neutron spectroscopy tools "
+                    "(die-away analysis, DAWN/LP data) are being ported here.",
+                ))
             else:
                 self.stack.addWidget(PlaceholderPage(name))
         return self.stack
@@ -1218,9 +1225,42 @@ class WaraBetaApp(QMainWindow):
         self.statusBar().showMessage("  Spectrum reset to originally loaded state")
 
 
+USAGE = """\
+wara - Gamma-ray and Neutron Spectroscopy Analysis GUI
+
+Usage:
+  wara [<file_name>] [options]
+
+  options:
+      -o                        open a blank window (default when no file given)
+      --legacy                  launch the pre-2.0 GUI instead
+      --beta                    launch the new GUI explicitly (this is the default)
+      --fwhm_at_0=<fwhm0>       FWHM value at x=0
+      --min_snr=<msnr>          minimum peak SNR for peak search
+      --ref_x=<xref>            x reference channel/energy for fwhm_ref
+      --ref_fwhm=<ref_fwhm>     FWHM at the reference point (ref_x)
+      --cebr                    detector type: cerium bromide (CeBr3)
+      --labr                    detector type: lanthanum bromide (LaBr3)
+      --hpge                    detector type: high-purity germanium (HPGe)
+      -h --help                 show this help and exit
+
+Accepted file formats: CSV (counts | energy_EUNITS, or single "counts" column),
+SPE, .txt, CNF, MCA, others. Channels are inferred automatically starting
+from 0 if not provided.
+"""
+
+
 def _parse_argv():
-    """Parse CLI options matching the legacy docopt interface."""
+    """Parse CLI options matching the legacy docopt interface.
+
+    ``-h``/``--help`` prints usage and exits; ``-o`` (open a blank window) is
+    accepted for backward compatibility and is a no-op since that is already
+    the default behaviour when no file is given.
+    """
     argv = sys.argv[1:]
+    if "-h" in argv or "--help" in argv:
+        print(USAGE)
+        sys.exit(0)
     opts = {"file_name": None, "detector": None, "min_snr": None,
             "ref_x": None, "ref_fwhm": None, "fwhm_at_0": None}
     positional = []
@@ -1239,6 +1279,8 @@ def _parse_argv():
             opts["ref_fwhm"] = a.split("=", 1)[1]
         elif a.startswith("--fwhm_at_0="):
             opts["fwhm_at_0"] = a.split("=", 1)[1]
+        elif a == "-o":
+            pass  # open a blank window — already the default with no file
         elif not a.startswith("-"):
             positional.append(a)
         i += 1
@@ -1262,7 +1304,7 @@ def main():
     app.setStyleSheet(STYLESHEET)
     win = WaraBetaApp(file_name=opts["file_name"], cli_opts=opts)
     win.show()
-    app.exec_()
+    sys.exit(app.exec_())
 
 
 if __name__ == "__main__":

@@ -787,3 +787,25 @@ class PlaceholderPage(QWidget):
         lab = QLabel(f"{name.upper()} PLOT AREA")
         lab.setObjectName("placeholder"); lab.setAlignment(Qt.AlignCenter)
         lay.addWidget(lab)
+
+
+class ComingSoonPage(QWidget):
+    """A deliberate, friendly placeholder for a section that is announced but
+    not yet built (e.g. Planetary). Reads as intentional rather than unfinished."""
+
+    def __init__(self, name, subtitle="This section is on the way."):
+        super().__init__()
+        self.setObjectName("content")
+        lay = QVBoxLayout(self)
+        lay.addStretch(1)
+        title = QLabel(name.upper())
+        title.setObjectName("placeholder"); title.setAlignment(Qt.AlignCenter)
+        lay.addWidget(title)
+        tag = QLabel("COMING SOON")
+        tag.setObjectName("section_header"); tag.setAlignment(Qt.AlignCenter)
+        lay.addWidget(tag)
+        sub = QLabel(subtitle)
+        sub.setObjectName("stat_key"); sub.setAlignment(Qt.AlignCenter)
+        sub.setWordWrap(True)
+        lay.addWidget(sub)
+        lay.addStretch(1)

@@ -41,21 +41,42 @@ from the directory where `pyproject.toml` is located.
 
 ## Using wara
 
-Try running the following (if the path is set correctly, the GUI can run from any directory;
+Launch the GUI (if the path is set correctly, it can run from any directory;
 otherwise, run from inside the `wara` folder):
 ```
-wara -o
+wara
 ```
-If running through the Spyder IDE, replace `python` with `run`.
+As of **v2.0**, `wara` opens the redesigned interface — a three-column layout
+with a navigation rail (Spectrum, Calibration, Efficiency, Resolution, API,
+Planetary), a contextual options panel, and the plot area. Run `wara --help`
+for the full list of command-line options.
 
-The GUI window should appear. Then select **File → Open → examples → data → test_data_cebr.csv**.
-Click on **Find peaks**, select LaBr/CeBr, and hit **Apply**.
-You should see several lines identified in the spectrum. Drag the mouse over one or more lines to perform
-a Gaussian fit and feel free to play around. Info buttons are placed strategically to guide the user.
+> The previous interface is still available during the transition period:
+> ```
+> wara --legacy
+> ```
+> (`wara --beta` is also accepted as an explicit alias for the new GUI.)
 
-![gammaGUI](figs/gammaGUI_qt.png)
-![peakIdentifer](figs/gammaGUI_qt_peak_identifier.png)
-![ecalGUI](figs/gammaGUI_qt_cal.png)
+To take a quick tour: click **Open Spectrum** in the navigation rail and load
+**examples → data → test_data_cebr.csv**. On the **Spectrum** tab, expand
+**Auto-Find Peaks**, choose the **LaBr/CeBr** detector preset, and hit
+**Find Peaks**. You should see several lines identified in the spectrum. Drag
+the mouse over one or more lines to perform a Gaussian fit, and explore the
+other tabs from there. Info buttons are placed strategically to guide the user.
+
+The **Spectrum** tab — peak search, fitting, and isotope identification:
+
+![Spectrum tab](figs/GUI-spectrum.png)
+
+**Energy calibration** and Gaussian **peak fitting**:
+
+![Calibration tab](figs/GUI-calibration.png)
+![Peak fitting](figs/GUI-peakfit.png)
+
+The **API** tab — Associated Particle Imaging data exploration with linked
+energy/time/X-Y panels and a 3D hit-cloud view:
+
+![API tab](figs/GUI-API.png)
 
 ## Data path configuration
 

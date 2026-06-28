@@ -114,6 +114,28 @@ def _combo_row(label_text, widget):
     return row
 
 
+def _clear_axis(ax):
+    """Clear *ax* without warning. Clearing an axis that is currently log-scaled
+    makes matplotlib apply a non-positive default ylim and warn; resetting to a
+    linear scale first avoids that."""
+    ax.set_yscale("linear")
+    ax.clear()
+
+
+def _draw_axes_placeholder(ax, message, xlabel, style_axis, yscale="log"):
+    """Clear *ax*, apply the owning dialog's *style_axis*, and center a dim
+    *message*. Shared by the API dialogs that show a hint until the user runs
+    something, so the styling stays identical across them."""
+    _clear_axis(ax)
+    ax.set_ylim(0.1, 1.0)
+    style_axis(ax, xlabel, yscale)
+    if message:
+        # wrap=True keeps a long message inside the axes instead of running
+        # off both edges of the plot.
+        ax.text(0.5, 0.5, message, transform=ax.transAxes, ha="center",
+                va="center", color=T.TEXT_DIM, fontsize=12, wrap=True)
+
+
 class ApiFilterDialog(QDialog):
     """Manual min/max entry for the X-Y, time and energy filters  -- the typed
     equivalent of dragging a selector on the plot."""
@@ -598,7 +620,7 @@ class ShiftsDialog(QDialog):
 
     def _draw_placeholder(self, ax, message, xlabel, yscale="log"):
         """Empty aligned panel with a hint, shown until the user runs a preview."""
-        ax.clear()
+        _clear_axis(ax)
         ax.set_ylim(0.1, 1.0)          # positive, so a log scale doesn't warn
         ax.set_yscale(yscale)
         ax.set_xlabel(xlabel, color=T.TEXT_DIM, fontsize=12)
@@ -610,7 +632,7 @@ class ShiftsDialog(QDialog):
                 color=T.TEXT_DIM, fontsize=12)
 
     def _draw_overlay(self, ax, spectra, n_seg, title, xlabel, yscale="log"):
-        ax.clear()
+        _clear_axis(ax)
         colors = cm.viridis(np.linspace(0, 1, n_seg))
         for i, spe in enumerate(spectra):
             ax.step(spe.energies, spe.counts, where="mid",
@@ -978,14 +1000,7 @@ class CombineRunsDialog(QDialog):
             sp_.set_color(T.BORDER)
 
     def _draw_placeholder(self, ax, message, xlabel, yscale="log"):
-        ax.clear()
-        ax.set_ylim(0.1, 1.0)
-        self._style_axis(ax, xlabel, yscale)
-        if message:
-            # wrap=True keeps a long message inside the axes instead of running
-            # off both edges of the plot.
-            ax.text(0.5, 0.5, message, transform=ax.transAxes, ha="center",
-                    va="center", color=T.TEXT_DIM, fontsize=12, wrap=True)
+        _draw_axes_placeholder(ax, message, xlabel, self._style_axis, yscale)
 
     def _draw_overlay(self, ax, spectra, labels, title, xlabel, yscale="log"):
         ax.clear()
@@ -1299,14 +1314,7 @@ class DiagnosticsDialog(QDialog):
             sp_.set_color(T.BORDER)
 
     def _draw_placeholder(self, ax, message, xlabel, yscale="log"):
-        ax.clear()
-        ax.set_ylim(0.1, 1.0)
-        self._style_axis(ax, xlabel, yscale)
-        if message:
-            # wrap=True keeps a long message inside the axes instead of running
-            # off both edges of the plot.
-            ax.text(0.5, 0.5, message, transform=ax.transAxes, ha="center",
-                    va="center", color=T.TEXT_DIM, fontsize=12, wrap=True)
+        _draw_axes_placeholder(ax, message, xlabel, self._style_axis, yscale)
 
     def _state(self, msg):
         self.lbl_mca_state.setText(msg)
