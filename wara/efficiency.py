@@ -7,6 +7,7 @@ import numpy as np
 import pandas as pd
 import datetime
 from wara.matplotlib_theme import apply_theme
+from wara.fit_utils import safe_eval_uncertainty
 
 
 def calculate_t_elapsed(date0, date1):
@@ -181,7 +182,7 @@ def eff_fit(en, eff, eff_err, order=1, ax_fit=None, ax_res=None):
         fit = model.fit(effs, params=pars, x=energies, weights=1.0 / effs_sig)
         erg_continuous = np.linspace(energies[0], energies[-1], num=100)
         y = fit.eval(x=erg_continuous)
-        ye = fit.eval_uncertainty()
+        ye = safe_eval_uncertainty(fit)
         coeffs = list(fit.best_values.values())
         equation = f"${coeffs[0]:.5E}$" + f"${coeffs[1]:.5E}E$"
         ax_fit.plot(erg_continuous, y, ls="-", lw=3, color="green", label=equation)
@@ -198,7 +199,7 @@ def eff_fit(en, eff, eff_err, order=1, ax_fit=None, ax_res=None):
             effs, x=energies, a0=0, a1=0, a2=0, a3=0, weights=1.0 / effs_sig
         )
         best_vals = fit.best_values
-        ye = fit.eval_uncertainty()
+        ye = safe_eval_uncertainty(fit)
         a0 = best_vals["a0"]
         a1 = best_vals["a1"]
         a2 = best_vals["a2"]

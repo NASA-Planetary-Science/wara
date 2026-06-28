@@ -14,6 +14,7 @@ import pandas as pd
 
 from . import peaksearch as ps
 from .matplotlib_theme import apply_theme, get_theme, DARK
+from .fit_utils import safe_eval_uncertainty
 
 
 class PeakFit:
@@ -657,7 +658,7 @@ class PeakFit:
                         lw=2, label=show_label,
                     )
 
-            dely = res.eval_uncertainty(x=x_pred, sigma=3)
+            dely = safe_eval_uncertainty(res, x=x_pred, sigma=3)
             ax_fit.fill_between(
                 x_pred,
                 y_pred - dely,
@@ -993,7 +994,7 @@ class AddPeaks:
         best_fit = fit_obj.fit_result.best_fit
         redchi = fit_obj.fit_result.redchi
         comps = fit_obj.fit_result.eval_components()
-        uncertainty = fit_obj.fit_result.eval_uncertainty()
+        uncertainty = safe_eval_uncertainty(fit_obj.fit_result)
         bkg_type = fit_obj.bkg
         for i in range(npeaks):
             self.df.loc[self.n, "x_data"] = x_data

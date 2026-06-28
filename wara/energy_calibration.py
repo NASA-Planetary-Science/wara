@@ -9,6 +9,7 @@ from itertools import combinations
 from math import comb
 from scipy.stats import linregress
 from wara.matplotlib_theme import apply_theme
+from wara.fit_utils import safe_eval_uncertainty
 
 
 class EnergyCalibration:
@@ -108,7 +109,7 @@ class EnergyCalibration:
         ax_fit=None,
         ax_res=None,
     ):
-        ye = self.fit.eval_uncertainty(x=self.mean_vals)
+        ye = safe_eval_uncertainty(self.fit, x=self.mean_vals)
         equation = self._build_equation()
     
         plt.rc("font", size=14)

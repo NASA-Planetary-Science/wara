@@ -4,6 +4,7 @@ import pandas as pd
 from PyQt5 import QtWidgets
 from wara import energy_calibration as ecal
 from wara import spectrum as sp
+from wara.fit_utils import safe_eval_uncertainty
 from ..table import TableModel
 
 
@@ -125,7 +126,7 @@ class CalibrationMixin:
             self.df_ecal_fit[f"Sigma ({self.cal_e_units})"] = [0] * len(self.mean_vals)
             self.perform_cal(self.df_ecal_fit)
             self.df_ecal_fit[f"Sigma ({self.cal_e_units})"] = list(
-                self.cal.fit.eval_uncertainty()
+                safe_eval_uncertainty(self.cal.fit)
             )
             if self.df_ecal_not_fit is not None:
                 self.df_ecal = pd.concat(
