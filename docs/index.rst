@@ -22,8 +22,12 @@ with an emphasis on neutron-induced gamma ray emission.
    :caption: User Guide
 
    spectrum
-   peaks
+   peak_finding
+   peak_fitting
    calibration
+   efficiency
+   resolution
+   api
    gui
 
 .. toctree::
