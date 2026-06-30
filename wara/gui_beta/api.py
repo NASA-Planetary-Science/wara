@@ -3212,6 +3212,15 @@ class ApiOptions(QScrollArea):
             "Open the diagnostics window: MCA spectra, run stats, and binary "
             "trace/list-mode data for a run")
         lay.addWidget(self.btn_diagnostics)
+        self.btn_sigma = QPushButton("Sigma...")
+        self.btn_sigma.setObjectName("find_btn")
+        self.btn_sigma.setCursor(Qt.PointingHandCursor)
+        self.btn_sigma.setToolTip(
+            "Open the cross-section (σ) calculator: an interactive walk-through "
+            "of the sample/background/profile/flat-field workflow that turns API "
+            "runs into a measured neutron cross section.\n"
+            "Requires the optional, separately-installed 'sigma' package.")
+        lay.addWidget(self.btn_sigma)
         self.btn_apply_data = QPushButton("Apply to data")
         self.btn_apply_data.setObjectName("yellow_btn")
         self.btn_apply_data.setCursor(Qt.PointingHandCursor)
@@ -3337,6 +3346,7 @@ class ApiController:
         self._shifts_dlg = None
         self._combine_dlg = None
         self._diag_dlg = None
+        self._sigma_dlg = None      # SigmaDialog (created lazily; needs optional sigma)
         self._wire()
         # Tile selection happens on the main X-Y panel: a click toggles a tile
         # while the Selections dialog's tiling is active (see _xy_on_map_click).
@@ -3364,6 +3374,7 @@ class ApiController:
         o.btn_shifts.clicked.connect(self._open_shifts)
         o.btn_combine.clicked.connect(self._open_combine)
         o.btn_diagnostics.clicked.connect(self._open_diagnostics)
+        o.btn_sigma.clicked.connect(self._open_sigma)
         o.cb_spe_log.toggled.connect(self._toggle_spe_log)
         o.cb_xy_log.toggled.connect(lambda *_: self._replot_xy())
         o.ed_vmax.returnPressed.connect(self._apply_vmax)
@@ -5140,6 +5151,46 @@ class ApiController:
         self._diag_dlg.show()
         self._diag_dlg.raise_()
         self._diag_dlg.activateWindow()
+
+    # -- Cross-section (sigma) -------------------------------------------------
+    def _open_sigma(self):
+        """Open the cross-section (σ) calculator.
+
+        The whole feature rides on the optional, closed-source ``sigma`` package
+        (one directory up from wara).  It is *not* a wara dependency: if it is
+        not installed we just tell the user how to get it and return, so the rest
+        of the API tab keeps working.  ``SigmaDialog`` is imported lazily here so
+        ``gui_beta.api`` never pulls in ``sigma`` at module import time.
+        """
+        self._flash_button(self.opts.btn_sigma)
+        try:
+            import sigma  # noqa: F401  -- presence check only
+            from .sigma_xs import SigmaDialog
+        except ImportError:
+            QMessageBox.information(
+                self.app, "Cross-section tools not available",
+                "The Sigma cross-section calculator needs the optional "
+                "'sigma' package, which is not installed.\n\n"
+                "It is a separate, closed-source companion to wara.  Once it is "
+                "installed (pip install -e ../sigma) this button opens the "
+                "interactive cross-section workflow.")
+            self._status("Sigma package not installed -- cross-section tools unavailable")
+            return
+        if self._sigma_dlg is None:
+            try:
+                self._sigma_dlg = SigmaDialog(self)
+            except Exception as exc:  # noqa: BLE001  -- surface dialog build errors
+                traceback.print_exc()
+                self._status(f"Could not open the Sigma calculator: {exc}")
+                return
+        # Seed the sample run from the API tab's loaded run (or current inputs).
+        date = self._src_date if self._src_date is not None else self.opts.ed_date.text().strip()
+        runnr = self._src_runnr if self._src_runnr is not None else self.opts.ed_run.text().strip()
+        ch = self._src_ch if self._src_ch is not None else self.opts.ed_ch.text().strip()
+        self._sigma_dlg.seed_sample(date, runnr, ch)
+        self._sigma_dlg.show()
+        self._sigma_dlg.raise_()
+        self._sigma_dlg.activateWindow()
 
     # -- 3D volume -------------------------------------------------------------
     def _open_3d(self):
