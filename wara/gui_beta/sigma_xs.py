@@ -593,12 +593,12 @@ class SigmaDialog(QDialog):
             lay.addWidget(self._range_row(lbl, lo, hi))
 
         lay.addWidget(hsep())
-        lay.addWidget(header("BACKGROUND-SCALING ENERGY WINDOW"))
+        lay.addWidget(header("BKG-SCALING WINDOW"))
         enote = QLabel(
             "⚠ This energy window is used ONLY to scale the background (it picks "
             "the time-spectrum band where the sample and background are matched).  "
             "It does NOT define the net photopeak counts — those come from the "
-            "fit on the Background tab.")
+            "fit on the Net counts tab.")
         enote.setObjectName("stat_key"); enote.setWordWrap(True)
         enote.setStyleSheet(f"color:{T.ACCENT_AMBER};")
         lay.addWidget(enote)
