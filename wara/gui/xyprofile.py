@@ -359,7 +359,7 @@ class TileFitWindow(SliceFitWindow):
     spectra harvesting a net peak area, then emits one point per tile (with the
     tile centre) for the area-vs-X / area-vs-Y plots.
 
-    Reuses the Energy tab's :class:`~wara.gui_beta.slicefit.SliceFitWindow`
+    Reuses the Energy tab's :class:`~wara.gui.slicefit.SliceFitWindow`
     wholesale; only the captions and the emitted payload differ.
     """
 

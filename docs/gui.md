@@ -12,7 +12,7 @@ wara              # the new GUI (default)
 wara --legacy     # the previous interface, during the transition period
 ```
 
-`wara --beta` is accepted as an explicit alias for the new GUI. You can also open
+You can also open
 a file and preconfigure the peak search from the command line — see the
 [Quickstart](quickstart.md#command-line-options).
 
@@ -116,6 +116,85 @@ send a selected spectrum back to the Spectrum tab, and explore the reconstructed
 ![API tab](../figs/GUI-API.png)
 
 See [Associated Particle Imaging](api.md).
+
+## The Planetary tab
+
+The **Planetary** tab visualizes and analyzes data from NASA planetary
+gamma-ray/neutron spectrometer missions, starting with the **Lunar Prospector
+GRS**. The canvas is split vertically: on top, a fully interactive
+high-resolution 3D Moon with the correct latitude/longitude coordinates
+(hover anywhere to read lon/lat); below it, the gamma spectrum for the
+selected region.
+
+The left menu drives the workflow:
+
+1. **Search PDS** — query the NASA PDS archive for daily LP-GRS products by
+   measurement date and orbit phase (~100 km mapping orbit vs the ~30–40 km
+   extended mission).
+2. **Download** — fetch the matching products (~11 MB per day) into
+   `wara/planetary/data/` (configurable; kept between sessions and ignored by
+   git), so datasets you decide to keep are never re-scraped from the web.
+   Already-downloaded files are skipped.
+3. **Load into memory** — read the cached products; every ~32 s record carries
+   its own sub-spacecraft coordinates and altitude.
+4. **Arm "Select region", then click the Moon** — a lat/lon box (configurable
+   half-width) is drawn at the clicked point and the spectra of all records
+   inside it are summed and plotted, optionally against the scaled all-data
+   average. Each selection disarms the button again, so orbiting the globe
+   never selects by accident.
+5. While **Keep spectra** is checked, selecting a new region keeps the
+   previous spectrum visible so several regions can be compared: each kept
+   spectrum and its box on the Moon share a color. Untick it to drop the kept
+   spectra. **Send to spectrum** hands the regional spectrum to the Spectrum
+   tab for peak finding and fitting.
+6. **Show orbit path** overlays the spacecraft ground track on the globe,
+   colored by measurement time (hover a point for the exact UTC date,
+   position, and altitude); untick to hide it. It uses the loaded records
+   when data is in memory — otherwise it falls back to the bundled
+   whole-mission orbit metadata (`wara/planetary/data/lp_grs_metadata.csv`,
+   the sub-spacecraft lat/lon/altitude of every daily product, scraped once
+   from the PDS), so LP coverage is visible without downloading anything.
+   In metadata mode the path follows the date-range and orbit controls and
+   redraws when they change (leave the dates empty to see the whole mission).
+   The same metadata drives the "products available / downloaded" summary at
+   the top of the options panel.
+7. **Landmarks** labels important reference points on the
+   Moon — the major maria, landmark craters, far-side basins, the poles, and
+   the Apollo 11 site; tick to show them.
+8. The **Dataset** dropdown switches between the raw Level-3 spectra and the
+   **calibrated Level-5 elemental abundance maps**
+   (`lp-l-grs-5-elem-abundance-v1`): pick an element (Th, K, U, FeO, TiO₂,
+   MgO, Al₂O₃, SiO₂, CaO), a pixel size (2°/5°/20°), and a colormap, and the
+   map is draped over the Moon with a colorbar. An **Opacity** control makes
+   the composition map semi-transparent, so the base layer shows through —
+   the grey albedo Moon, or the LOLA elevation colors if that was the
+   previously selected dataset (both colorbars stay visible) — the Th map shows the KREEP-rich
+   Procellarum–Imbrium terrane. Switching back to Raw restores the albedo
+   Moon. Tables download once (~1–4 MB) into the planetary data folder.
+
+9. **Topography (LRO LOLA)** — the Dataset dropdown's **Elevation (LOLA)**
+   entry drapes the LOLA global elevation model over the Moon as a color
+   map, and the **3D topography** checkbox displaces the globe surface by
+   the real terrain (adjustable vertical exaggeration; the DEM downloads
+   once, ~2 MB). The relief works with every drape, so **Calibrated +
+   3D topography** shows composition over terrain — e.g. the iron-rich,
+   low-lying maria vs. the iron-poor highlands.
+10. **2D map (equirectangular)** switches to a flat longitude/latitude map
+    that shows the Moon at the **native resolution of the texture** (an
+    image, not a mesh — much sharper than the globe). Drapes, landmarks,
+    orbit paths, selection boxes, and click-to-select all keep working, and
+    the axes zoom/pan like any 2D plot; untick to return to the globe.
+    (3D relief applies only to the globe.)
+11. **Mission info…** opens a browser for the mission's PDS documentation —
+   the archive overview, mission/spacecraft/instrument descriptions, the
+   GRS/NS data-set documents, the data-products summary, and the reference
+   list — fetched once from the PDS Geosciences node and cached locally, with
+   a link to the [LP reduced GRS/NS mission
+   page](https://pds-geosciences.wustl.edu/missions/lunarp/reduced_grsns.html).
+
+The same backend is scriptable from Python via `wara.planetary`
+(`list_grs_products`, `filter_products`, `download_products`, `read_grs_day`,
+`download_abundance`, `read_abundance`, `abundance_grid`).
 
 ## Tips
 

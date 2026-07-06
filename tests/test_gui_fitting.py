@@ -1,6 +1,6 @@
 """
-Offscreen GUI regression tests for the wara --beta Drag-and-Fit window
-(wara.gui_beta.fitting.FitWindow), focused on the "Net area − linear bkg"
+Offscreen GUI regression tests for the wara Drag-and-Fit window
+(wara.gui.fitting.FitWindow), focused on the "Net area − linear bkg"
 method (wara.advanced_fit.PeakAreaLinearBkg).
 
 Regression target: the area path mapped the dragged ROI to full-precision outer
@@ -27,7 +27,7 @@ from PyQt5.QtWidgets import QApplication
 
 from wara import file_reader
 from wara.peaksearch import PeakSearch
-from wara.gui_beta.fitting import FitWindow
+from wara.gui.fitting import FitWindow
 
 
 DATA_DIR = Path(__file__).parent.parent / "examples" / "data"
@@ -180,11 +180,11 @@ class TestPeakFitTable:
 
 
 # ---------------------------------------------------------------------------
-# New peak-fitting features surfaced in the beta GUI: all profiles, the step
+# New peak-fitting features surfaced in the redesigned GUI: all profiles, the step
 # background, and the enriched results table (FWTM / tailing / asymmetry).
 # ---------------------------------------------------------------------------
 
-from wara.gui_beta.fitting import PEAK_SHAPES, BKG_ARGS
+from wara.gui.fitting import PEAK_SHAPES, BKG_ARGS
 
 
 class TestProfilesAndModels:
@@ -337,7 +337,7 @@ class TestFitDetailsReport:
 
 class TestCentroidEnergyDialog:
     def _dialog(self, qapp, **kw):
-        from wara.gui_beta.fitting import CentroidEnergyDialog
+        from wara.gui.fitting import CentroidEnergyDialog
         return CentroidEnergyDialog(None, [500.0, 1200.0], **kw)
 
     def test_has_per_row_database_buttons(self, qapp):
@@ -347,7 +347,7 @@ class TestCentroidEnergyDialog:
         assert dlg.table.cellWidget(1, 2) is not None
 
     def test_pick_energy_fills_cell_in_selected_units(self, qapp, monkeypatch):
-        import wara.gui_beta.nuclear as nuc
+        import wara.gui.nuclear as nuc
         from PyQt5.QtWidgets import QDialog
 
         class FakePicker:
@@ -369,7 +369,7 @@ class TestCentroidEnergyDialog:
         assert dlg.pairs()[0] == (500.0, "1.3325")
 
     def test_pick_energy_cancel_leaves_cell_blank(self, qapp, monkeypatch):
-        import wara.gui_beta.nuclear as nuc
+        import wara.gui.nuclear as nuc
         from PyQt5.QtWidgets import QDialog
 
         class FakePicker:
@@ -391,7 +391,7 @@ class TestCentroidEnergyDialog:
 
 class TestNuclearLinePickerMemory:
     def test_remembers_last_search(self, qapp):
-        import wara.gui_beta.nuclear as nuc
+        import wara.gui.nuclear as nuc
         # Reset to a known baseline so the test is order-independent.
         nuc._LAST_LINE_SEARCH.update(
             database="Common lab sources", element="", energy="", range="")

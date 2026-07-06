@@ -1,4 +1,4 @@
-"""Palette, fonts, stylesheet, and small paint helpers for the beta GUI."""
+"""Palette, fonts, stylesheet, and small paint helpers for the wara GUI."""
 import matplotlib
 from PyQt5.QtCore import Qt, QSize, QRectF
 from PyQt5.QtGui import QColor, QPixmap, QPainter, QIcon, QBrush, QLinearGradient, QPen
@@ -42,7 +42,8 @@ NAV_SECTIONS = [
 ]
 
 # Tabs with a real/mocked options column. Others collapse the column.
-TABS_WITH_OPTIONS = {"Spectrum", "Calibration", "Efficiency", "Resolution", "API"}
+TABS_WITH_OPTIONS = {"Spectrum", "Calibration", "Efficiency", "Resolution", "API",
+                     "Planetary"}
 
 
 def apply_mpl_theme():

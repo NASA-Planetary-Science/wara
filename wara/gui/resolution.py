@@ -1,6 +1,6 @@
 """Resolution tab: detector energy resolution (FWHM vs energy).
 
-A port of the legacy ``gui/_mixins/efficiency.py`` FWHM workflow into the beta
+A port of the legacy ``gui/_mixins/efficiency.py`` FWHM workflow into the wara GUI
 GUI. Peak fits are pushed in from the Drag-and-Fit window; each fitted peak
 contributes a (centroid, FWHM) point. The points are fitted with a resolution
 model — order 1 ``FWHM = a + b·√E`` or order 2 ``FWHM = a + b·√(E + c·E²)``

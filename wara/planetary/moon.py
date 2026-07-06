@@ -24,7 +24,7 @@ Conventions
 * Radius is in kilometers (mean lunar radius ``R_MOON_KM``); pass ``radius`` to
   override (e.g. to draw a marker slightly above the surface).
 
-The bundled equirectangular albedo map (``data/moon_albedo_1024.png``, a
+The bundled equirectangular albedo map (``textures/moon_albedo_1024.png``, a
 downsampled NASA/USGS lunar mosaic) is centered on 0 deg: its left edge is
 lon = -180, right edge lon = +180, top row lat = +90, bottom row lat = -90.
 """
@@ -164,7 +164,7 @@ def default_texture_path(size=1024):
     """
     if size not in (1024, 2048):
         raise ValueError(f"no bundled texture of size {size} (use 1024 or 2048)")
-    return str(files("wara.planetary").joinpath(f"data/moon_albedo_{size}.png"))
+    return str(files("wara.planetary").joinpath(f"textures/moon_albedo_{size}.png"))
 
 
 def load_texture_intensity(lon_grid, lat_grid, texture=None):

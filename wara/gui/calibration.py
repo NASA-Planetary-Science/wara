@@ -1,7 +1,7 @@
 """Calibration tab: build an energy calibration E = f(channel) and apply it.
 
 A faithful port of the legacy ``gui/_mixins/calibration.py`` workflow into the
-beta GUI:
+wara GUI:
 
 * Calibration points live in an editable table (Use · Channel · Energy).
 * Channel centroids are pushed in from the Drag-and-Fit window
@@ -192,7 +192,7 @@ class CalibrationPage(QWidget):
         ax_res = self.fig.add_subplot(gs[0, 0])
         ax_fit = self.fig.add_subplot(gs[1, 0])
         cal.plot(residual=True, ax_fit=ax_fit, ax_res=ax_res)
-        # EnergyCalibration.plot labels the axis "Energy [units]"; the beta GUI
+        # EnergyCalibration.plot labels the axis "Energy [units]"; the wara GUI
         # uses parentheses for units, so relabel.
         ax_fit.set_ylabel(f"Energy ({cal.e_units})")
         self._recolor_points(ax_fit)

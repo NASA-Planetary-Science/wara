@@ -1,5 +1,5 @@
-"""Offscreen GUI regression tests for the wara --beta Efficiency tab
-(wara.gui_beta.efficiency: EfficiencyOptions / EfficiencyPage /
+"""Offscreen GUI regression tests for the wara Efficiency tab
+(wara.gui.efficiency: EfficiencyOptions / EfficiencyPage /
 EfficiencyController + the unit parser).
 
 Covers the table-driven workflow: receiving a peak fit (one editable row per
@@ -24,8 +24,8 @@ from PyQt5.QtWidgets import QApplication, QDialog
 from wara import spectrum as sp
 from wara import peaksearch as ps
 from wara import peakfit as pf
-from wara.gui_beta.app import WaraBetaApp
-from wara.gui_beta import efficiency as E
+from wara.gui.app import WaraApp
+from wara.gui import efficiency as E
 
 
 SLOPE, INTERCEPT = 0.5, 10.0
@@ -48,7 +48,7 @@ def _synthetic_spectrum():
 
 @pytest.fixture
 def app(qapp):
-    w = WaraBetaApp()
+    w = WaraApp()
     spect = _synthetic_spectrum()
     w.spect = spect
     w._spect_orig = spect.copy()
@@ -302,7 +302,7 @@ def stub_picker(monkeypatch):
         def selected_record(self):
             return box["record"]
 
-    monkeypatch.setattr("wara.gui_beta.nuclear.NuclearLinePicker", _Stub)
+    monkeypatch.setattr("wara.gui.nuclear.NuclearLinePicker", _Stub)
     return box
 
 
@@ -371,7 +371,7 @@ def test_logx_toggle_replots(app):
 
 
 def test_data_markers_recoloured_for_dark_mode(app):
-    from wara.gui_beta.efficiency import _is_dark
+    from wara.gui.efficiency import _is_dark
     _add_filled_points(app, 2)
     ax = app.efficiency.page.fig.axes[-1]
     markers = [ln for ln in ax.lines if ln.get_marker() not in ("", " ", "None", None)]

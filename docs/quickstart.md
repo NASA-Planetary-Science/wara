@@ -17,8 +17,7 @@ Planetary), a contextual options panel, and the plot area.
 
 ```{note}
 The previous interface is still available during the transition period via
-`wara --legacy`. (`wara --beta` is also accepted as an explicit alias for the
-new GUI.)
+`wara --legacy`.
 ```
 
 ### A quick tour

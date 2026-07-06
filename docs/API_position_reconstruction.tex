@@ -315,7 +315,7 @@ $v_{\mathrm{com}}\to0$ \emph{and} when $\bm d$ is measured from the same point a
 $\bm n$ --- which exposes the origin inconsistency discussed in the errata.
 Setting \code{use\_det=False} drops the detector term entirely, leaving the
 straight-ray estimate $|\bm n|=v_n\dta$; this is the crudest variant and is, at
-present, the one the \code{--beta} GUI uses.
+present, the one the wara GUI uses.
 
 \clearpage
 \section{Reconciliation of the three implementations}
@@ -373,7 +373,7 @@ are genuine physics/algebra points; items 5--6 are bookkeeping.
         convention of whichever routine produced them.
 \end{enumerate}
 
-\noindent\textbf{Practical consequence for \code{--beta}.} The GUI currently calls
+\noindent\textbf{Practical consequence for the GUI.} The GUI currently calls
 \code{api\_xyz(use\_det=False)}, the crudest path (non-relativistic, no CM
 correction, detector ignored). Migrating the GUI to the full \code{calcXYZ} model
 --- or at minimum enabling the detector term and relativistic speeds --- is the

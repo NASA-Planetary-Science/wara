@@ -1,3 +1,3 @@
-from .app import WaraBetaApp, main
+from .app import WaraApp, main
 
-__all__ = ["WaraBetaApp", "main"]
+__all__ = ["WaraApp", "main"]

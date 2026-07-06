@@ -1,5 +1,5 @@
-"""Offscreen GUI regression tests for the wara --beta API tab
-(wara.gui_beta.api: ApiOptions / ApiPage / ApiController).
+"""Offscreen GUI regression tests for the wara API tab
+(wara.gui.api: ApiOptions / ApiPage / ApiController).
 
 The real parquet loader needs run files on a local data path, so the data
 access (``read_parquet_api.read_parquet_file`` and the three apicalc settings
@@ -24,9 +24,9 @@ pytest.importorskip("PyQt5")
 from PyQt5.QtWidgets import QApplication, QWidget, QPushButton, QLabel, QDialog
 
 from wara import read_parquet_api, apicalc
-from wara.gui_beta.app import WaraBetaApp
-from wara.gui_beta import api as api_mod
-from wara.gui_beta.theme import NAV_SECTIONS
+from wara.gui.app import WaraApp
+from wara.gui import api as api_mod
+from wara.gui.theme import NAV_SECTIONS
 
 
 @pytest.fixture(scope="module")
@@ -107,7 +107,7 @@ def api(qapp, monkeypatch):
     monkeypatch.setattr(apicalc, "get_total_counts", lambda *a, **k: 2.5e9)
     monkeypatch.setattr(apicalc, "calculate_neutron_yield", lambda *a, **k: 4.3e6)
 
-    w = WaraBetaApp()
+    w = WaraApp()
     idx = [name for name, _ in NAV_SECTIONS].index("API")
     w.nav_group.button(idx).setChecked(True)
     w._on_nav(idx)
@@ -499,7 +499,7 @@ def test_build_slices_returns_spectra(api):
 def test_build_slices_caps_count(api):
     _w, c = api
     c._load()
-    from wara.gui_beta.slicefit import MAX_SLICES
+    from wara.gui.slicefit import MAX_SLICES
     # An absurdly small width would ask for a huge slice count; it must cap.
     slices = c._build_slices(dt_slice_w=1e-12)
     assert 1 <= len(slices) <= MAX_SLICES
@@ -508,7 +508,7 @@ def test_build_slices_caps_count(api):
 def test_band_snr_reads_search_snr(api):
     _w, c = api
     c._load()
-    from wara.gui_beta.slicefit import band_snr
+    from wara.gui.slicefit import band_snr
     slices = c._build_slices(dt_slice_w=None)
     val = band_snr(slices[0]["search"], (500.0, 2000.0))
     # A finite, non-negative SNR (snr is clipped at 0 by PeakSearch).
@@ -518,7 +518,7 @@ def test_band_snr_reads_search_snr(api):
 def test_slice_fit_window_area_mode_emits(api):
     _w, c = api
     c._load()
-    from wara.gui_beta.slicefit import SliceFitWindow, TECH_FIT
+    from wara.gui.slicefit import SliceFitWindow, TECH_FIT
     slices = c._build_slices(dt_slice_w=None)
     win = SliceFitWindow(c.app, slices, (500.0, 2000.0), "Fe", "#ff0000")
     # Switch the per-slice Method to Net area − linear bkg.
@@ -552,7 +552,7 @@ def test_build_slices_respects_min_snr(api):
 def test_slice_fit_window_peak_selection(api):
     _w, c = api
     c._load()
-    from wara.gui_beta.slicefit import SliceFitWindow
+    from wara.gui.slicefit import SliceFitWindow
     slices = c._build_slices(dt_slice_w=None, min_snr=1.0)
     win = SliceFitWindow(c.app, slices, (500.0, 2000.0), "Fe", "#ff0000")
     assert not win._is_area_method()   # opens in Peak-fit mode
@@ -580,7 +580,7 @@ def test_slice_fit_table_keeps_data_columns(qapp):
     """Regression: the inserted 'Use' checkbox column must not clobber the
     Centroid/Area/FWHM cells across repeated refits, and units stay keV."""
     from wara import spectrum as sp, peaksearch as ps
-    from wara.gui_beta.slicefit import SliceFitWindow
+    from wara.gui.slicefit import SliceFitWindow
     x = np.linspace(700, 900, 2048)
     peak = 50 + 4000 * np.exp(-0.5 * ((x - 780) / 3) ** 2)
     slices = []
@@ -733,7 +733,7 @@ def test_remove_one_selection_keeps_others_overlay(api, monkeypatch):
 
 
 def test_ratio_to_ref_math():
-    from wara.gui_beta.slicefit import ratio_to_ref
+    from wara.gui.slicefit import ratio_to_ref
     r, e = ratio_to_ref([10.0, 20.0], [1.0, 2.0], [5.0, 10.0], [0.5, 1.0])
     assert np.allclose(r, [2.0, 2.0])
     # err = |r| * sqrt((num_err/num)^2 + (den_err/den)^2)

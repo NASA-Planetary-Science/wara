@@ -1,4 +1,4 @@
-"""Reusable widgets for the beta GUI: canvas, option panels, pages."""
+"""Reusable widgets for the wara GUI: canvas, option panels, pages."""
 import matplotlib.ticker as ticker
 from matplotlib.figure import Figure
 from matplotlib.widgets import SpanSelector

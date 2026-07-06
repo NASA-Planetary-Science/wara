@@ -1,6 +1,6 @@
 """
-Offscreen GUI regression tests for the wara --beta Calibration tab
-(wara.gui_beta.calibration: CalibrationOptions / CalibrationPage /
+Offscreen GUI regression tests for the wara Calibration tab
+(wara.gui.calibration: CalibrationOptions / CalibrationPage /
 CalibrationController).
 
 Covers the workflow: adding centroids into the points table (as the
@@ -29,9 +29,9 @@ from PyQt5.QtWidgets import QApplication, QTableWidgetItem
 
 from wara import spectrum as sp
 from wara.peaksearch import PeakSearch
-from wara.gui_beta.app import WaraBetaApp
-from wara.gui_beta import calibration as calmod
-from wara.gui_beta.calibration import CH_COL, E_COL, USE_COL
+from wara.gui.app import WaraApp
+from wara.gui import calibration as calmod
+from wara.gui.calibration import CH_COL, E_COL, USE_COL
 
 
 PEAK_CHANNELS = (500, 1200, 2500, 3300)
@@ -50,7 +50,7 @@ def captured_warnings(monkeypatch):
     the offscreen tests."""
     calls = []
     monkeypatch.setattr(
-        "wara.gui_beta.calibration.CalibrationController._show_warning",
+        "wara.gui.calibration.CalibrationController._show_warning",
         lambda self, title, text: calls.append((title, text)))
     return calls
 
@@ -65,7 +65,7 @@ def _synthetic_spectrum():
 
 @pytest.fixture
 def app_with_peaks(qapp):
-    w = WaraBetaApp()
+    w = WaraApp()
     spect = _synthetic_spectrum()
     w.spect = spect
     w._spect_orig = spect.copy()
@@ -571,7 +571,7 @@ def cal_dir(tmp_path, monkeypatch):
 def confirm_yes(monkeypatch):
     """Auto-accept the modal confirm (overwrite / delete) dialogs."""
     monkeypatch.setattr(
-        "wara.gui_beta.calibration.CalibrationController._confirm",
+        "wara.gui.calibration.CalibrationController._confirm",
         lambda self, title, text: True)
 
 

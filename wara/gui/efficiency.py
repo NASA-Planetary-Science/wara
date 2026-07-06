@@ -1,6 +1,6 @@
 """Efficiency tab: build a detector photopeak-efficiency curve.
 
-Workflow (beta GUI):
+Workflow (wara GUI):
 
 * A peak fit is pushed in from the Drag-and-Fit window
   (``EfficiencyController.receive_fit``). Every peak in the fit becomes one

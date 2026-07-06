@@ -1,4 +1,4 @@
-"""Smart Calibration dialog for the beta GUI Calibration tab.
+"""Smart Calibration dialog for the wara GUI Calibration tab.
 
 Gathers peak channels (imported from Find Peaks / manual selection, or typed in)
 and reference energies (picked from the Nuclear Database, or typed in), then runs

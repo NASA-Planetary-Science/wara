@@ -1,8 +1,8 @@
 """API tab: explore Associated-Particle-Imaging parquet runs.
 
 Port of the legacy ``ApiMixin`` main tab (``wara/gui/_mixins/api.py``), restyled
-for the dark beta GUI and split into the Options / Page / Controller trio used by
-the other beta tabs.
+for the dark wara GUI and split into the Options / Page / Controller trio used by
+the other tabs.
 
 Workflow:
 
@@ -5160,7 +5160,7 @@ class ApiController:
         (one directory up from wara).  It is *not* a wara dependency: if it is
         not installed we just tell the user how to get it and return, so the rest
         of the API tab keeps working.  ``SigmaDialog`` is imported lazily here so
-        ``gui_beta.api`` never pulls in ``sigma`` at module import time.
+        ``gui.api`` never pulls in ``sigma`` at module import time.
         """
         self._flash_button(self.opts.btn_sigma)
         try:

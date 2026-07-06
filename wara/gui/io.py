@@ -1,4 +1,4 @@
-"""File loading for the beta GUI — reuses wara.file_reader, mirroring the
+"""File loading for the wara GUI — reuses wara.file_reader, mirroring the
 suffix dispatch used by the legacy launcher (wara.param_handle)."""
 from pathlib import Path
 

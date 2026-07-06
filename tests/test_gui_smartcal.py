@@ -1,5 +1,5 @@
 """
-Offscreen GUI tests for the Smart Calibration dialog (wara.gui_beta.smartcal)
+Offscreen GUI tests for the Smart Calibration dialog (wara.gui.smartcal)
 and its integration with the Calibration tab controller.
 """
 
@@ -17,13 +17,13 @@ from PyQt5.QtWidgets import QApplication, QDialog, QListWidgetItem
 
 from wara import spectrum as sp
 from wara.peaksearch import PeakSearch
-from wara.gui_beta.app import WaraBetaApp
-from wara.gui_beta import smartcal
-from wara.gui_beta.smartcal import (
+from wara.gui.app import WaraApp
+from wara.gui import smartcal
+from wara.gui.smartcal import (
     SmartCalibrationDialog, FavoriteEnergiesDialog,
     load_favorite_lists, save_favorite_lists,
 )
-from wara.gui_beta.calibration import CH_COL, E_COL
+from wara.gui.calibration import CH_COL, E_COL
 
 
 # True linear calibration of the synthetic spectrum: E = 0.5*ch + 3.
@@ -46,7 +46,7 @@ def _synthetic_spectrum():
 
 @pytest.fixture
 def app_with_peaks(qapp):
-    w = WaraBetaApp()
+    w = WaraApp()
     spect = _synthetic_spectrum()
     w.spect = spect
     w._spect_orig = spect.copy()
@@ -129,7 +129,7 @@ class TestSmartCalDialog:
         assert len(dlg._values(dlg.lst_ch)) == len(vals)
 
     def test_import_without_search_warns(self, qapp):
-        w = WaraBetaApp()
+        w = WaraApp()
         w.spect = _synthetic_spectrum()
         w._spect_orig = w.spect.copy()
         w._refresh()
@@ -183,7 +183,7 @@ class TestSetSmartResults:
 
 class TestMultiLinePicker:
     def test_selected_energies_returns_list(self, qapp):
-        from wara.gui_beta.nuclear import NuclearLinePicker
+        from wara.gui.nuclear import NuclearLinePicker
         picker = NuclearLinePicker(multi=True, element="Co60")
         model = picker.table.model()
         if model is not None and model.rowCount() >= 2:
@@ -294,7 +294,7 @@ class TestFavoriteEnergiesDialog:
         monkeypatch.setattr(smartcal.QInputDialog, "getText",
                             staticmethod(lambda *a, **k: ("API", True)))
         # Stub the database picker: accept with two (energy, isotope) lines.
-        from wara.gui_beta import nuclear
+        from wara.gui import nuclear
         monkeypatch.setattr(nuclear.NuclearLinePicker, "exec_", lambda self: QDialog.Accepted)
         monkeypatch.setattr(nuclear.NuclearLinePicker, "selected_lines",
                             lambda self: [(1173.2, "Co-60"), (1332.5, "Co-60")])

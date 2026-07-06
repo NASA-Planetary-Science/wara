@@ -1,5 +1,5 @@
-"""Offscreen GUI regression tests for the wara --beta Resolution tab
-(wara.gui_beta.resolution: ResolutionOptions / ResolutionPage /
+"""Offscreen GUI regression tests for the wara Resolution tab
+(wara.gui.resolution: ResolutionOptions / ResolutionPage /
 ResolutionController) plus its Drag-and-Fit "Send to Resolution" hook.
 
 Covers: receiving peak fits (one FWHM point per peak, energy/FWHM kept paired),
@@ -22,8 +22,8 @@ from PyQt5.QtWidgets import QApplication
 from wara import spectrum as sp
 from wara import peaksearch as ps
 from wara import peakfit as pf
-from wara.gui_beta.app import WaraBetaApp
-from wara.gui_beta import resolution as R
+from wara.gui.app import WaraApp
+from wara.gui import resolution as R
 
 
 # Synthetic calibrated spectrum (E = 0.5·ch) with peaks of increasing width.
@@ -43,7 +43,7 @@ def app(qapp):
     for e, sig in PEAKS:
         counts += 5000.0 * np.exp(-0.5 * ((ch - e / SLOPE) / sig) ** 2)
     spect = sp.Spectrum(counts=counts, energies=SLOPE * ch, e_units="keV")
-    w = WaraBetaApp()
+    w = WaraApp()
     w.spect = spect
     w._spect_orig = spect.copy()
     w._active_name = "syn"
@@ -183,7 +183,7 @@ def test_receive_fit_with_no_peaks_is_ignored(app):
 
 # ── Drag-and-Fit "Send to Resolution" hook ────────────────────────────────────
 def test_send_to_resolution_button(app):
-    from wara.gui_beta.fitting import FitWindow
+    from wara.gui.fitting import FitWindow
     fw = FitWindow(None, app.search)
     fw.send_to_resolution.connect(app.resolution.receive_fit)
     fw.show()

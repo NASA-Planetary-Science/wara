@@ -1,6 +1,6 @@
 """Offscreen GUI tests for the Spectrum-tab 'Isotope ID' hover feature
-(wara.gui_beta: SpectrumOptions.cb_isotope_id + SpectrumCanvas hover overlay +
-WaraBetaApp._refresh_isotope_id, which calls wara.nuclide_identificator)."""
+(wara.gui: SpectrumOptions.cb_isotope_id + SpectrumCanvas hover overlay +
+WaraApp._refresh_isotope_id, which calls wara.nuclide_identificator)."""
 import os
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
@@ -15,7 +15,7 @@ from PyQt5.QtWidgets import QApplication
 
 from wara import spectrum as sp
 from wara import peaksearch as ps
-from wara.gui_beta.app import WaraBetaApp
+from wara.gui.app import WaraApp
 
 
 # Synthetic 16O-rich spectrum, linearly calibrated (E = 1.5·ch).
@@ -38,7 +38,7 @@ def _calibrated_spectrum():
 
 @pytest.fixture
 def app(qapp):
-    w = WaraBetaApp()
+    w = WaraApp()
     spect = _calibrated_spectrum()
     w.spect = spect
     w._spect_orig = spect.copy()
@@ -75,7 +75,7 @@ def test_checkbox_off_by_default(app):
 
 
 def test_inactive_without_calibration(qapp):
-    w = WaraBetaApp()
+    w = WaraApp()
     ch = np.arange(4096)
     counts = np.full_like(ch, 5.0, dtype=float)
     counts += 4000.0 * np.exp(-0.5 * ((ch - 2000) / 3.0) ** 2)
@@ -132,7 +132,7 @@ def test_hover_shows_and_hides_annotation(app):
 
 def test_zero_percent_candidates_are_dropped(qapp):
     import pandas as pd
-    from wara.gui_beta.app import WaraBetaApp
+    from wara.gui.app import WaraApp
     results = {
         "DB1": pd.DataFrame({"Energy": [100.0, 100.0],
                              "Isotope": ["AA", "BB"],          # 98 % and ~0 %
@@ -140,7 +140,7 @@ def test_zero_percent_candidates_are_dropped(qapp):
         "DB2": pd.DataFrame({"Energy": [100.0],
                              "Isotope": ["CC"], "Probability": [0.001]}),  # ~0 %
     }
-    text = WaraBetaApp._format_iso_text(100.0, results)
+    text = WaraApp._format_iso_text(100.0, results)
     assert "AA" in text and "98%" in text          # rank-1 candidate kept
     assert "BB" not in text          # rank-2 0 % candidate dropped
     assert "DB2" not in text         # whole database dropped (only 0 % match)
@@ -149,7 +149,7 @@ def test_zero_percent_candidates_are_dropped(qapp):
 
 def test_isotope_names_are_cyan(qapp):
     import pandas as pd
-    from wara.gui_beta import isotope_id, theme as T
+    from wara.gui import isotope_id, theme as T
     results = {"DB": pd.DataFrame({"Energy": [661.7], "Isotope": ["137Cs"],
                                    "Probability": [0.9], "Lines seen": [1]})}
     html = isotope_id.format_html(661.7, results)
@@ -158,7 +158,7 @@ def test_isotope_names_are_cyan(qapp):
 
 def test_escape_peaks_shown_as_possibility_not_candidate(qapp):
     import pandas as pd
-    from wara.gui_beta import isotope_id
+    from wara.gui import isotope_id
     # 6129.9 is identified (16O); 5618.9 is shown as a SEP possibility of it.
     results = {"DB": pd.DataFrame({"Energy": [6129.9], "Isotope": ["16O"],
                                    "Probability": [0.98], "Lines seen": [4]})}
@@ -170,7 +170,7 @@ def test_escape_peaks_shown_as_possibility_not_candidate(qapp):
 
 
 def test_gui_identify_excludes_escape_peaks_from_scoring(qapp):
-    from wara.gui_beta import isotope_id
+    from wara.gui import isotope_id
     res = isotope_id.identify([6129.9, 5618.9])
     for frame in res.values():
         rows = frame[abs(frame["Energy"] - 5618.9) < 1e-6]

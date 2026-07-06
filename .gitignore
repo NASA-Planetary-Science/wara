@@ -6,3 +6,10 @@ data-path.txt
 .claude
 docs/_build/
 docs/autoapi/
+# LP-GRS data downloaded by the planetary examples
+examples/planetary/LP_data/
+
+# LP-GRS datasets downloaded into the planetary data folder (the bundled
+# orbit-metadata CSV stays tracked)
+wara/planetary/data/*
+!wara/planetary/data/lp_grs_metadata.csv

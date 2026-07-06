@@ -55,7 +55,6 @@ for the full list of command-line options.
 > ```
 > wara --legacy
 > ```
-> (`wara --beta` is also accepted as an explicit alias for the new GUI.)
 
 To take a quick tour: click **Open Spectrum** in the navigation rail and load
 **examples → data → test_data_cebr.csv**. On the **Spectrum** tab, expand

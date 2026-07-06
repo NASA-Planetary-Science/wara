@@ -15,8 +15,8 @@ The heavy lifting lives in the closed-source :mod:`sigma` package
 (``sigma.cross_section``); this module is only the interactive Qt layer.  It is
 imported lazily by the controller, so wara never depends on ``sigma``.
 
-The dialog mirrors :class:`SelectionsDialog` in :mod:`wara.gui_beta.api`: themed
-via :mod:`wara.gui_beta.theme`, the same ``header`` / ``hsep`` / ``labeled_row``
+The dialog mirrors :class:`SelectionsDialog` in :mod:`wara.gui.api`: themed
+via :mod:`wara.gui.theme`, the same ``header`` / ``hsep`` / ``labeled_row``
 helpers, and embedded matplotlib canvases with navigation toolbars.
 """
 from __future__ import annotations

@@ -13,7 +13,7 @@ pytest.importorskip("PyQt5")
 from PyQt5.QtWidgets import QApplication
 
 from wara import spectrum as sp
-from wara.gui_beta.app import WaraBetaApp
+from wara.gui.app import WaraApp
 
 
 @pytest.fixture(scope="module")
@@ -23,7 +23,7 @@ def qapp():
 
 @pytest.fixture
 def app(qapp):
-    w = WaraBetaApp()
+    w = WaraApp()
     spect = sp.Spectrum(counts=np.linspace(1, 100, 256))
     w.spect = spect
     w._spect_orig = spect.copy()

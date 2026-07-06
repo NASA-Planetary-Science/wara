@@ -12,7 +12,7 @@ ported from ``examples/other/anorthosite-olivine-ilmenite-cal.py``:
   with the active selection's energy band shaded.  It is drawn into the canvas
   embedded in the Energy Selections dialog (with a navigation toolbar).
 * The *Fit* technique opens :class:`SliceFitWindow` (a
-  :class:`~wara.gui_beta.fitting.FitWindow` subclass) where the user steps
+  :class:`~wara.gui.fitting.FitWindow` subclass) where the user steps
   through the slices and adjusts the fit per slice, reusing the Spectrum tab's
   fitting machinery.  Its **Method** selector chooses, per slice, between a peak
   fit (sum the checked peaks via the in-table checkboxes) and a net area above a
@@ -346,7 +346,7 @@ class SliceFitWindow(FitWindow):
 
     def _slice_caption(self, i, s):
         """Caption for the current slice; overridden for non-dt slicing
-        (e.g. the X-Y :class:`~wara.gui_beta.xyprofile.TileFitWindow`)."""
+        (e.g. the X-Y :class:`~wara.gui.xyprofile.TileFitWindow`)."""
         return (f"slice {i + 1}/{len(self.slices)}  ·  "
                 f"t = [{s['t0']:.1f}, {s['t1']:.1f}] ns")
 

@@ -31,6 +31,7 @@ offline. Reading requires ``pds4_tools`` (imported lazily).
 from __future__ import annotations
 
 import re
+import time
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 from html.parser import HTMLParser
@@ -45,6 +46,11 @@ from .moon import wrap_lon
 LP_GRS_BASE_URL = (
     "https://pds-geosciences.wustl.edu/lunar/lp-l-grs-3-rdr-v1/lp_2xxx/grs/"
 )
+
+# Default home for downloaded LP-GRS products (gitignored) and for the bundled
+# orbit-metadata CSV (tracked in git / shipped as package data).
+LP_DATA_DIR = Path(__file__).resolve().parent / "data"
+LP_METADATA_CSV = LP_DATA_DIR / "lp_grs_metadata.csv"
 
 # Mission phases by orbit altitude. LP mapped from a ~100 km circular orbit
 # from insertion (first GRS product: 1998 DOY 016) until 1998-12-19, when the
@@ -327,3 +333,213 @@ def read_grs_day(xml_path):
     m = _STEM_RE.match(xml_path.stem)
     day = doy_to_date(*map(int, m.groups())) if m else None
     return LPGrsDay(stem=xml_path.stem, day=day, **fields)
+
+
+# ── Mission documentation ────────────────────────────────────────────────────
+# The PDS archive ships extensive prose documentation (PDS3 catalog objects
+# and summary documents). These render well as plain 80-column text, so the
+# GUI's "Mission info" dialog shows them verbatim.
+LP_MISSION_PAGE_URL = (
+    "https://pds-geosciences.wustl.edu/missions/lunarp/reduced_grsns.html"
+)
+
+_LP_ARCHIVE_ROOT = (
+    "https://pds-geosciences.wustl.edu/lunar/lp-l-grs-3-rdr-v1/lp_2xxx/"
+)
+_LP_ABUNDANCE_ROOT = (
+    "https://pds-geosciences.wustl.edu/lunar/lp-l-grs-5-elem-abundance-v1/"
+    "lp_9001/"
+)
+
+# Display label -> document URL, in menu order.
+LP_DOCUMENTS = {
+    "Archive overview (AAREADME)": _LP_ARCHIVE_ROOT + "aareadme.txt",
+    "Mission description": _LP_ARCHIVE_ROOT + "catalog/mission.cat",
+    "Spacecraft description": _LP_ARCHIVE_ROOT + "catalog/lphost.cat",
+    "GRS instrument": _LP_ARCHIVE_ROOT + "catalog/grsinst.cat",
+    "NS instrument": _LP_ARCHIVE_ROOT + "catalog/nsinst.cat",
+    "GRS data set": _LP_ARCHIVE_ROOT + "catalog/grsds.cat",
+    "NS data set": _LP_ARCHIVE_ROOT + "catalog/nsds.cat",
+    "Data products summary": _LP_ARCHIVE_ROOT + "document/lp_grns_summary.txt",
+    "Abundance data set (Level 5)": _LP_ABUNDANCE_ROOT + "aareadme.txt",
+    "References": _LP_ARCHIVE_ROOT + "catalog/ref.cat",
+}
+
+
+def fetch_document(label, data_dir=LP_DATA_DIR, timeout=60.0):
+    """Return the text of one :data:`LP_DOCUMENTS` entry.
+
+    Downloaded once into ``data_dir/docs/`` and read from there afterwards,
+    so the Mission-info dialog works offline after the first open.
+    """
+    url = LP_DOCUMENTS[label]
+    docs_dir = Path(data_dir) / "docs"
+    docs_dir.mkdir(parents=True, exist_ok=True)
+    # Abundance aareadme shares its basename with the archive one — prefix
+    # with a slug of the label to keep cache files unique.
+    slug = re.sub(r"[^a-z0-9]+", "_", label.lower()).strip("_")
+    dest = docs_dir / f"{slug}.txt"
+    if not dest.exists():
+        req = Request(url, headers={"User-Agent": _USER_AGENT})
+        with urlopen(req, timeout=timeout) as resp:
+            text = resp.read().decode("utf-8", errors="replace")
+        # PDS STREAM documents end lines with CR CR LF; drop every CR so the
+        # text doesn't render double-spaced.
+        dest.write_text(text.replace("\r", ""), encoding="utf-8")
+    return dest.read_text(encoding="utf-8").replace("\r", "")
+
+
+# ── Orbit metadata (bundled CSV) ─────────────────────────────────────────────
+# One-time scrape of the whole mission's ephemeris into a small CSV so the GUI
+# can show what data exists — and draw the orbit path — without downloading or
+# reading any product. Default stride 15 (~8 min cadence): the full mission
+# (~1.35M records over 561 days) compresses to ~90k rows / a few MB.
+METADATA_STRIDE = 15
+
+_METADATA_HEADER = """\
+# Lunar Prospector GRS orbit metadata, scraped once from the PDS archive at
+# {base_url}
+# One row per ~{stride} records (~{minutes:.0f} min): sub-spacecraft ephemeris of every
+# daily product. Products before 1998-12-19 fly the ~100 km mapping orbit;
+# later ones the ~30-40 km extended mission. Longitude is planetocentric
+# east-positive in [-180, 180).
+utc,product,lon_east_deg,lat_deg,alt_km
+"""
+
+
+def records_utc64(day_obj):
+    """Per-record UTC timestamps of an :class:`LPGrsDay` (datetime64[s]).
+
+    ``Earth_Received_Time`` is a fractional day-of-year — but the extended-
+    mission products keep counting past 1998-12-31 (mission-continuous DOY:
+    a 1999 product may carry values around 366+its real DOY). Re-anchor each
+    product to its own date, so the year-scale offset cancels whichever
+    convention the file uses.
+    """
+    t64 = (np.datetime64(f"{day_obj.day.year}-01-01")
+           + np.round((day_obj.time_doy - 1.0) * 86400.0).astype("timedelta64[s]"))
+    off_days = (np.median(t64 - np.datetime64(day_obj.day))
+                / np.timedelta64(1, "D"))
+    shift = int(round(off_days / 365.0)) * 365
+    if shift:
+        t64 = t64 - np.timedelta64(shift, "D")
+    return t64
+
+
+def _metadata_rows(day_obj, stride=METADATA_STRIDE):
+    """CSV rows (no newline) for one product, subsampled by ``stride``."""
+    t64 = records_utc64(day_obj)
+    rows = []
+    for i in range(0, day_obj.n_records, stride):
+        ts = np.datetime_as_string(t64[i], unit="m")
+        rows.append(f"{ts},{day_obj.stem},{day_obj.longitude[i]:.2f},"
+                    f"{day_obj.latitude[i]:.2f},{day_obj.altitude_km[i]:.1f}")
+    return rows
+
+
+def products_in_metadata(csv_path=LP_METADATA_CSV):
+    """Set of product stems already present in the metadata CSV (for resume)."""
+    csv_path = Path(csv_path)
+    if not csv_path.exists():
+        return set()
+    stems = set()
+    with open(csv_path, encoding="utf-8") as f:
+        for line in f:
+            if line.startswith("#") or line.startswith("utc,"):
+                continue
+            parts = line.split(",")
+            if len(parts) == 5:
+                stems.add(parts[1])
+    return stems
+
+
+def build_orbit_metadata(csv_path=LP_METADATA_CSV, data_dir=LP_DATA_DIR,
+                         stride=METADATA_STRIDE, keep_products=False,
+                         products=None, progress=None):
+    """Scrape the whole-mission orbit metadata into ``csv_path``.
+
+    Downloads every LP-GRS product (unless already in ``data_dir``), extracts
+    the subsampled ephemeris, and appends it to the CSV. Idempotent and
+    resumable: products already in the CSV are skipped, so an interrupted run
+    just continues where it left off. Products fetched only for scraping are
+    deleted afterwards unless ``keep_products`` (pre-existing files in
+    ``data_dir`` are always left alone).
+
+    ``progress(msg)`` is called per product. Returns the number of products
+    added in this run.
+    """
+    csv_path, data_dir = Path(csv_path), Path(data_dir)
+    data_dir.mkdir(parents=True, exist_ok=True)
+    if products is None:
+        products = list_grs_products()
+    done = products_in_metadata(csv_path)
+
+    if not csv_path.exists():
+        csv_path.write_text(_METADATA_HEADER.format(
+            base_url=LP_GRS_BASE_URL, stride=stride,
+            minutes=stride * 32.0 / 60.0), encoding="utf-8")
+
+    n_added = 0
+    for i, p in enumerate(products):
+        if p.stem in done:
+            continue
+        if progress is not None:
+            progress(f"{p.stem} ({i + 1}/{len(products)})")
+        xml = data_dir / f"{p.stem}.xml"
+        dat = data_dir / f"{p.stem}.dat"
+        fetched = not (xml.exists() and dat.exists())
+        if fetched:
+            download_products([p], data_dir)
+        try:
+            rows = _metadata_rows(read_grs_day(xml), stride=stride)
+        finally:
+            if fetched and not keep_products:
+                for f in (xml, dat):
+                    try:
+                        f.unlink()
+                    except OSError:
+                        pass
+        # Windows: a concurrent reader (tests, editors, AV scanners) can hold
+        # the file and briefly deny the append — retry instead of losing a
+        # multi-hundred-product run to a transient lock.
+        for attempt in range(5):
+            try:
+                with open(csv_path, "a", encoding="utf-8") as f:
+                    f.write("\n".join(rows) + "\n")
+                break
+            except PermissionError:
+                if attempt == 4:
+                    raise
+                time.sleep(1.0 + attempt)
+        n_added += 1
+    return n_added
+
+
+def load_orbit_metadata(csv_path=LP_METADATA_CSV):
+    """Read the bundled orbit-metadata CSV.
+
+    Returns a dict of aligned arrays: ``utc`` (datetime64[s]), ``product``
+    (str), ``lon`` , ``lat``, ``alt_km`` (float), sorted by time. Raises
+    ``FileNotFoundError`` if the CSV has not been built/shipped.
+    """
+    csv_path = Path(csv_path)
+    utc, product, lon, lat, alt = [], [], [], [], []
+    with open(csv_path, encoding="utf-8") as f:
+        for line in f:
+            line = line.strip()
+            if not line or line.startswith("#") or line.startswith("utc,"):
+                continue
+            ts, stem, lo, la, al = line.split(",")
+            utc.append(np.datetime64(ts))
+            product.append(stem)
+            lon.append(float(lo))
+            lat.append(float(la))
+            alt.append(float(al))
+    order = np.argsort(np.asarray(utc))
+    return {
+        "utc": np.asarray(utc, dtype="datetime64[s]")[order],
+        "product": np.asarray(product)[order],
+        "lon": np.asarray(lon)[order],
+        "lat": np.asarray(lat)[order],
+        "alt_km": np.asarray(alt)[order],
+    }

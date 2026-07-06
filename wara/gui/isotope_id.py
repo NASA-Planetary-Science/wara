@@ -1,4 +1,4 @@
-"""Shared isotope-ID helpers for the beta GUI.
+"""Shared isotope-ID helpers for the wara GUI.
 
 Runs nuclide identification for peak energies (wara.nuclide_identificator) and
 renders the colour-coded HTML used by both the Spectrum-tab hover overlay and

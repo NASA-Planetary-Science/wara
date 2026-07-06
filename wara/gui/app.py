@@ -1,5 +1,5 @@
 """
-wara --beta : modernized WARA GUI (work in progress).
+wara : the WARA GUI (default since v2.0).
 
 Three-column layout:
   1. NAV     — logo + WARA wordmark, the analysis sections as color-dot tabs,
@@ -31,7 +31,7 @@ from . import theme as T
 from .theme import NAV_SECTIONS, TABS_WITH_OPTIONS, STYLESHEET, dot_icon, recolor_toolbar_icons, PlanetaryNavButton
 from .widgets import (
     SpectrumCanvas, SpectrumOptions, PlaceholderOptions, PlaceholderPage,
-    ComingSoonPage, header, hsep,
+    header, hsep,
 )
 from .io import load_spectrum_file, OPEN_FILTER
 from .nuclear import NuclearDatabaseDialog
@@ -40,6 +40,7 @@ from .calibration import CalibrationOptions, CalibrationPage, CalibrationControl
 from .efficiency import EfficiencyOptions, EfficiencyPage, EfficiencyController
 from .resolution import ResolutionOptions, ResolutionPage, ResolutionController
 from .api import ApiOptions, ApiPage, ApiController
+from .planetary import PlanetaryOptions, PlanetaryPage, PlanetaryController
 
 LOGO_PATH = str(files("wara").joinpath("ui/wara-logo.png"))
 
@@ -153,13 +154,13 @@ class SpectrumPage(QWidget):
         lay.addWidget(self.canvas, stretch=1)
 
 
-class WaraBetaApp(QMainWindow):
+class WaraApp(QMainWindow):
     OPT_W = 270   # shared by every tab's options panel (original design width)
     _FILE_LABEL_MAXW = 280   # px; longer spectrum names are elided (full name on hover)
 
     def __init__(self, file_name=None, cli_opts=None):
         super().__init__()
-        self.setWindowTitle("WARA  ·  Spectrum Analysis  (beta)")
+        self.setWindowTitle("WARA  ·  Spectrum Analysis")
         self.setMinimumSize(1480, 760)
         # Open large: 86% of the available screen (falls back to a fixed size).
         screen = QApplication.primaryScreen()
@@ -212,6 +213,8 @@ class WaraBetaApp(QMainWindow):
         self.resolution = ResolutionController(
             self, self.resolution_opts, self.resolution_page)
         self.api = ApiController(self, self.api_opts, self.api_page)
+        self.planetary = PlanetaryController(
+            self, self.planetary_opts, self.planetary_page)
         self._rebuild_spectra_list()
         self.statusBar().showMessage("  Ready  ·  open a spectrum file to begin")
 
@@ -280,6 +283,7 @@ class WaraBetaApp(QMainWindow):
         self.efficiency_opts = EfficiencyOptions()
         self.resolution_opts = ResolutionOptions()
         self.api_opts = ApiOptions()
+        self.planetary_opts = PlanetaryOptions()
         for name, _c in NAV_SECTIONS:
             if name == "Spectrum":
                 self.opt_stack.addWidget(self.spectrum_opts)
@@ -291,6 +295,8 @@ class WaraBetaApp(QMainWindow):
                 self.opt_stack.addWidget(self.resolution_opts)
             elif name == "API":
                 self.opt_stack.addWidget(self.api_opts)
+            elif name == "Planetary":
+                self.opt_stack.addWidget(self.planetary_opts)
             else:
                 self.opt_stack.addWidget(PlaceholderOptions(name))
         outer.addWidget(self.opt_stack, stretch=1)
@@ -328,6 +334,7 @@ class WaraBetaApp(QMainWindow):
         self.efficiency_page = EfficiencyPage()
         self.resolution_page = ResolutionPage()
         self.api_page = ApiPage()
+        self.planetary_page = PlanetaryPage()
         for name, _c in NAV_SECTIONS:
             if name == "Spectrum":
                 self.stack.addWidget(self.spectrum_page)
@@ -340,11 +347,7 @@ class WaraBetaApp(QMainWindow):
             elif name == "API":
                 self.stack.addWidget(self.api_page)
             elif name == "Planetary":
-                self.stack.addWidget(ComingSoonPage(
-                    name,
-                    "Planetary gamma-ray and neutron spectroscopy tools "
-                    "(die-away analysis, DAWN/LP data) are being ported here.",
-                ))
+                self.stack.addWidget(self.planetary_page)
             else:
                 self.stack.addWidget(PlaceholderPage(name))
         return self.stack
@@ -361,6 +364,9 @@ class WaraBetaApp(QMainWindow):
         # files added/removed outside the GUI show up without a restart.
         if name == "Calibration" and getattr(self, "calibration", None) is not None:
             self.calibration.refresh_saved()
+        # The Planetary globe (QtWebEngine) is only created/rendered on first visit.
+        if name == "Planetary" and getattr(self, "planetary", None) is not None:
+            self.planetary.on_activated()
         self.statusBar().showMessage(f"  {name}")
 
     # ── Spectrum tab wiring ──────────────────────────────────────────────────
@@ -1234,7 +1240,6 @@ Usage:
   options:
       -o                        open a blank window (default when no file given)
       --legacy                  launch the pre-2.0 GUI instead
-      --beta                    launch the new GUI explicitly (this is the default)
       --fwhm_at_0=<fwhm0>       FWHM value at x=0
       --min_snr=<msnr>          minimum peak SNR for peak search
       --ref_x=<xref>            x reference channel/energy for fwhm_ref
@@ -1302,7 +1307,7 @@ def main():
     app = QApplication([])
     app.setApplicationName("WARA")
     app.setStyleSheet(STYLESHEET)
-    win = WaraBetaApp(file_name=opts["file_name"], cli_opts=opts)
+    win = WaraApp(file_name=opts["file_name"], cli_opts=opts)
     win.show()
     sys.exit(app.exec_())
 
