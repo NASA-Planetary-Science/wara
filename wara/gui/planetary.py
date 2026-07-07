@@ -1009,7 +1009,7 @@ def region_box_xyz(lon, lat, half_width, n=25):
     path_lat = np.concatenate([np.full(n, lat_lo), lats,
                                np.full(n, lat_hi), lats[::-1]])
     x, y, z = lonlat_to_xyz(path_lon, path_lat, R_MOON_KM * 1.006)
-    return list(np.round(x, 1)), list(np.round(y, 1)), list(np.round(z, 1))
+    return np.round(x, 1).tolist(), np.round(y, 1).tolist(), np.round(z, 1).tolist()
 
 
 # ── Controller ────────────────────────────────────────────────────────────────
@@ -1479,8 +1479,8 @@ class PlanetaryController(QObject):
                  f"{al:.0f} km"
                  for ts, lo, la, al in zip(stamps, lon[idx], lat[idx], alt[idx])]
         title = f"days since {np.datetime_as_string(t0, unit='D')}"
-        return (list(np.round(x, 1)), list(np.round(y, 1)),
-                list(np.round(z, 1)), list(np.round(color, 4)), texts, title, n)
+        return (np.round(x, 1).tolist(), np.round(y, 1).tolist(),
+                np.round(z, 1).tolist(), np.round(color, 4).tolist(), texts, title, n)
 
     def track_arrays(self):
         """Orbit-path payload from the loaded records (without the trailing
@@ -1844,10 +1844,10 @@ class PlanetaryController(QObject):
         hover = [f"{nm} · lon {lo:.1f}° lat {la:.1f}°"
                  for lo, la, nm in LUNAR_LANDMARKS]
         self._js(f"waraShowMarks("
-                 f"{list(np.round(xd, 1))}, {list(np.round(yd, 1))}, "
-                 f"{list(np.round(zd, 1))}, "
-                 f"{list(np.round(xt, 1))}, {list(np.round(yt, 1))}, "
-                 f"{list(np.round(zt, 1))}, "
+                 f"{np.round(xd, 1).tolist()}, {np.round(yd, 1).tolist()}, "
+                 f"{np.round(zd, 1).tolist()}, "
+                 f"{np.round(xt, 1).tolist()}, {np.round(yt, 1).tolist()}, "
+                 f"{np.round(zt, 1).tolist()}, "
                  f"{json.dumps(list(names))}, {json.dumps(hover)});")
 
     def _clear_selection(self):
