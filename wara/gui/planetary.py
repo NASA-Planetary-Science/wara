@@ -66,10 +66,11 @@ from wara.planetary.lp import LP_DATA_DIR as DEFAULT_DATA_DIR
 KEEP_COLORS = [T.ACCENT_AMBER, T.ACCENT_GREEN, T.ACCENT_RED, "#b388ff",
                "#ff8a3d", "#ffd166", "#00bfa5", "#f06292"]
 
-# The orbit-path overlay is subsampled to at most this many points so the
-# runJavaScript payload stays snappy even with months of data loaded
-# (~2700 records/day).
-MAX_TRACK_POINTS = 20000
+# Floor on the orbit-path overlay: subsampling never thins a selection below
+# this many points (or all of them, if there are fewer), so even multi-month
+# selections stay legible. Selections up to ~18 days (~2700 records/day) are
+# drawn uncut; larger ones are thinned only down toward this floor.
+MIN_TRACK_POINTS = 50000
 
 # Colormaps offered for the abundance maps. Restricted to plotly.js built-in
 # colorscale names (the drape is applied client-side via Plotly.restyle):
@@ -1463,12 +1464,13 @@ class PlanetaryController(QObject):
 
         Returns ``(x, y, z, color_days, hover_texts, title, n_total)``:
         sub-spacecraft positions lifted just above the surface, colored by days
-        elapsed since the first point, subsampled to :data:`MAX_TRACK_POINTS`.
+        elapsed since the first point, subsampled to a floor of
+        :data:`MIN_TRACK_POINTS`.
         """
         from wara.planetary.moon import lonlat_to_xyz, R_MOON_KM
 
         n = len(lon)
-        stride = max(1, -(-n // MAX_TRACK_POINTS))  # ceil division
+        stride = max(1, n // MIN_TRACK_POINTS)  # keep >= MIN_TRACK_POINTS points
         idx = np.arange(0, n, stride)
         x, y, z = lonlat_to_xyz(lon[idx], lat[idx], R_MOON_KM * 1.004)
         t = t64[idx]

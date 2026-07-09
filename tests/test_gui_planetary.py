@@ -261,11 +261,13 @@ def test_track_time_spans_days(tab):
     assert np.isclose(max(color) - min(color), 1.0)
 
 
-def test_track_subsamples_to_cap(tab, monkeypatch):
-    monkeypatch.setattr(P, "MAX_TRACK_POINTS", 3)
+def test_track_subsamples_but_keeps_floor(tab, monkeypatch):
+    monkeypatch.setattr(P, "MIN_TRACK_POINTS", 3)
     tab._load_done([_fake_day(lat=np.linspace(-80, 80, 8))])
     x, *_ = tab.track_arrays()
-    assert len(x) == 3                          # ceil(8/3)=3 stride → 3 points
+    # stride = 8 // 3 = 2 → ceil(8/2) = 4 points, never below the floor of 3.
+    assert len(x) == 4
+    assert len(x) >= 3
 
 
 def _fake_meta(tab):
