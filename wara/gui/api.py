@@ -842,6 +842,14 @@ class CombineRunsDialog(QDialog):
         self.cb_channel.currentIndexChanged.connect(lambda *_: self._preview_all())
         r, _ = labeled_row("Preview ch", self.cb_channel); side.addWidget(r)
 
+        self.cb_ecol = QComboBox()
+        self.cb_ecol.setToolTip(
+            "Energy column used for the overlay and carried into the combined "
+            "run. Runs missing it get it filled by copying an available energy "
+            "column (see the warning on load).")
+        self.cb_ecol.currentIndexChanged.connect(lambda *_: self._preview("energy"))
+        r, _ = labeled_row("Energy column", self.cb_ecol); side.addWidget(r)
+
         self.ed_ebins = QLineEdit(str(DEFAULT_EBINS)); self.ed_ebins.setFixedWidth(70)
         self.ed_ebins.setToolTip("Number of energy bins in the overlay plot")
         r, _ = labeled_row("Energy bins", self.ed_ebins); side.addWidget(r)
@@ -931,18 +939,57 @@ class CombineRunsDialog(QDialog):
             self.lbl_state.setText(f"Could not load runs: {exc}")
             self.runs_data = None
             return
+        # Harmonize energy columns across runs so the overlay and the combined
+        # run share one schema (older runs may lack "energy_orig"); missing
+        # columns are filled by copying an available energy column.
+        self.runs_data, patched = cr.harmonize_energy_columns(self.runs_data)
         self.channels = cr.channels_in_common(self.runs_data)
+        prev = self.cb_channel.currentText()  # keep the last preview channel
         self.cb_channel.blockSignals(True)
         self.cb_channel.clear()
         self.cb_channel.addItems([str(ch) for ch in self.channels])
+        if prev and prev in {str(ch) for ch in self.channels}:
+            self.cb_channel.setCurrentText(prev)
         self.cb_channel.blockSignals(False)
+
+        ecols = cr.energy_columns(self.runs_data[0][2]) if self.runs_data else []
+        prev_e = self.cb_ecol.currentText()  # keep the last energy column
+        self.cb_ecol.blockSignals(True)
+        self.cb_ecol.clear()
+        self.cb_ecol.addItems(ecols)
+        if prev_e and prev_e in ecols:
+            self.cb_ecol.setCurrentText(prev_e)
+        elif "energy_orig" in ecols:
+            self.cb_ecol.setCurrentText("energy_orig")
+        self.cb_ecol.blockSignals(False)
+
         n = sum(len(df) for _, _, df in self.runs_data)
         chan_txt = (', '.join(str(c) for c in self.channels)
                     if self.channels else "none shared (preview off)")
         self.lbl_state.setText(
             f"Loaded {len(self.runs_data)} runs · channels {chan_txt} "
             f"· {n:,} events")
+        if patched:
+            self._warn_patched_energy(patched)
         self._preview_all()
+
+    def _warn_patched_energy(self, patched):
+        """Warn that some runs were missing an energy column, which was filled by
+        copying an available one so the combine has a consistent schema."""
+        lines = [f"{run}: {', '.join(f'{c} ← copied from {src}' for c, src in created.items())}"
+                 for run, created in patched.items()]
+        detail = "\n".join(lines)
+        self.lbl_state.setText(
+            "⚠ some runs were missing an energy column -- filled by copying "
+            f"({'; '.join(patched)}). See the popup for details.")
+        QMessageBox.warning(
+            self, "Energy columns harmonized",
+            "Some runs did not carry every energy column, so the missing column "
+            "was created by copying an available one to keep the combined run's "
+            "schema consistent (needed for post-combine shifts):\n\n"
+            f"{detail}\n\n"
+            "The copied column is a stand-in, not an independent measurement -- "
+            "check that using it for calibration/shifts is appropriate.")
 
     def _preview_channel(self):
         try:
@@ -968,9 +1015,10 @@ class CombineRunsDialog(QDialog):
         ch = self._preview_channel()
         if self.runs_data is None or ch is None:
             return
+        ecol = self.cb_ecol.currentText() or None
         try:
             spectra = cr.run_spectra(self.runs_data, ch, kind,
-                                     bins=self._bins(kind))
+                                     bins=self._bins(kind), ecol=ecol)
         except Exception as exc:  # noqa: BLE001
             self.lbl_state.setText(f"Preview failed: {exc}")
             return
@@ -1080,28 +1128,44 @@ class CombineRunsDialog(QDialog):
                 "the combined run before any quantitative analysis.")
 
     def _write_metadata(self, dst_run_dir, new_date, new_runnr, info):
-        """Copy the first run's settings folder as a starting point and write a
-        provenance README listing every source run. Best-effort; returns a short
-        note. Combined live-time is *not* summed automatically  -- the README
-        flags that the settings come from the first run only."""
-        notes = []
-        first_date, first_runnr, _ = self.runs_data[0]
-        try:
-            src_run_dir, _, _ = read_parquet_api.run_parquet_path(
-                first_date, first_runnr, self._data_path)
-        except Exception:  # noqa: BLE001
-            src_run_dir = None
+        """Merge *every* source run's settings folder into the combined run and
+        write a provenance README listing all sources. Best-effort; returns a
+        short note.
 
-        if src_run_dir is not None:
+        Each source run's ``settings/*-stats-*`` files carry that run's live-time
+        and counts, and the combined-run totals (live time, alphas, neutron
+        yield) are computed downstream by summing across all stats files in the
+        folder. So the combined run must hold the stats files from *all* sources,
+        not just the first  -- otherwise those totals reflect one run only. The
+        files are uniquely named per run (``RUN-<date>-<runnr>-...``), so merging
+        them into one folder is collision-free."""
+        notes = []
+        dst_settings = dst_run_dir / "settings"
+        copied, no_settings, failed = [], [], []
+        for (d, r, _) in self.runs_data:
+            try:
+                src_run_dir, _, _ = read_parquet_api.run_parquet_path(
+                    d, r, self._data_path)
+            except Exception:  # noqa: BLE001
+                failed.append(f"{d}-{r}")
+                continue
             src_settings = src_run_dir / "settings"
-            if src_settings.is_dir():
-                try:
-                    shutil.copytree(src_settings, dst_run_dir / "settings",
-                                    dirs_exist_ok=True)
-                    notes.append("settings copied (from first run)")
-                except Exception:  # noqa: BLE001
-                    traceback.print_exc()
-                    notes.append("settings copy failed")
+            if not src_settings.is_dir():
+                no_settings.append(f"{d}-{r}")
+                continue
+            try:
+                shutil.copytree(src_settings, dst_settings, dirs_exist_ok=True)
+                copied.append(f"{d}-{r}")
+            except Exception:  # noqa: BLE001
+                traceback.print_exc()
+                failed.append(f"{d}-{r}")
+        if copied:
+            notes.append(f"settings merged from {len(copied)}/"
+                         f"{len(self.runs_data)} runs")
+        if no_settings:
+            notes.append(f"{len(no_settings)} run(s) had no settings")
+        if failed:
+            notes.append(f"{len(failed)} settings copy failed")
 
         try:
             stamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -1127,10 +1191,19 @@ class CombineRunsDialog(QDialog):
                 ]
             lines += [
                 "",
-                "NOTE: the settings/ folder was copied from the first run only; "
-                "live-time and count totals across the combined runs are NOT "
-                "summed automatically and may need manual adjustment.",
+                "The settings/ folder holds the *-stats-* files from ALL source "
+                "runs (uniquely named per run), so live-time, total counts and "
+                "neutron yield are summed across every run automatically.",
             ]
+            if no_settings:
+                lines.append(
+                    "WARNING: no settings folder found for these runs, so their "
+                    "live-time/counts are missing from the totals: "
+                    + ", ".join(no_settings))
+            if failed:
+                lines.append(
+                    "WARNING: settings copy failed for these runs (see console): "
+                    + ", ".join(failed))
             (dst_run_dir / "README.txt").write_text("\n".join(lines) + "\n",
                                                     encoding="utf-8")
             notes.append("README written")
@@ -5517,6 +5590,10 @@ class ApiController:
         read_date, read_runnr = ((new_date, new_runnr) if merge
                                  else (self._src_date, self._src_runnr))
         which = "destination" if merge else "source"
+        # Re-reading every parquet chunk can be slow; show a busy cursor so the
+        # window doesn't just look frozen ("Not Responding") while it works.
+        self._status(f"Applying data -- re-reading {which} run...")
+        QApplication.setOverrideCursor(Qt.WaitCursor)
         try:
             full = read_parquet_api.read_parquet_file(
                 date=read_date, runnr=read_runnr, ch=None,
@@ -5525,6 +5602,8 @@ class ApiController:
             traceback.print_exc()
             self._status(f"Could not re-read {which} run: {exc}")
             return
+        finally:
+            QApplication.restoreOverrideCursor()
         if full is None:
             self._status(f"Could not re-read the {which} run's parquet files")
             return
@@ -5569,6 +5648,8 @@ class ApiController:
                 full.loc[missing, "dt_cal"] = (
                     full.loc[missing, "dt"].astype(float) * 1e9)
 
+        self._status("Applying data -- writing combined parquet...")
+        QApplication.setOverrideCursor(Qt.WaitCursor)
         try:
             out = read_parquet_api.save_combined_run(
                 full, new_date, new_runnr, self._src_data_path, overwrite=True)
@@ -5576,6 +5657,8 @@ class ApiController:
             traceback.print_exc()
             self._status(f"Could not save calibrated run: {exc}")
             return
+        finally:
+            QApplication.restoreOverrideCursor()
 
         # Copy the source run's settings folder (live_time / count-rate stats the
         # API calculations read) and drop/append a README recording provenance,

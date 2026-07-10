@@ -139,6 +139,7 @@ class SpectrumCanvas(FigureCanvas):
         self.ax2 = None           # twin axis for the SNR overlay
         self._overlays = []       # list of (x, y, label, color) kept spectra
         self._active_label = None
+        self._active_color = T.ACCENT_CYAN
         self._active_visible = True
         self._xlabel = None       # axis-label overrides (None = derive from spectrum)
         self._ylabel = None
@@ -211,10 +212,11 @@ class SpectrumCanvas(FigureCanvas):
         self.draw_idle()
 
     def plot_spectrum(self, spect, log_y=False, label=None, xlabel=None, ylabel=None,
-                      keep_zoom=False):
+                      keep_zoom=False, color=None):
         self._spect = spect
         self._log = log_y
         self._active_label = label
+        self._active_color = color or T.ACCENT_CYAN
         self._xlabel = xlabel
         self._ylabel = ylabel
         self._redraw(keep_zoom=keep_zoom)
@@ -401,9 +403,9 @@ class SpectrumCanvas(FigureCanvas):
                     alpha=0.95, label=olabel)
         x, y = self._spect.x, self._spect.counts
         if self._active_visible:
-            ax.fill_between(x, y, alpha=0.12, color=T.ACCENT_CYAN, linewidth=0)
-            ax.step(x, y, where="mid", color=T.ACCENT_CYAN, linewidth=0.9, alpha=0.95,
-                    label=self._active_label)
+            ax.fill_between(x, y, alpha=0.12, color=self._active_color, linewidth=0)
+            ax.step(x, y, where="mid", color=self._active_color, linewidth=0.9,
+                    alpha=0.95, label=self._active_label)
         # Only switch to log if there is positive data, else matplotlib warns.
         ax.set_yscale("log" if (self._log and (y > 0).any()) else "linear")
         y_label = self._ylabel or {"Cts": "Counts", "CPS": "Counts/second"}.get(

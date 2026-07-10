@@ -21,6 +21,53 @@ def energy_base_col(df: pd.DataFrame) -> str:
     return "energy_orig" if "energy_orig" in df.columns else "energy"
 
 
+# Energy columns harmonized across runs so a *combined* run has a consistent
+# schema. Post-combine shifts index these columns by name; if one run lacks a
+# column, ``pd.concat`` would leave NaN there and the shift would silently break.
+# ``energy_cal`` is intentionally excluded -- it is a per-run calibration that
+# combine drops (see ``CAL_COLS``).
+ENERGY_COLS = ("energy", "energy_orig")
+
+
+def energy_columns(df: pd.DataFrame) -> list[str]:
+    """Energy columns present in *df*, in canonical (:data:`ENERGY_COLS`) order."""
+    return [c for c in ENERGY_COLS if c in df.columns]
+
+
+def harmonize_energy_columns(runs_data):
+    """Give every run the same set of energy columns before combining.
+
+    The target set is the union of :data:`ENERGY_COLS` present across the runs.
+    For any run missing one of them, the column is *created by copying* an
+    available energy column (preferring the earlier canonical columns), so the
+    combined run's schema is consistent and later shifts don't hit NaN.
+
+    Returns ``(runs_data, patched)`` where *runs_data* is the (possibly copied)
+    list in the original order and *patched* maps ``"date-runnr"`` to a dict of
+    ``{created_col: source_col}`` for each run that was filled.
+    """
+    union = []
+    for (_, _, df) in runs_data:
+        for c in energy_columns(df):
+            if c not in union:
+                union.append(c)
+
+    patched, out = {}, []
+    for (date, runnr, df) in runs_data:
+        missing = [c for c in union if c not in df.columns]
+        avail = energy_columns(df)
+        if missing and avail:
+            df = df.copy()
+            src = avail[0]
+            created = {}
+            for c in missing:
+                df[c] = df[src]
+                created[c] = src
+            patched[f"{date}-{runnr}"] = created
+        out.append((date, runnr, df))
+    return out, patched
+
+
 def read_runs(runs, data_path=None):
     """Read every run in *runs* (a list of ``(date, runnr)``) at full channel
     width. Returns a list of ``(date, runnr, df)`` in the given order; raises
@@ -52,18 +99,21 @@ def channels_in_common(runs_data):
     return sorted(common or [])
 
 
-def run_spectra(runs_data, ch, axis, bins=None):
+def run_spectra(runs_data, ch, axis, bins=None, ecol=None):
     """Per-run overlay spectra for one *channel* on one *axis*, for visualization.
 
-    ``axis`` is ``"energy"`` (raw channels) or ``"time"`` (``dt`` in ns). All runs
-    are histogrammed over a shared range so the overlay is directly comparable:
-    energy uses ``[0, p99.5]`` and time ``[p0.2, p99.5]`` of the pooled values, so
-    stray edge events don't squash the real structure. Returns a list of
+    ``axis`` is ``"energy"`` (raw channels) or ``"time"`` (``dt`` in ns). On the
+    energy axis, *ecol* selects which energy column to histogram; it must exist in
+    every run (call :func:`harmonize_energy_columns` first). When omitted it falls
+    back to :func:`energy_base_col` of the first run. All runs are histogrammed
+    over a shared range so the overlay is directly comparable: energy uses
+    ``[0, p99.5]`` and time ``[p0.2, p99.5]`` of the pooled values, so stray edge
+    events don't squash the real structure. Returns a list of
     :class:`wara.spectrum.Spectrum`, one per run (same order as *runs_data*).
     """
     if axis == "energy":
-        base = energy_base_col(runs_data[0][2])
         bins = bins or 4096
+        base = ecol or energy_base_col(runs_data[0][2])
         get = lambda df, m: df.loc[m, base].astype(float).to_numpy()  # noqa: E731
     elif axis == "time":
         bins = bins or 512
