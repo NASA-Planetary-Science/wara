@@ -187,7 +187,8 @@ class WaraApp(QMainWindow):
         self._ylabel = None
         self._active_name = None
         self._active_visible = True
-        self._overlays = []          # kept spectra: list of dicts (spect/name/visible)
+        self._active_color = None     # color of the active spectrum (travels with it)
+        self._overlays = []          # kept spectra: list of dicts (spect/name/visible/color)
         self._opt_collapsed = False
         self._iso_key = None         # peak-energy signature the iso-ID cache was built for
         self._iso_info_cache = None
@@ -481,6 +482,7 @@ class WaraApp(QMainWindow):
                     "spect": self.spect.copy(),
                     "name": self._active_name or "spectrum",
                     "visible": self._active_visible,
+                    "color": self._active_color,
                 })
         else:
             self._overlays = []
@@ -491,6 +493,10 @@ class WaraApp(QMainWindow):
         # visible" on) gets a " 2", " 3", … suffix.
         self._active_name = self._unique_name(name)
         self._active_visible = True
+        # A fresh spectrum gets a new color; the prior active's color (if kept)
+        # now lives on its overlay entry, so _pick_color skips it.
+        self._active_color = None
+        self._active_color = self._pick_color()
         self._remove_cal = False
         self._xlabel = self._ylabel = None
         self.spectrum_page.canvas.set_active_visible(True)
@@ -547,6 +553,7 @@ class WaraApp(QMainWindow):
                 "spect": spect,
                 "name": self._unique_name(name),
                 "visible": True,
+                "color": self._pick_color(),
             })
         self._update_overlays()
         self._rebuild_spectra_list()
@@ -580,15 +587,23 @@ class WaraApp(QMainWindow):
         label = getattr(spect, "label", None)
         return label if label else filename
 
-    def _overlay_color(self, index):
-        return T.OVERLAY_COLORS[index % len(T.OVERLAY_COLORS)]
+    def _pick_color(self):
+        """Return the first palette color not currently used by the active
+        spectrum or a kept overlay, so each loaded spectrum gets a distinct
+        color. Falls back to cycling the palette once every color is taken."""
+        used = {self._active_color} | {r.get("color") for r in self._overlays}
+        for c in T.SPECTRUM_COLORS:
+            if c not in used:
+                return c
+        n = len(self._overlays) + 1
+        return T.SPECTRUM_COLORS[n % len(T.SPECTRUM_COLORS)]
 
     def _update_overlays(self):
-        # Color overlays by position so a given slot keeps its color regardless
-        # of which spectrum is active.
+        # Each spectrum carries its own color, so a spectrum keeps the same
+        # color whether it is active or an overlay.
         items = [(r["spect"].x, r["spect"].counts,
-                  self._display_name(r["spect"], r["name"]), self._overlay_color(i))
-                 for i, r in enumerate(self._overlays) if r["visible"]]
+                  self._display_name(r["spect"], r["name"]), r["color"])
+                 for r in self._overlays if r["visible"]]
         self.spectrum_page.canvas.set_overlays(items)
 
     def _on_keep_toggled(self, checked):
@@ -611,16 +626,17 @@ class WaraApp(QMainWindow):
             ph = QLabel("No spectrum loaded"); ph.setObjectName("stat_key")
             lay.addWidget(ph)
             return
-        # Active spectrum (cyan) — toggle only, no remove, already active.
+        # Active spectrum — shown on top with its own color and an "active"
+        # style; toggle only, no remove, already active.
         lay.addWidget(self._make_spectrum_row(
             self._display_name(self.spect, self._active_name or "spectrum"),
-            T.ACCENT_CYAN, self._active_visible,
+            self._active_color or T.ACCENT_CYAN, self._active_visible,
             on_toggle=self._toggle_active_visible, active=True))
         # Overlays — click name to activate, toggle visibility, or remove.
         for i, rec in enumerate(self._overlays):
             lay.addWidget(self._make_spectrum_row(
                 self._display_name(rec["spect"], rec["name"]),
-                self._overlay_color(i), rec["visible"],
+                rec["color"], rec["visible"],
                 on_toggle=lambda v, r=rec: self._toggle_overlay(r, v),
                 on_remove=lambda _=False, r=rec: self._remove_overlay(r),
                 on_activate=lambda _=False, r=rec: self._activate_overlay(r)))
@@ -669,6 +685,7 @@ class WaraApp(QMainWindow):
                 "spect": self.spect.copy(),
                 "name": self._active_name or "spectrum",
                 "visible": self._active_visible,
+                "color": self._active_color,
             })
             self._overlays.remove(rec)
         else:
@@ -677,6 +694,7 @@ class WaraApp(QMainWindow):
         self._spect_orig = rec["spect"].copy()
         self._active_name = rec["name"]
         self._active_visible = rec["visible"]
+        self._active_color = rec["color"]  # the promoted spectrum keeps its color
         self._remove_cal = False
         self.spectrum_page.canvas.set_active_visible(self._active_visible)
         self._reset_customize_checks()
@@ -757,12 +775,15 @@ class WaraApp(QMainWindow):
             "spect": self.spect.copy(),
             "name": self._active_name or "spectrum",
             "visible": self._active_visible,
+            "color": self._active_color,
         })
         result.label = label
         self.spect = result
         self._spect_orig = result.copy()
         self._active_name = label
         self._active_visible = True
+        self._active_color = None
+        self._active_color = self._pick_color()
         self._remove_cal = False
         self.spectrum_page.canvas.set_active_visible(True)
         self._reset_customize_checks()
@@ -778,7 +799,8 @@ class WaraApp(QMainWindow):
         self.spectrum_page.canvas.plot_spectrum(
             self.spect, log_y=self.spectrum_opts.cb_log.isChecked(),
             label=self._display_name(self.spect, self._active_name),
-            xlabel=self._xlabel, ylabel=self._ylabel, keep_zoom=keep_zoom)
+            xlabel=self._xlabel, ylabel=self._ylabel, keep_zoom=keep_zoom,
+            color=self._active_color)
 
     def _refresh(self, keep_zoom=False):
         """Replot and refresh the stat readouts. Any existing peak markers
@@ -813,6 +835,7 @@ class WaraApp(QMainWindow):
         self._spect_orig = None
         self._active_name = None
         self._active_visible = True
+        self._active_color = None
         self._overlays = []
         self._xlabel = self._ylabel = None
         self.spectrum_page.canvas.set_active_visible(True)
@@ -1294,9 +1317,37 @@ def _parse_argv():
     return opts
 
 
+def _install_excepthook():
+    """Route unhandled exceptions to the console (and a dialog) instead of the
+    silent process abort PyQt does by default.
+
+    Without this, an exception raised inside a Qt slot (e.g. a button handler)
+    is passed to the default ``sys.excepthook`` and the interpreter then aborts
+    the process -- on a Windows GUI app the traceback usually never reaches the
+    terminal, so the app appears to "crash with no error message". Overriding
+    the hook prints the full traceback to stderr (the command prompt) and lets
+    the event loop keep running so a single failed action no longer kills WARA.
+    """
+    import traceback as _tb
+
+    def hook(exc_type, exc, tb):
+        print("".join(_tb.format_exception(exc_type, exc, tb)),
+              file=sys.stderr, flush=True)
+        try:
+            QMessageBox.critical(
+                None, "WARA -- unexpected error",
+                f"{exc_type.__name__}: {exc}\n\n"
+                "The full traceback was printed to the console/terminal.")
+        except Exception:  # noqa: BLE001 -- never let the hook itself crash
+            pass
+
+    sys.excepthook = hook
+
+
 def main():
     opts = _parse_argv()
 
+    _install_excepthook()
     T.apply_mpl_theme()
     QApplication.setAttribute(Qt.AA_EnableHighDpiScaling)
     QApplication.setAttribute(Qt.AA_UseHighDpiPixmaps)

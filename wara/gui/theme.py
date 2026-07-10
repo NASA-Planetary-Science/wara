@@ -25,8 +25,14 @@ TEXT_DIM     = "#aab2e0"
 SNR_PURPLE   = "#b388ff"   # SNR overlay curve
 REF_LINE     = "#ff3df0"   # Nuclear Database reference lines
 
-# Colors for kept/overlaid spectra (active spectrum stays cyan).
+# Cycling colors for distinct series (API selections, xy bands, …).
 OVERLAY_COLORS = ["#ff8a3d", "#5cf04a", "#ffb300", "#b388ff", "#4d9bff", "#ff5577"]
+
+# Palette for loaded spectra on the Spectrum page. A color is assigned when a
+# spectrum is loaded and travels with it as it moves between active and overlay,
+# so a spectrum keeps its color regardless of which one is active. Cyan leads,
+# so a lone spectrum stays the familiar cyan.
+SPECTRUM_COLORS = ["#00e5ff"] + OVERLAY_COLORS
 
 FONT_FAMILY  = "'Segoe UI', 'Inter', 'Helvetica Neue', Arial, sans-serif"
 MONO_FAMILY  = "'Consolas', 'Cascadia Mono', monospace"

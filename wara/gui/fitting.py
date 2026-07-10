@@ -284,6 +284,13 @@ class FitWindow(QDialog):
         self.slider_lo.setToolTip("Trim the lower bound of the fit range")
         self.slider_hi.setToolTip("Trim the upper bound of the fit range")
         self.slider_hi.setLayoutDirection(Qt.RightToLeft)
+        # Mirror the fill of the lower slider: the upper-bound slider should fill
+        # from the right edge inward as its handle is dragged left. QSS paints
+        # sub-page to the left of the handle regardless of layout direction, so
+        # color the add-page (right of the handle) instead and clear sub-page.
+        self.slider_hi.setStyleSheet(
+            f"QSlider::sub-page:horizontal {{ background: {T.BG_INPUT}; border-radius: 2px; }}"
+            f"QSlider::add-page:horizontal {{ background: #16384f; border-radius: 2px; }}")
         roi_row = QHBoxLayout()
         roi_row.addWidget(self.roi_lo)
         roi_row.addWidget(self.slider_lo, stretch=1)
