@@ -86,8 +86,8 @@ class PeakSearch:
         xrange : list or numpy array of shape (2,), optional
             specific x range for peak searching. The default is None.
         method : string, optional
-            peak searching method including kernel method (km), fast FFT-based
-            method (fast), and scipy peak finding method (scipy). The default is km.
+            peak searching method including kernel method (km) and fast
+            FFT-based method (fast). The default is km.
 
         Raises
         ------
@@ -114,8 +114,8 @@ class PeakSearch:
         if not isinstance(min_snr, (int, float)) or min_snr <= 0:
             raise ValueError("min_snr must be a positive number")
         
-        if method not in ("km", "fast", "scipy"):
-            raise ValueError(f"method must be one of 'km', 'fast', or 'scipy', got '{method}'")
+        if method not in ("km", "fast"):
+            raise ValueError(f"method must be one of 'km' or 'fast', got '{method}'")
             
         self.xrange, self.channel_idx = self._parse_xrange(xrange, spectrum)
         self.ref_x = ref_x
@@ -134,12 +134,10 @@ class PeakSearch:
         self.edg = None
         if method == "km":
             self.calculate_km()
-        elif method == "scipy":
-            self.calculate_scipy()
         elif method == "fast":
             self.calculate_fast()
         else:
-            raise ValueError(f"Unknown method '{method}'. Choose from 'km', 'scipy', or 'fast'")
+            raise ValueError(f"Unknown method '{method}'. Choose from 'km' or 'fast'")
     
     def _parse_xrange(self, xrange, spectrum):
         """
@@ -208,7 +206,7 @@ class PeakSearch:
             peak positions within the specified range.
         """
         if self.peaks_idx is None:
-            raise ValueError("No peaks found. Run calculate_km, calculate_fast, or calculate_scipy first.")
+            raise ValueError("No peaks found. Run calculate_km or calculate_fast first.")
         mask = (self.peaks_idx >= x_min) & (self.peaks_idx <= x_max)
         return self.peaks_idx[mask]
     
@@ -377,26 +375,6 @@ class PeakSearch:
             self.peaks_idx = new_ch[peaks_idx]
         # self.reset()
 
-    def calculate_scipy(self):
-        if self.xrange is None:
-            work_ch = self.spectrum.channels
-            work_cts = self.spectrum.counts
-        else:
-            work_ch = self.spectrum.channels[self.channel_idx]
-            work_cts = self.spectrum.counts[self.channel_idx]
-
-        peaks_idx, params = find_peaks(
-            work_cts, prominence=self.min_snr, width=self.fwhm(work_ch)
-        )
-
-        # Drop edge-band detections; keep the per-peak prominences aligned.
-        keep = self._edge_guard_mask(peaks_idx, work_ch, work_cts)
-        peaks_idx = peaks_idx[keep]
-
-        self.peaks_idx = peaks_idx if self.xrange is None else work_ch[peaks_idx]
-        self.fwhm_guess = self.fwhm(self.peaks_idx)
-        self.snr = params["prominences"][keep]
-    
     def calculate_fast(self):
         """
         Fast peak finding using segmented FFT convolution with km-style
@@ -500,7 +478,7 @@ class PeakSearch:
         None.
         """
         if self.peaks_idx is None:
-            raise ValueError("No peaks found. Run calculate_km, calculate_fast, or calculate_scipy first.")
+            raise ValueError("No peaks found. Run calculate_km or calculate_fast first.")
         
         if self.spectrum.energies is not None:
             peak_energies = self.spectrum.energies[self.peaks_idx]

@@ -112,7 +112,7 @@ class SpectrumMixin:
         print(xnew)
         # if no search object initialized, initialize a dummy one
         if self.search == 0:
-            self.search = ps.PeakSearch(self.spect, 420, 3, min_snr=1e6, method="scipy")
+            self.search = ps.PeakSearch(self.spect, 420, 3, min_snr=1e6, method="fast")
             self.span_select()
         x_idx = np.searchsorted(self.search.peaks_idx, xnew)
         self.search.peaks_idx = np.insert(self.search.peaks_idx, x_idx, xnew)

@@ -16,7 +16,10 @@ The usual way to obtain a `Spectrum` is to read a file with the
 from wara import file_reader
 
 spect = file_reader.read_csv("examples/data/test_data_cebr_cal.csv")
+ax = spect.plot()
 ```
+
+![A loaded CeBr spectrum (examples/spectrum/example_spectrum.py)](../figs/spectrum_load.png)
 
 | Reader | File type |
 |--------|-----------|
@@ -38,15 +41,20 @@ button dispatches to these same readers based on the file extension.
 ### Constructing one directly
 
 You can also build a `Spectrum` from arrays you already have in memory. `counts`
-is the only required argument:
+is the only required argument. For example, reading a file yourself with
+`pandas` instead of going through {py:mod}`wara.file_reader`:
 
 ```python
-import numpy as np
+import pandas as pd
 from wara.spectrum import Spectrum
 
-counts = np.random.poisson(50, size=1024)
-spect = Spectrum(counts=counts, livetime=300.0, label="My run")
+df = pd.read_csv("examples/data/test_data_MGS_CeBr.csv")
+spect = Spectrum(counts=df["counts"], energies=df["Energy [keV]"], e_units="keV",
+                 label="MGS CeBr")
+ax = spect.plot()
 ```
+
+![A Spectrum built directly from counts/energy columns read with pandas](../figs/spectrum_construct.png)
 
 Provide `energies` (and `e_units`) if the spectrum is already calibrated;
 otherwise the x-axis is a 0…N channel index. If you don't pass `counts_err`,
@@ -72,6 +80,11 @@ ax = spect.plot()                 # log y-scale by default
 ax = spect.plot(scale="linear")   # or pass your own Axes via ax=...
 ```
 
+![Same spectrum on a log (left) vs. linear (right) y-axis](../figs/spectrum_plot_scales.png)
+
+The log scale (the default) keeps small high-energy peaks visible; on a linear
+scale they're flattened by the dominant low-energy peak.
+
 `plot()` returns the matplotlib `Axes`, so you can keep customizing it or
 overlay further data. To compare several spectra on one figure:
 
@@ -80,6 +93,8 @@ from wara.spectrum import plot_overlay
 
 plot_overlay([spect_a, spect_b], scale="log")
 ```
+
+![Two CeBr spectra overlaid: a calibrated background/room spectrum and a Co-60 source, showing its 1173/1332 keV doublet](../figs/spectrum_overlay.png)
 
 ## Processing
 
@@ -94,6 +109,13 @@ spect.normalize(by="counts")    # or by="livetime"
 spect.replace_neg_vals()        # replace negatives (e.g. after a subtraction)
 ```
 
+![Original spectrum, then rebinned by 2, then smoothed on top of the rebin (examples/spectrum/example_spectrum.py)](../figs/spectrum_processing.png)
+
+`rebin` **sums** adjacent bins rather than averaging them, so rebinning by 2
+roughly doubles the counts per bin (the orange trace sitting above the
+original blue one); `smooth` then reduces the bin-to-bin noise with little
+change in overall level (green, nearly on top of the rebinned orange).
+
 ```{tip}
 `gain_shift` is handy for aligning two spectra before subtracting. With
 `energy=True` the shift is given in energy units and converted to channels
@@ -106,9 +128,11 @@ using the calibration's bin width.
 uncertainty:
 
 ```python
-roi = spect.roi_counts(600, 700)
+roi = spect.roi_counts(600, 750)
 print(roi["sum"], "±", roi["uncertainty"], "counts in", roi["n_bins"], "bins")
 ```
+
+![The 600-700 keV region shaded on the spectrum, with the ROI sum annotated](../figs/spectrum_roi.png)
 
 ### Gaussian energy broadening
 
@@ -121,21 +145,31 @@ statistics are preserved: counts are resampled per bin and redistributed across
 the kernel, so the broadened spectrum keeps physically consistent noise.
 
 ```python
-# Any callable energy -> FWHM works. Two example curves ship with the class:
-spect.gaussian_energy_broadening(Spectrum.fwhm_LaBr_example)   # FWHM in MeV
-spect.gaussian_energy_broadening(Spectrum.fwhm_HPGe_example)   # FWHM in keV
-
-# ...or define your own resolution curve:
-spect.gaussian_energy_broadening(lambda E: 0.05 * (E ** 0.5))
+# A built-in curve ships with the class:
+spect.gaussian_energy_broadening(Spectrum.fwhm_LaBr_example)
 ```
 
+![An HPGe spectrum before and after broadening with fwhm_LaBr_example (examples/spectrum/example_gaussian_broadening.py)](../figs/spectrum_broadening_labr.png)
+
+```python
+# ...or define your own resolution curve:
+def fwhm_hpge(E):
+    return 0.1 * np.sqrt(E) + 0.001 * E
+
+spect.gaussian_energy_broadening(fwhm_hpge)
+```
+
+![The same HPGe spectrum broadened with a custom, slightly-worse-resolution curve (examples/spectrum/example_gaussian_broadening.py)](../figs/spectrum_broadening_hpge.png)
+
 ```{important}
-The FWHM function is evaluated at the spectrum's x-values, so its units must
+The FWHM function is evaluated at the spectrum's x-values, so its units should
 match `spect.x` — apply broadening **after** the spectrum is energy-calibrated,
-and make sure your curve returns FWHM in the same energy units. The two built-in
-examples use MeV (`fwhm_LaBr_example`) and keV (`fwhm_HPGe_example`)
-respectively. Pass `random_seed=...` for reproducible output. The method
-modifies the spectrum in place.
+and make sure your curve returns FWHM in the same energy units. `fwhm_LaBr_example`
+is calibrated for energy in MeV; a keV-calibrated spectrum (as above) needs a
+custom function like `fwhm_hpge`, or a wrapper that converts units. A FWHM that
+comes out ≤ 0 (as `fwhm_LaBr_example` can at low energy) leaves that bin
+unbroadened rather than raising an error. Pass `random_seed=...` for
+reproducible output. The method modifies the spectrum in place.
 ```
 
 ## Combining spectra
@@ -152,6 +186,8 @@ sum(list_of_spectra)               # sum() works too
 scale = sample.livetime / background.livetime
 net   = sample - background * scale
 ```
+
+![Sample, background, and the net (background-subtracted) spectrum overlaid](../figs/spectrum_combine.png)
 
 ```{note}
 Spectra must be bin-compatible to combine (same number of bins and matching

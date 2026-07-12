@@ -8,10 +8,12 @@ signal-to-noise ratio. It is the usual first step before fitting.
 from wara import file_reader
 from wara.peaksearch import PeakSearch
 
-spect = file_reader.read_csv("examples/data/test_data_cebr_cal.csv")
+spect = file_reader.read_csv("examples/data/test_data_cebr.csv")
 search = PeakSearch(spectrum=spect, ref_x=420, ref_fwhm=20, min_snr=5)
-search.plot()
+search.plot(yscale="log")
 ```
+
+![CeBr spectrum with found peaks (dashed lines) and the SNR curve (examples/peaksearch/example_peaksearch_cebr.py)](../figs/peakfind_cebr_search.png)
 
 ```{note}
 The search runs automatically when the object is constructed — there is no
@@ -44,9 +46,12 @@ real lines are being missed. To search only part of the spectrum, pass an
 `xrange`:
 
 ```python
-# only look between x = 1080 and x = 1450 (channels or energy, per calibration)
-search = PeakSearch(spect, ref_x=420, ref_fwhm=20, min_snr=5, xrange=[1080, 1450])
+# only look between x = 1200 and x = 1600 (channels or energy, per calibration)
+search = PeakSearch(spect, ref_x=420, ref_fwhm=20, min_snr=5, xrange=[1200, 1600])
+search.plot(yscale="log", snrs="off")
 ```
+
+![Same spectrum, peaks searched only in [1200, 1600] — the two marked peaks both fall in that window even though the whole spectrum is still plotted (examples/peaksearch/example_peaksearch_cebr.py)](../figs/peakfind_xrange.png)
 
 ## Search methods
 
@@ -56,9 +61,25 @@ The `method` argument selects the algorithm:
 |----------|-------------|
 | `"km"` *(default)* | Gaussian-kernel deconvolution. Also decomposes the spectrum into signal/continuum/noise (see {ref}`plot_components <peaksearch-components>`). Adapted from [becquerel](https://github.com/lbl-anp/becquerel). |
 | `"fast"` | FFT-based; quicker on large spectra. |
-| `"scipy"` | Plain `scipy.signal.find_peaks` on the SNR curve. |
 
 The signal/continuum/noise decomposition is only produced by the `"km"` method.
+
+```python
+search_km = PeakSearch(spect, ref_x=420, ref_fwhm=5, min_snr=20, method="km")
+search_km.plot(yscale="log")
+search_fast = PeakSearch(spect, ref_x=420, ref_fwhm=5, min_snr=20, method="fast")
+search_fast.plot(yscale="log")
+```
+
+![The same HPGe spectrum searched with method="km" vs. method="fast" (examples/peaksearch/example_peaksearch_hpge.py)](../figs/peakfind_km_vs_fast.png)
+
+On this ~16000-channel HPGe spectrum, `"km"` took **14.6 s** and found 69 peaks;
+`"fast"` took **0.05 s** and found 52 — a real run, not a general guarantee, but
+illustrates the trade-off: `"fast"` is dramatically quicker and finds most of
+the same lines, `"km"` catches more (and is required for the component
+decomposition below). Note `"fast"` has no SNR curve to overlay (`snrs="on"`
+only draws it for `method="km"`), which is why the right panel shows just the
+spectrum and its found peaks.
 
 ```{admonition} Credit
 :class: seealso
@@ -83,9 +104,9 @@ After construction, the key attributes are:
 Convenience helpers:
 
 ```python
-search.metadata()                 # dict: parameters + n_peaks + peak positions
-search.peaks_in_range(1080, 1450) # peak channels within a window
-search.to_csv("peaks.csv")        # channel, energy, fwhm_guess, snr per peak
+search.metadata()                # dict: parameters + n_peaks + peak positions
+search.peaks_in_range(0, 300)    # peak channels within a window -> [112 194 233 294]
+search.to_csv("peaks.csv")       # channel, energy, fwhm_guess, snr per peak
 ```
 
 ## Plotting
@@ -94,6 +115,8 @@ search.to_csv("peaks.csv")        # channel, energy, fwhm_guess, snr per peak
 search.plot()                 # spectrum with found peaks marked + the SNR curve
 search.plot(yscale="log", snrs="off")
 ```
+
+![The same CeBr search plotted with yscale="log", snrs="off" — clearer than the linear/SNR-on default above](../figs/peakfind_plot_log.png)
 
 (peaksearch-components)=
 ### Component decomposition (`km` only)
@@ -105,6 +128,10 @@ is useful for judging whether a feature is real:
 search.plot_components()      # raw, peaks+continuum, continuum, peaks, noise
 search.plot_kernel()          # visualize the kernel matrix itself
 ```
+
+![The CeBr spectrum decomposed into peaks, continuum, and noise (examples/peaksearch/example_peaksearch_cebr.py)](../figs/peakfind_components.png)
+
+![The kernel matrix used by the deconvolution — each row is the kernel evaluated at one input channel](../figs/peakfind_kernel.png)
 
 ## In the GUI
 

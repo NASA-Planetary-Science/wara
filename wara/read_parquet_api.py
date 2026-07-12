@@ -157,7 +157,7 @@ def read_parquet_file_time_aligned(date, runnr, ch=None, flood_field=False, data
 
         spect = Spectrum(counts=counts, energies=bin_centers)
         ps = PeakSearch(spect, ref_x=dt_bins // 2, ref_fwhm=ref_fwhm, fwhm_at_0=1.0,
-                        min_snr=min_snr, method="scipy")
+                        min_snr=min_snr, method="fast")
 
         if len(ps.peaks_idx) > 0:
             first_peak_dt = spect.energies[ps.peaks_idx[0]]
