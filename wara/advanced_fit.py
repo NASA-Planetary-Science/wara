@@ -25,8 +25,21 @@ class BkgFitResult:
         self.coeffs = np.polyfit(self.x, self.y, self.degree)
         self.poly = np.poly1d(self.coeffs)
 
+        # Trapezoidal area under the fit, in *channel* space (dx=1 bin) rather
+        # than against the calibrated energy axis: each channel is one bin of
+        # width 1 regardless of its keV/channel dispersion, so integrating
+        # against energy (the original np.trapz(y_fit, self.x)) scaled the
+        # result by that dispersion and made it incomparable to area_raw.
+        # Note this deliberately is NOT np.sum(y_fit): for any least-squares
+        # polynomial fit with a constant term, sum(y_fit) is *exactly*
+        # sum(self.y) by construction (OLS residuals always sum to zero),
+        # which would make area_fit a trivial echo of area_raw regardless of
+        # fit quality. The trapezoidal rule under-weights the two edge points
+        # by half their value, so area_fit is close to area_raw but not
+        # identical — a real (if small) distinction between "area under the
+        # fitted trapezoid" and "sum of the raw bins".
         y_fit = self.poly(self.x)
-        self.area_fit = float(np.trapz(y_fit, self.x))
+        self.area_fit = float(np.trapz(y_fit, dx=1.0))
         self.area_fit_err = float(np.sqrt(np.abs(self.area_fit)))
 
         self.area_raw = float(np.sum(self.y))

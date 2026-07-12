@@ -382,16 +382,17 @@ class WaraApp(QMainWindow):
         opts.btn_remcal.clicked.connect(self._remove_calibration)
         opts.addsub_panel.btn_add.clicked.connect(self._add_all)
         opts.addsub_panel.btn_sub.clicked.connect(self._subtract_overlays)
-        opts.btn_labels.clicked.connect(self._open_axis_legend)
+        cust = opts.customize_panel
+        cust.btn_labels.clicked.connect(self._open_axis_legend)
         # Customize: each checkbox applies its option live; changing a value
         # re-applies (recomputed from the original) only when its box is ticked.
-        self._cust_checks = [opts.cb_smooth, opts.cb_rebin, opts.cb_shift,
-                             opts.cb_yconst, opts.cb_xconst, opts.cb_cr]
+        self._cust_checks = [cust.cb_smooth, cust.cb_rebin, cust.cb_shift,
+                             cust.cb_yconst, cust.cb_xconst, opts.cb_cr]
         for cb in self._cust_checks:
             cb.toggled.connect(self._recompute)
-        for cb, spin in ((opts.cb_smooth, opts.smooth_spin), (opts.cb_rebin, opts.rebin),
-                         (opts.cb_shift, opts.shift_box), (opts.cb_yconst, opts.yconst),
-                         (opts.cb_xconst, opts.xconst)):
+        for cb, spin in ((cust.cb_smooth, cust.smooth_spin), (cust.cb_rebin, cust.rebin),
+                         (cust.cb_shift, cust.shift_box), (cust.cb_yconst, cust.yconst),
+                         (cust.cb_xconst, cust.xconst)):
             spin.valueChanged.connect(lambda *_, c=cb: c.isChecked() and self._recompute())
         self.spectrum_page.canvas.cursor_moved.connect(self._on_cursor)
         # Peak finding (inline Auto-Find Peaks panel)
@@ -1170,6 +1171,7 @@ class WaraApp(QMainWindow):
         if self._spect_orig is None:
             return
         o = self.spectrum_opts
+        c_ = o.customize_panel
 
         # Count rate needs a livetime; refuse and untick if absent.
         if o.cb_cr.isChecked() and not self._spect_orig.cps and self._spect_orig.livetime is None:
@@ -1181,10 +1183,10 @@ class WaraApp(QMainWindow):
             # Strip calibration first so the rest operate on the channel axis.
             if self._remove_cal and s.energies is not None:
                 s.remove_calibration()
-            if o.cb_rebin.isChecked():
-                by = max(2, o.rebin.value() - o.rebin.value() % 2)
-                if by != o.rebin.value():
-                    o.rebin.blockSignals(True); o.rebin.setValue(by); o.rebin.blockSignals(False)
+            if c_.cb_rebin.isChecked():
+                by = max(2, c_.rebin.value() - c_.rebin.value() % 2)
+                if by != c_.rebin.value():
+                    c_.rebin.blockSignals(True); c_.rebin.setValue(by); c_.rebin.blockSignals(False)
                 n = len(s.counts) - (len(s.counts) % by)
                 if n != len(s.counts):
                     s.counts = s.counts[:n]; s.counts_err = s.counts_err[:n]
@@ -1192,16 +1194,16 @@ class WaraApp(QMainWindow):
                     if s.energies is not None:
                         s.energies = s.energies[:n]
                 s.rebin(by=by)
-            if o.cb_smooth.isChecked():
-                s.smooth(num=o.smooth_spin.value())
-            if o.cb_shift.isChecked() and o.shift_box.value() != 0:
-                s.gain_shift(by=o.shift_box.value(), energy=s.energies is not None)
-            if o.cb_yconst.isChecked():
-                c = o.yconst.value()
+            if c_.cb_smooth.isChecked():
+                s.smooth(num=c_.smooth_spin.value())
+            if c_.cb_shift.isChecked() and c_.shift_box.value() != 0:
+                s.gain_shift(by=c_.shift_box.value(), energy=s.energies is not None)
+            if c_.cb_yconst.isChecked():
+                c = c_.yconst.value()
                 s.counts = s.counts * c
                 s.counts_err = s.counts_err * abs(c)
-            if o.cb_xconst.isChecked():
-                c = o.xconst.value()
+            if c_.cb_xconst.isChecked():
+                c = c_.xconst.value()
                 base = s.energies if s.energies is not None else s.channels
                 s.energies = base * c
                 s.x = s.energies

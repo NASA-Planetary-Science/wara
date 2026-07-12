@@ -534,7 +534,7 @@ class PeakFindPanel(QFrame):
         lay.addWidget(xr)
 
         lay.addWidget(hsep())
-        self.cb_kernel = QCheckBox("Kernel Method"); self.cb_kernel.setChecked(True)
+        self.cb_kernel = QCheckBox("Kernel Method")
         self.cb_snr = QCheckBox("Plot SNR")
         for cb in (self.cb_kernel, self.cb_snr):
             lay.addWidget(cb)
@@ -591,6 +591,61 @@ class AddSubtractPanel(QFrame):
         self.btn_sub.setObjectName("action_btn")
         self.btn_sub.setToolTip("Subtract the overlays from the active spectrum")
         self.btn_sub.setCursor(Qt.PointingHandCursor); lay.addWidget(self.btn_sub)
+
+
+class CustomizePanel(QFrame):
+    """Collapsible options revealed under Customize: each option applies live
+    while its checkbox is ticked."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setObjectName("subpanel")
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(10, 8, 10, 10); lay.setSpacing(6)
+
+        self.cb_smooth = QCheckBox("Smooth")
+        self.cb_smooth.setToolTip(
+            "Moving-average smooth, re-applied from the original spectrum")
+        self.smooth_spin = SpinBox(); self.smooth_spin.setRange(1, 99999)
+        self.smooth_spin.setSingleStep(1); self.smooth_spin.setValue(4)
+        self.smooth_spin.setFixedWidth(84)
+        self.smooth_spin.setToolTip("Smoothing window, in channels")
+        lay.addWidget(check_row(self.cb_smooth, self.smooth_spin))
+
+        self.cb_rebin = QCheckBox("Rebin ×2")
+        self.cb_rebin.setToolTip(
+            "Combine adjacent channels by a factor (multiples of two)")
+        self.rebin = SpinBox(); self.rebin.setRange(2, 1024); self.rebin.setSingleStep(2)
+        self.rebin.setValue(2); self.rebin.setFixedWidth(84)
+        self.rebin.setToolTip("Rebin factor — a multiple of two")
+        lay.addWidget(check_row(self.cb_rebin, self.rebin))
+
+        self.cb_shift = QCheckBox("Shift")
+        self.cb_shift.setToolTip(
+            "Shift the spectrum along its x-axis (energy if calibrated, else channels)")
+        self.shift_box = DoubleSpinBox(); self.shift_box.setRange(-1e6, 1e6)
+        self.shift_box.setDecimals(2); self.shift_box.setFixedWidth(84)
+        self.shift_box.setToolTip("Shift amount in channels or energy units")
+        lay.addWidget(check_row(self.cb_shift, self.shift_box))
+
+        self.cb_yconst = QCheckBox("y × const")
+        self.cb_yconst.setToolTip("Multiply the counts by a constant")
+        self.yconst = DoubleSpinBox(); self.yconst.setRange(-1e9, 1e9)
+        self.yconst.setDecimals(3); self.yconst.setValue(1.0); self.yconst.setFixedWidth(84)
+        self.yconst.setToolTip("Multiplicative factor for counts")
+        lay.addWidget(check_row(self.cb_yconst, self.yconst))
+
+        self.cb_xconst = QCheckBox("x × const")
+        self.cb_xconst.setToolTip("Multiply the x-axis values by a constant")
+        self.xconst = DoubleSpinBox(); self.xconst.setRange(-1e9, 1e9)
+        self.xconst.setDecimals(3); self.xconst.setValue(1.0); self.xconst.setFixedWidth(84)
+        self.xconst.setToolTip("Multiplicative factor for the x-axis")
+        lay.addWidget(check_row(self.cb_xconst, self.xconst))
+
+        self.btn_labels = QPushButton("Axis & Legend…"); self.btn_labels.setObjectName("action_btn")
+        self.btn_labels.setToolTip(
+            "Edit axis labels, legend and description; view the spectrum's metadata")
+        self.btn_labels.setCursor(Qt.PointingHandCursor); lay.addWidget(self.btn_labels)
 
 
 # ── Spectrum options column ──────────────────────────────────────────────────
@@ -688,46 +743,14 @@ class SpectrumOptions(QScrollArea):
         self.btn_addsub.clicked.connect(self._toggle_addsub)
 
         # Customize — each option applies live while its checkbox is ticked
-        lay.addWidget(hsep()); lay.addWidget(header("CUSTOMIZE"))
-        self.cb_smooth = QCheckBox("Smooth")
-        self.cb_smooth.setToolTip("Moving-average filter — adjust the window size to the right")
-        self.smooth_spin = SpinBox(); self.smooth_spin.setRange(1, 99999)
-        self.smooth_spin.setSingleStep(1); self.smooth_spin.setValue(4)
-        self.smooth_spin.setFixedWidth(84)
-        self.smooth_spin.setToolTip("Smoothing window size (number of channels)")
-        lay.addWidget(check_row(self.cb_smooth, self.smooth_spin))
-
-        self.cb_rebin = QCheckBox("Rebin ×2")
-        self.cb_rebin.setToolTip("Combine adjacent channels to reduce noise")
-        self.rebin = SpinBox(); self.rebin.setRange(2, 1024); self.rebin.setSingleStep(2)
-        self.rebin.setValue(2); self.rebin.setFixedWidth(84)
-        self.rebin.setToolTip("Number of channels to merge")
-        lay.addWidget(check_row(self.cb_rebin, self.rebin))
-
-        self.cb_shift = QCheckBox("Shift")
-        self.cb_shift.setToolTip("Translate the spectrum along the x-axis")
-        self.shift_box = DoubleSpinBox(); self.shift_box.setRange(-1e6, 1e6)
-        self.shift_box.setDecimals(2); self.shift_box.setFixedWidth(84)
-        self.shift_box.setToolTip("Shift amount in channels or energy units")
-        lay.addWidget(check_row(self.cb_shift, self.shift_box))
-
-        self.cb_yconst = QCheckBox("y × const")
-        self.cb_yconst.setToolTip("Scale all counts by a constant factor")
-        self.yconst = DoubleSpinBox(); self.yconst.setRange(-1e9, 1e9)
-        self.yconst.setDecimals(3); self.yconst.setValue(1.0); self.yconst.setFixedWidth(84)
-        self.yconst.setToolTip("Multiplicative factor for counts")
-        lay.addWidget(check_row(self.cb_yconst, self.yconst))
-
-        self.cb_xconst = QCheckBox("x × const")
-        self.cb_xconst.setToolTip("Scale the x-axis by a constant factor")
-        self.xconst = DoubleSpinBox(); self.xconst.setRange(-1e9, 1e9)
-        self.xconst.setDecimals(3); self.xconst.setValue(1.0); self.xconst.setFixedWidth(84)
-        self.xconst.setToolTip("Multiplicative factor for the x-axis")
-        lay.addWidget(check_row(self.cb_xconst, self.xconst))
-
-        self.btn_labels = QPushButton("Axis & Legend…"); self.btn_labels.setObjectName("action_btn")
-        self.btn_labels.setToolTip("Set custom axis labels and legend text")
-        self.btn_labels.setCursor(Qt.PointingHandCursor); lay.addWidget(self.btn_labels)
+        lay.addWidget(hsep())
+        self.btn_customize = QPushButton("Customize  ▾"); self.btn_customize.setObjectName("customize_btn")
+        self.btn_customize.setToolTip(
+            "Expand to smooth, rebin, shift, or rescale the spectrum")
+        self.btn_customize.setCursor(Qt.PointingHandCursor); lay.addWidget(self.btn_customize)
+        self.customize_panel = CustomizePanel(); self.customize_panel.setVisible(False)
+        lay.addWidget(self.customize_panel)
+        self.btn_customize.clicked.connect(self._toggle_customize)
 
         # ── Hover help ───────────────────────────────────────────────
         self.cb_log.setToolTip("Toggle a logarithmic Y-axis")
@@ -736,14 +759,6 @@ class SpectrumOptions(QScrollArea):
         self.btn_iso.setToolTip("Browse gamma-ray line databases and isotopic abundances; overlay lines on the spectrum")
         self.btn_remcal.setToolTip("Drop the energy calibration and show the channel axis (Reset Spectrum restores it)")
         self.btn_addsub.setToolTip("Add the loaded spectra together, or subtract overlays from the active one")
-        self.cb_smooth.setToolTip("Moving-average smooth, re-applied from the original spectrum")
-        self.smooth_spin.setToolTip("Smoothing window, in channels")
-        self.cb_rebin.setToolTip("Combine adjacent channels by a factor (multiples of two)")
-        self.rebin.setToolTip("Rebin factor — a multiple of two")
-        self.cb_shift.setToolTip("Shift the spectrum along its x-axis (energy if calibrated, else channels)")
-        self.cb_yconst.setToolTip("Multiply the counts by a constant")
-        self.cb_xconst.setToolTip("Multiply the x-axis values by a constant")
-        self.btn_labels.setToolTip("Edit axis labels, legend and description; view the spectrum's metadata")
 
         lay.addStretch(1)
         self.setWidget(inner)
@@ -757,6 +772,11 @@ class SpectrumOptions(QScrollArea):
         show = not self.addsub_panel.isVisible()
         self.addsub_panel.setVisible(show)
         self.btn_addsub.setText("Add / Subtract  ▴" if show else "Add / Subtract  ▾")
+
+    def _toggle_customize(self):
+        show = not self.customize_panel.isVisible()
+        self.customize_panel.setVisible(show)
+        self.btn_customize.setText("Customize  ▴" if show else "Customize  ▾")
 
     def set_stats(self, channels, max_counts, total):
         self.val_channels.setText(f"{channels:,}")

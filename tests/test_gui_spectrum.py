@@ -45,7 +45,7 @@ def test_customize_preserves_zoom(app):
     """Engaging a Customize option must not reset the pan/zoom (like Show peaks)."""
     ax = app.spectrum_page.canvas.ax
     ax.set_xlim(50, 120); ax.set_ylim(0, 40)
-    app.spectrum_opts.cb_smooth.setChecked(True)   # toggled → live _recompute
+    app.spectrum_opts.customize_panel.cb_smooth.setChecked(True)   # toggled → live _recompute
     assert tuple(round(v) for v in ax.get_xlim()) == (50, 120)
     assert tuple(round(v) for v in ax.get_ylim()) == (0, 40)
 

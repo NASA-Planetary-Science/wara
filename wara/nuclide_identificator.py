@@ -58,23 +58,26 @@ __all__ = [
     "rank_candidates", "identify_best", "escape_relations",
 ]
 
-# Display name → data file (mirrors the GUI's Nuclear Database list).
+# Display name → data file. Order is the order Isotope ID presents candidates
+# per energy (identify()/rank_candidates() iterate this dict): common check
+# sources first, then delayed activation, all neutron-capture libraries
+# together, the other reaction libraries, and finally the rest.
 DATABASES = {
     "Common lab sources":        "Common_lab_sources.csv",
-    "Natural radiation":         "Natural_radiation.csv",
     "Delayed activation (IAEA)": "Delayed_activation_IAEA.csv",
     "Neutron capture (CapGam)":  "Capture_CapGam.csv",
     "Neutron capture (IAEA)":    "Capture_IAEA.csv",
-    "Inelastic (Baghdad)":       "Inelastic_Baghdad.csv",
-    "TALYS 14 MeV":              "Talys-14MeV.csv",
     # ENDF/B-VII.1 evaluations, extracted with the GIDI+/FUDGE stack (see the
     # Gamma-database repo).
     "Neutron capture (ENDF/B-VII.1)":    "Capture_ENDF-B-VII.1.csv",
-    "Inelastic 14 MeV (ENDF/B-VII.1)":   "Inelastic_14MeV_ENDF-B-VII.1.csv",
     "Inelastic 2.45 MeV (ENDF/B-VII.1)": "Inelastic_2.45MeV_ENDF-B-VII.1.csv",
+    "Inelastic (Baghdad)":       "Inelastic_Baghdad.csv",
+    "TALYS 14 MeV":              "Talys-14MeV.csv",
+    "Inelastic 14 MeV (ENDF/B-VII.1)":   "Inelastic_14MeV_ENDF-B-VII.1.csv",
     "(n,2n) 14 MeV (ENDF/B-VII.1)":      "N2N_14MeV_ENDF-B-VII.1.csv",
     "(n,p) 14 MeV (ENDF/B-VII.1)":       "NP_14MeV_ENDF-B-VII.1.csv",
     "(n,a) 14 MeV (ENDF/B-VII.1)":       "NA_14MeV_ENDF-B-VII.1.csv",
+    "Natural radiation":         "Natural_radiation.csv",
 }
 
 # Libraries whose ``Isotope`` is a natural *target* nucleus, so the line yield

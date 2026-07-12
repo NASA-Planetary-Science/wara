@@ -15,6 +15,7 @@ exercised on actual detector data.
 
 from pathlib import Path
 
+import numpy as np
 import pytest
 
 from wara import file_reader
@@ -168,6 +169,62 @@ class TestCalculatePeakAreaAvg:
 
 
 # ---------------------------------------------------------------------------
+# fit_bkg / BkgFitResult — background-only polynomial fit over a peak-free ROI
+# (the "no peaks in range" path in the Drag-and-Fit window). area_raw is a
+# plain per-channel bin sum; area_fit is the trapezoidal area under the fitted
+# line in channel space (dx=1 bin, not the calibrated energy axis, which would
+# scale it by the keV/channel dispersion). The two describe the same region by
+# different conventions (sum of bins vs. area under a trapezoid), so they
+# should be close but are NOT expected to be identical: the trapezoidal rule
+# under-weights the two edge bins by half their value, so it should sit
+# slightly below the raw sum for a rising/flat continuum.
+#
+# Note area_fit deliberately is NOT np.sum(y_fit): for any least-squares
+# polynomial fit with a constant term, sum(y_fit) is exactly sum(y) by
+# construction (OLS residuals always sum to zero) — that would make area_fit
+# a trivial echo of area_raw regardless of fit quality, which is exactly what
+# the trapezoidal definition must avoid reproducing.
+# ---------------------------------------------------------------------------
+
+TXT_FE_API = str(DATA_DIR / "test_data_Fe_API_HPGe.txt")
+FE_API_BKG_XRANGE = [721, 798]      # peak-free region reported by the user
+
+
+class TestFitBkg:
+    def test_area_fit_close_but_not_identical_to_area_raw(self):
+        # A straight line sampled on a non-unit (0.7 keV/channel) axis, as in
+        # a real calibrated spectrum: the least-squares fit is exact, so
+        # area_fit must be close to area_raw, but the trapezoidal edge
+        # weighting means it is not an exact match.
+        x = np.arange(50) * 0.7 + 100.0
+        y = 20.0 + 0.5 * np.arange(50)
+        res = adv.BkgFitResult(x, y, degree=1)
+        assert res.area_fit == pytest.approx(res.area_raw, rel=0.02)
+        assert res.area_fit != pytest.approx(res.area_raw, rel=1e-9)
+
+    def test_area_fit_independent_of_calibration(self):
+        # Same per-channel counts, two different (fake) keV/channel scalings:
+        # area_fit is computed in channel space, so it must not change just
+        # because the x-axis was stretched or compressed.
+        y = 20.0 + 0.5 * np.arange(50)
+        narrow = adv.BkgFitResult(np.arange(50) * 0.3, y, degree=1)
+        wide = adv.BkgFitResult(np.arange(50) * 2.0, y, degree=1)
+        assert narrow.area_fit == pytest.approx(wide.area_fit, rel=1e-9)
+
+    def test_fit_bkg_close_to_raw_sum_on_real_spectrum(self):
+        # Regression for the reported bug: on a real (~0.54 keV/channel) HPGe
+        # spectrum, a peak-free 721-798 keV region used to fit ~53% of the raw
+        # sum (the trapz-over-energy bug). The two must now be close (a few
+        # percent, from the trapezoidal edge effect) but not bit-identical
+        # (which would mean area_fit had collapsed to np.sum(y_fit), see the
+        # class docstring above).
+        spect = file_reader.read_txt(TXT_FE_API)
+        result = adv.fit_bkg(spect, FE_API_BKG_XRANGE, degree=1)
+        assert result.area_fit == pytest.approx(result.area_raw, rel=0.03)
+        assert result.area_fit != pytest.approx(result.area_raw, rel=1e-6)
+
+
+# ---------------------------------------------------------------------------
 # ContinuumFit — polynomial baseline that masks out detected peaks.
 # Mirrors examples/peakfit/example_continuum_fit.py (real HPGe spectrum).
 # ---------------------------------------------------------------------------
@@ -236,7 +293,6 @@ class TestContinuumFit:
         assert len(x_sub) == len(y_sub) > 0
 
     def test_subtract_is_counts_minus_continuum(self, cont):
-        import numpy as np
         x_sub, y_sub = cont.subtract()
         resid = y_sub + cont.evaluate(x_sub)
         in_range = (cont.x >= CONT_XRANGE[0]) & (cont.x <= CONT_XRANGE[1])

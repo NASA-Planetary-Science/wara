@@ -210,6 +210,11 @@ QPushButton#yellow_btn {{
     border-radius: 5px; padding: 8px 13px; font-size: 14px; font-weight: 700;
 }}
 QPushButton#yellow_btn:hover {{ background-color: #5c4a0a; }}
+QPushButton#customize_btn {{
+    background-color: #2e2350; color: #dcc8ff; border: 2px solid {SNR_PURPLE};
+    border-radius: 5px; padding: 8px 13px; font-size: 14px; font-weight: 700;
+}}
+QPushButton#customize_btn:hover {{ background-color: #3f3070; }}
 QPushButton#fit_btn {{
     background-color: #1c4a1c; color: #c6ffb8; border: 2px solid {LOGO_GREEN};
     border-radius: 5px; padding: 9px 13px; font-size: 15px; font-weight: 800; letter-spacing: 1px;
