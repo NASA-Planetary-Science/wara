@@ -28,13 +28,13 @@ DATABASES = {
     "Neutron capture (IAEA)":    "Capture_IAEA.csv",
     "Inelastic (Baghdad)":       "Inelastic_Baghdad.csv",
     "TALYS 14 MeV":              "Talys-14MeV.csv",
-    # GIDI+ / FUDGE, evaluated from ENDF/B-VII.1.
-    "Neutron capture (GIDI+)":   "Capture_GIDIplus.csv",
-    "Inelastic 14 MeV (GIDI+)":  "Inelastic_14MeV_GIDIplus.csv",
-    "Inelastic 2.45 MeV (GIDI+)": "Inelastic_2.45MeV_GIDIplus.csv",
-    "(n,2n) 14 MeV (GIDI+)":     "N2N_14MeV_GIDIplus.csv",
-    "(n,p) 14 MeV (GIDI+)":      "NP_14MeV_GIDIplus.csv",
-    "(n,a) 14 MeV (GIDI+)": "NA_14MeV_GIDIplus.csv",
+    # ENDF/B-VII.1 evaluations, extracted with the GIDI+/FUDGE stack.
+    "Neutron capture (ENDF/B-VII.1)":    "Capture_ENDF-B-VII.1.csv",
+    "Inelastic 14 MeV (ENDF/B-VII.1)":   "Inelastic_14MeV_ENDF-B-VII.1.csv",
+    "Inelastic 2.45 MeV (ENDF/B-VII.1)": "Inelastic_2.45MeV_ENDF-B-VII.1.csv",
+    "(n,2n) 14 MeV (ENDF/B-VII.1)":      "N2N_14MeV_ENDF-B-VII.1.csv",
+    "(n,p) 14 MeV (ENDF/B-VII.1)":       "NP_14MeV_ENDF-B-VII.1.csv",
+    "(n,a) 14 MeV (ENDF/B-VII.1)":       "NA_14MeV_ENDF-B-VII.1.csv",
 }
 
 

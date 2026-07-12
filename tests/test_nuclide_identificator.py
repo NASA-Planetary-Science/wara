@@ -18,7 +18,10 @@ def test_standardize_picks_strength_column(db, strength_col):
     raw = nid.load_database(db)
     assert strength_col in raw.columns
     std = nid.standardize(raw)
-    assert list(std.columns) == ["Isotope", "Energy", "Strength"]
+    assert list(std.columns[:3]) == ["Isotope", "Energy", "Strength"]
+    # HalfLife is carried through only for libraries that have it.
+    extra = set(std.columns[3:])
+    assert extra <= {"HalfLife"}
     assert (std["Strength"] >= 0).all()
     assert std["Energy"].notna().all()
 
@@ -167,6 +170,67 @@ def test_strengthless_database_falls_back_to_corroboration():
     row = res.loc[res["Energy"] == 500.0].iloc[0]
     # Aa is corroborated by its 900 keV line; Bb is a lone coincidence.
     assert row["Isotope"] == "Aa"
+
+
+# ── proximity weighting ───────────────────────────────────────────────────────
+def test_proximity_prefers_nearest_line():
+    # Yy's line is stronger but 4.7 keV off; Xx sits 0.14 keV from the query.
+    # Inside a wide window, the near-exact match must win despite the strength.
+    std = pd.DataFrame({"Isotope": ["Xx", "Yy"], "Energy": [661.66, 666.5],
+                        "Strength": [85.0, 100.0]})
+    res = nid.score_database([661.8], std, tol=6.6)
+    assert res.iloc[0]["Isotope"] == "Xx"
+    assert res.iloc[0]["Probability"] > 0.99
+
+
+# ── half-life procurability prior (check-source library) ─────────────────────
+def test_half_life_factor_scale():
+    year = 3.156e7
+    assert nid.half_life_factor(30.1 * year) > nid.half_life_factor(272 * 86400)  # 137Cs > 57Co
+    assert nid.half_life_factor(272 * 86400) > nid.half_life_factor(8280)         # 57Co > 132I
+    assert nid.half_life_factor(8280) == nid.HALF_LIFE_FLOOR                      # short-lived → floor
+    assert nid.half_life_factor(432 * year) == nid.HALF_LIFE_CAP                  # 241Am → cap
+    # Unknown / invalid half-lives stay neutral.
+    assert nid.half_life_factor(None) == 1.0
+    assert nid.half_life_factor(float("nan")) == 1.0
+    assert nid.half_life_factor(-5.0) == 1.0
+
+
+def test_half_life_prior_applies_only_to_lab_sources():
+    assert nid.HALF_LIFE_WEIGHTED == {"Common lab sources"}
+
+
+# ── decay-chain duplicate merging ─────────────────────────────────────────────
+def test_decay_duplicates_merged_in_lab_sources():
+    # 661.657 keV is listed under both 137Cs (the source one owns) and its
+    # daughter 137Ba (the actual emitter, 137mBa). standardize must keep only
+    # the parent so the two entries don't split one probability.
+    std = nid.standardize(nid.load_database("Common lab sources"))
+    near = std[std["Energy"].sub(661.657).abs() < 0.1]
+    assert "137Cs" in set(near["Isotope"])
+    assert "137Ba" not in set(near["Isotope"])
+
+
+# ── regression: 661.8 keV in a busy spectrum is 137Cs, not 126Sb ──────────────
+def test_cs137_wins_661_8_kev_in_lab_sources():
+    # With a flat window, 126Sb (99.6 % line at 666.5 keV, 12-day fission
+    # product) used to out-rank 137Cs (85.1 % at 661.657 keV, the most common
+    # check source): proximity + half-life priors must flip that decisively.
+    std = nid.standardize(nid.load_database("Common lab sources"))
+    res = nid.score_database([661.8], std, tol=lambda e: max(5.0, 0.01 * e),
+                             escape_peaks=False, weight_abundance=False,
+                             weight_element=False, weight_half_life=True)
+    top = res.iloc[0]
+    assert top["Isotope"] == "137Cs"
+    assert top["Probability"] > 0.9
+
+
+def test_identify_gates_half_life_prior_by_library():
+    # identify() must apply the procurability prior to Common lab sources but
+    # not to Delayed activation (whose products are legitimately short-lived).
+    out = nid.identify([661.8], databases=["Common lab sources"],
+                       tol=lambda e: max(5.0, 0.01 * e))
+    assert out["Common lab sources"].iloc[0]["Isotope"] == "137Cs"
 
 
 # ── natural isotopic abundance ────────────────────────────────────────────────
