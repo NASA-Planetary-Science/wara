@@ -451,14 +451,18 @@ class FitWindow(QDialog):
             self._refit()
 
     def _context_data(self):
-        """Return (x, y) arrays for the full initial ROI (for dimmed context)."""
+        """Return (x, y, err) arrays for the full initial ROI (for dimmed
+        context). ``err`` mirrors the per-bin uncertainty the fit uses so the
+        residual panel can grey-out the excluded points on the same
+        standardized ``(y - model)/σ`` scale as the fitted residual."""
         if self._search is None:
             return None
         spec = self._search.spectrum
         xs = spec.energies if spec.energies is not None else spec.channels
         ys = spec.counts
         mask = (xs >= self._roi_lo) & (xs <= self._roi_hi)
-        return xs[mask], ys[mask]
+        errs = spec.counts_err[mask] if spec.counts_err is not None else None
+        return xs[mask], ys[mask], errs
 
     # ── Method dispatch ──────────────────────────────────────────────────────
     def _is_area_method(self):

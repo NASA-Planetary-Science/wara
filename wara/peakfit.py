@@ -570,9 +570,12 @@ class PeakFit:
             axis for residual plot. The default is None.
         ax_fit : axis object, optional
             axis for the best-fit plot. The default is None.
-        context_data : tuple of (x_array, y_array), optional
+        context_data : tuple of (x_array, y_array[, err_array]), optional
             Extra data points to show dimmed behind the fit (e.g. the
-            full ROI when the fit range has been trimmed).
+            full ROI when the fit range has been trimmed). When the optional
+            per-bin ``err_array`` is supplied, the excluded points are also
+            shown dimmed in the residual panel, on the same standardized
+            ``(y - model)/σ`` scale as the fitted residual.
 
         Returns
         -------
@@ -622,15 +625,29 @@ class PeakFit:
                 ax_fit = fig.add_subplot(gs[1, 0])
             fig.patch.set_alpha(0.3)
 
+            # Excluded (trimmed-out) points appear dimmed in the residual panel
+            # too, matching how the fit panel greys them: same standardized
+            # (y - model)/σ scale, drawn under the bright fitted residual.
+            cx = cy = cerr = None
+            res_xmin, res_xmax = x.min(), x.max()
+            if context_data is not None:
+                cx, cy = context_data[0], context_data[1]
+                cerr = context_data[2] if len(context_data) > 2 else None
+                res_xmin = min(res_xmin, np.min(cx))
+                res_xmax = max(res_xmax, np.max(cx))
+                if cerr is not None:
+                    safe_err = np.where(cerr > 0, cerr, 1.0)
+                    c_resid = (cy - res.eval(x=cx)) / safe_err
+                    ax_res.plot(cx, c_resid, ".", ms=10, alpha=0.15, color=c_res)
+
             ax_res.plot(x, res.residual, ".", ms=10, alpha=0.5, color=c_res)
-            ax_res.hlines(y=0, xmin=x.min(), xmax=x.max(), lw=3)
+            ax_res.hlines(y=0, xmin=res_xmin, xmax=res_xmax, lw=3)
             ax_res.set_ylabel("Residual")
-            ax_res.set_xlim([x.min(), x.max()])
+            ax_res.set_xlim([res_xmin, res_xmax])
             ax_res.set_xticks([])
 
             ax_fit.set_title(rf"Reduced $\chi^2$ = {redchi_display:.4f}")
             if context_data is not None:
-                cx, cy = context_data
                 ax_fit.plot(cx, cy, "o", color=c_data, alpha=0.15, ms=5)
             ax_fit.plot(x, y, "o", color=c_data, alpha=0.5)
             ax_fit.plot(x_pred, y_pred, color=c_fit, lw=3, alpha=0.5, label="Fit")

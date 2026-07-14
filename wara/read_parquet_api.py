@@ -88,6 +88,26 @@ def run_parquet_path(date, runnr, data_path=None, make=False):
     return run_dir, parquet_dir, fname
 
 
+def _parquet_num_rows(path):
+    """Row count of the parquet at *path*, read from footer metadata when
+    possible so a large file isn't loaded into memory just to be counted.
+
+    Tries pyarrow's metadata, then fastparquet's, and only falls back to a full
+    read if neither exposes the count. Raises if the file cannot be read at all
+    (used by :func:`save_combined_run` to detect a truncated write)."""
+    try:
+        import pyarrow.parquet as pq
+        return pq.ParquetFile(path).metadata.num_rows
+    except Exception:
+        pass
+    try:
+        from fastparquet import ParquetFile
+        return ParquetFile(str(path)).count()
+    except Exception:
+        pass
+    return len(pd.read_parquet(path))
+
+
 def save_combined_run(df, date, runnr, data_path=None, overwrite=False):
     """Write *df* as a single combined parquet for run (date, runnr) so it loads
     straight back through :func:`read_parquet_file`.
@@ -96,7 +116,14 @@ def save_combined_run(df, date, runnr, data_path=None, overwrite=False):
     ``{fname}-*-pandas.parquet`` glob picks it up. When *overwrite* is set, any
     pre-existing ``{fname}-*-pandas.parquet`` chunks in the target folder are
     removed first so a reload doesn't concatenate stale data on top of the new
-    combined file. Returns the written file path."""
+    combined file.
+
+    After writing, the file is re-read and its row count is checked against the
+    in-memory frame: a partial/truncated write (e.g. the app was closed or ran
+    out of space mid-write of a large single parquet) otherwise passes silently
+    and the combined run loads with missing events. On mismatch the bad file is
+    removed and ``IOError`` is raised so the caller can report the failure
+    instead of leaving a corrupt run on disk. Returns the written file path."""
     run_dir, parquet_dir, fname = run_parquet_path(date, runnr, data_path, make=True)
     if overwrite:
         for old in parquet_dir.glob(f"{fname}-*-pandas.parquet"):
@@ -106,6 +133,24 @@ def save_combined_run(df, date, runnr, data_path=None, overwrite=False):
         df.to_parquet(out, engine="pyarrow")
     except Exception:
         df.to_parquet(out, engine="fastparquet")
+
+    # Verify the write landed intact: re-read and compare row counts. Catches a
+    # truncated write that would otherwise load as a silently-incomplete run.
+    expected = len(df)
+    try:
+        written = _parquet_num_rows(out)
+    except Exception as exc:  # unreadable file => the write is unusable
+        out.unlink(missing_ok=True)
+        raise IOError(
+            f"Combined run {date}-{runnr} could not be verified after writing "
+            f"(file unreadable: {exc}). The partial file was removed; retry the "
+            f"combine.") from exc
+    if written != expected:
+        out.unlink(missing_ok=True)
+        raise IOError(
+            f"Combined run {date}-{runnr} was written incompletely: wrote "
+            f"{written:,} of {expected:,} rows (likely a truncated/interrupted "
+            f"write). The partial file was removed; retry the combine.")
     return out
 
 
@@ -116,7 +161,14 @@ def read_parquet_file(date, runnr, ch=None, flood_field=False, data_path_txt=Non
         return None
     try:
         df = pd.concat([pd.read_parquet(f, engine="pyarrow") for f in files])
-    except Exception:
+    except Exception as exc:
+        # pyarrow rejecting a file usually means it is corrupt or truncated.
+        # fastparquet can often salvage a *partial* read from such a file, which
+        # then loads as a silently-incomplete run (missing events). Warn loudly
+        # so this is never mistaken for good data.
+        print(f"WARNING: pyarrow could not read run {date}-{runnr} "
+              f"({exc}); falling back to fastparquet. The file(s) may be "
+              f"corrupt or truncated and the loaded data may be INCOMPLETE.")
         df = pd.concat([pd.read_parquet(f, engine="fastparquet") for f in files])
 
     if flood_field or ch is None:
