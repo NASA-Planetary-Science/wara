@@ -1350,6 +1350,16 @@ def main():
     opts = _parse_argv()
 
     _install_excepthook()
+    # QtWebEngine embeds Chromium, whose macOS sandbox helper establishes a
+    # Mach-port rendezvous with the parent. Outside a signed/bundled .app (and
+    # notably with conda-packaged Qt) that rendezvous is denied — the render
+    # process aborts and takes the app down with a segfault the moment the
+    # Planetary tab creates its QWebEngineView ("Mach rendezvous failed").
+    # We only ever load our own locally-generated trusted HTML, so disabling
+    # the sandbox is safe. macOS-only: on other platforms the sandbox works
+    # fine and disabling it just adds noise. Must be set before QApplication.
+    if sys.platform == "darwin":
+        os.environ.setdefault("QTWEBENGINE_DISABLE_SANDBOX", "1")
     T.apply_mpl_theme()
     QApplication.setAttribute(Qt.AA_EnableHighDpiScaling)
     QApplication.setAttribute(Qt.AA_UseHighDpiPixmaps)
