@@ -210,6 +210,11 @@ QPushButton#yellow_btn {{
     border-radius: 5px; padding: 8px 13px; font-size: 14px; font-weight: 700;
 }}
 QPushButton#yellow_btn:hover {{ background-color: #5c4a0a; }}
+QPushButton#isotope_btn {{
+    background-color: #33383f; color: #e6e9ef; border: 2px solid #a9b2c3;
+    border-radius: 5px; padding: 8px 13px; font-size: 14px; font-weight: 700;
+}}
+QPushButton#isotope_btn:hover {{ background-color: #444a54; border: 2px solid #cdd4e0; color: #ffffff; }}
 QPushButton#customize_btn {{
     background-color: #2e2350; color: #dcc8ff; border: 2px solid {SNR_PURPLE};
     border-radius: 5px; padding: 8px 13px; font-size: 14px; font-weight: 700;

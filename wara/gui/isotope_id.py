@@ -57,11 +57,69 @@ def fwhm_tol(search, floor=FALLBACK_FLOOR):
     return tol
 
 
-def identify(energies, tol=None, top_n=2):
-    """Identify *energies* across all databases (per-database top-N), using
-    full-energy lines only — escape peaks are excluded from the ranking."""
-    return nid.identify(energies, tol=tol or default_tol, top_n=top_n,
-                        escape_peaks=False)
+def identify(energies, tol=None, top_n=2, databases=None, z_range=None):
+    """Identify *energies* (per-database top-N), using full-energy lines only —
+    escape peaks are excluded from the ranking. ``databases`` restricts which
+    libraries are consulted (``None`` = all); ``z_range`` = ``(z_min, z_max)``
+    restricts candidates to that atomic-number span (``None`` = all elements)."""
+    return nid.identify(energies, databases=databases, tol=tol or default_tol,
+                        top_n=top_n, escape_peaks=False, z_range=z_range)
+
+
+def _daughter_isotope(parent, daughter_symbol):
+    """Full daughter isotope from a parent name and the library's daughter
+    element (e.g. ``'137Cs'`` + ``'Ba'`` → ``'137Ba'``). The lab-source decays
+    (β⁻/EC/β⁺/IT) conserve mass number, so the daughter takes the parent's mass.
+    Falls back to the bare element symbol when the parent's mass can't be read."""
+    sym = daughter_symbol.strip().capitalize()
+    m = nid._ISO_RE.match(str(parent))
+    return f"{m.group(1)}{sym}" if m else sym
+
+
+def best_per_database_table(energies, tol=None, databases=None, z_range=None):
+    """Table of the top isotope candidate **per database** for each energy.
+
+    Returns a :class:`pandas.DataFrame` (one row per energy per database that has
+    a match), ready to save, with the same per-database probabilities the hover
+    overlay shows plus, from the original library, the line strength (cross
+    section or intensity) and — for decay libraries — the decay mode and daughter
+    isotope (the parent listed under ``Isotope`` decays to the daughter that
+    emits the gamma). Respects the ``databases`` and ``z_range`` selection."""
+    import pandas as pd
+
+    results = identify(energies, tol=tol, top_n=1, databases=databases,
+                       z_range=z_range)
+    rows = []
+    for e in energies:
+        for db, frame in results.items():
+            hits = frame[(abs(frame["Energy"] - e) < 1e-6)
+                         & frame["Isotope"].notna()]
+            if hits.empty:
+                continue
+            r = hits.iloc[0]
+            iso = r["Isotope"]
+            m = nid._ELEMENT_RE.match(str(iso))
+            element = m.group(1).capitalize() if m else ""
+            line = r.get("Matched line")
+            details = nid.line_details(db, iso, line if line is not None else e)
+            daughter = details.get("daughter")
+            rows.append({
+                "Energy (keV)": round(float(e), 2),
+                "Database": db,
+                "Isotope (parent)": iso,
+                "Element": element,
+                "Daughter": _daughter_isotope(iso, daughter) if daughter else "",
+                "Decay": details.get("decay", ""),
+                "Line strength": details.get("strength"),
+                "Strength type": details.get("strength_label", ""),
+                "Probability (%)": round(float(r["Probability"]) * 100, 1),
+                "Matched line (keV)": line,
+                "Lines seen": int(r.get("Lines seen", 0)),
+            })
+    columns = ["Energy (keV)", "Database", "Isotope (parent)", "Element",
+               "Daughter", "Decay", "Line strength", "Strength type",
+               "Probability (%)", "Matched line (keV)", "Lines seen"]
+    return pd.DataFrame(rows, columns=columns)
 
 
 def escape_relations(energies, tol=None):

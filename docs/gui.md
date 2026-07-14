@@ -49,24 +49,44 @@ The bundled databases (the same list the GUI shows) are:
 | Database | Contents |
 |----------|----------|
 | **Common lab sources** | Calibration/check sources (e.g. ¹³⁷Cs, ⁶⁰Co, ²²Na) |
-| **Natural radiation** | Naturally occurring lines (⁴⁰K, U/Th series) |
 | **Delayed activation (IAEA)** | Activation-product decay lines |
 | **Neutron capture (CapGam)** | (n,γ) capture gamma lines |
 | **Neutron capture (IAEA)** | (n,γ) capture gamma lines (IAEA compilation) |
+| **Neutron capture (ENDF/B-VII.1)** | (n,γ) capture lines from ENDF/B-VII.1 |
+| **Inelastic 2.45 MeV (ENDF/B-VII.1)** | (n,n′γ) lines at 2.45 MeV (D-D neutrons) |
 | **Inelastic (Baghdad)** | (n,n′γ) inelastic-scattering lines |
 | **TALYS 14 MeV** | Computed 14.1 MeV reaction lines |
+| **Inelastic 14 MeV (ENDF/B-VII.1)** | (n,n′γ) lines at 14 MeV (D-T neutrons) |
+| **(n,2n) 14 MeV (ENDF/B-VII.1)** | (n,2n) reaction lines at 14 MeV |
+| **(n,p) 14 MeV (ENDF/B-VII.1)** | (n,p) reaction lines at 14 MeV |
+| **(n,a) 14 MeV (ENDF/B-VII.1)** | (n,α) reaction lines at 14 MeV |
+| **Natural radiation** | Naturally occurring lines (⁴⁰K, U/Th series) |
 
 ### How identification works
 
 For each peak energy, candidate isotopes are ranked using each library's own line
 strengths (cross section or intensity), then refined with:
 
+- **A resolution-matched energy window with proximity weighting** — a database
+  line matches an observed peak only within an energy window sized to the
+  detector resolution (about twice the FWHM). That width is derived from the
+  peak-finder's resolution model and the spectrum's **energy calibration** (the
+  keV-per-channel dispersion), so a coarse LaBr resolution opens the window wider
+  than a sharp HPGe one. Within the window, matches are weighted by proximity — a
+  Gaussian in the energy difference — so a line 0.1 keV away vastly outranks one
+  several keV away even though both are "inside". A good energy calibration
+  therefore tightens the window and sharpens the ranking. (Without a calibrated
+  resolution model, a generous fallback window is used.)
 - **Natural isotopic abundance** — for reaction-on-natural-target libraries
   (capture, inelastic, TALYS), the line yield scales with the target isotope's
   abundance. This is why a 846.8 keV line in natural iron is identified as ⁵⁶Fe
   (≈92 % abundant), not ⁵⁷Fe, even though ⁵⁷Fe's bare cross section is larger.
 - **A terrestrial element-naturalness prior** — common rock/air/biological
   elements (O, Si, Fe, H, C, N…) are favored over rare ones.
+- **A half-life procurability prior (check sources)** — for the lab-source
+  library, candidates are weighted toward nuclides long-lived enough to exist as
+  a real check source (¹³⁷Cs, ⁶⁰Co, ²⁴¹Am…) over short-lived activation/fission
+  products that couldn't be bought and kept.
 - **Corroborating lines and escape peaks** — other lines of the same isotope, and
   the single/double-escape peaks (E − 511, E − 1022 keV) of high-energy gammas,
   boost a candidate. For example ¹⁶O's 6129 keV line together with its escapes
@@ -74,7 +94,30 @@ strengths (cross section or intensity), then refined with:
 
 Source/decay libraries (lab sources, natural radiation, delayed activation) carry
 specific radionuclides rather than sample elements, so the abundance and element
-priors are not applied to them.
+priors are not applied to them; the half-life prior applies only to the
+lab-source library.
+
+### The Isotope ID panel
+
+Expand **Isotope ID** (a drop-down, like **Auto-Find Peaks**) to turn on
+hover identification and tailor it to your experiment:
+
+- **Enable Isotope ID** — with a calibrated spectrum and found peaks, hover any
+  peak to see the most likely isotope from each selected database, with a
+  probability.
+- **Databases** — tick only the libraries relevant to your measurement (use
+  **All** / **None** to select quickly). Deselected libraries are excluded from
+  both the hover ranking and the export.
+- **Atomic number (Z)** — restrict candidates to a `Z from … to …` range. The
+  full range (1–118) considers every element; narrow it when you *know* certain
+  elements can't be present (e.g. exclude Gd, Z = 64) to remove false matches.
+- **Export table…** — save a CSV of the identified isotopes: the top candidate
+  from each selected database for every found peak. Each row carries the energy,
+  database, isotope (parent) and element, the line strength (cross section or
+  intensity, with its unit), and — for decay libraries — the decay mode and the
+  daughter isotope that actually emits the gamma (e.g. ¹³⁷Cs → ¹³⁷Ba), plus the
+  probability, matched line, and number of corroborating lines seen. Honours the
+  current database and Z-range selection.
 
 ### From Python
 
@@ -92,8 +135,10 @@ rank_candidates(energies)      # ranked candidates across all databases
 
 `rank_candidates` returns comparable probabilities *across* libraries;
 `identify` (not shown) returns the top candidates *within* each library
-separately. Restrict the search with `databases=[...]` and set the matching
-window with `tol` (a constant in keV or a callable `tol(energy)`).
+separately. Restrict the search with `databases=[...]`, limit candidates to an
+atomic-number span with `z_range=(z_min, z_max)` (the same control as the panel's
+Z-range), and set the matching window with `tol` (a constant in keV or a callable
+`tol(energy)`).
 
 ## Calibration, Efficiency, and Resolution tabs
 
@@ -198,8 +243,8 @@ The same backend is scriptable from Python via `wara.planetary`
 
 ## Tips
 
-- **Info buttons** are placed throughout the GUI and give contextual guidance for
-  each control.
+- **Tooltips** are placed throughout the GUI — hover over any control for
+  contextual guidance.
 - Most tabs **hand data to one another** — fitted peaks flow from Spectrum to
   Calibration, Efficiency, and Resolution; spectra flow from the API tab back to
   Spectrum.

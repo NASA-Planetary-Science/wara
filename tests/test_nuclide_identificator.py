@@ -336,3 +336,59 @@ def test_callable_tolerance_widens_window():
     wide = nid.score_database([6133.0], std, tol=lambda e: 0.001 * e).iloc[0]
     assert tight["Isotope"] != "16O"          # nothing within 2 keV
     assert wide["Isotope"] == "16O"           # ~6.1 keV window catches it
+
+
+# ── atomic number (Z) lookup and range filtering ──────────────────────────────
+def test_atomic_number_resolves_isotopes_and_bare_symbols():
+    assert nid.atomic_number("16O") == 8
+    assert nid.atomic_number("137Cs") == 55
+    assert nid.atomic_number("Fe") == 26          # bare symbol
+    assert nid.atomic_number("Gd") == 64
+    assert nid.atomic_number("???") is None       # unparseable → None
+
+
+def test_filter_by_z_drops_out_of_range_keeps_unknown():
+    std = pd.DataFrame({"Isotope": ["16O", "137Cs", "Gd", "??"],
+                        "Energy": [1.0, 2.0, 3.0, 4.0], "Strength": [1.0] * 4})
+    kept = nid.filter_by_z(std, (1, 20))          # only O (Z=8) is in range
+    assert set(kept["Isotope"]) == {"16O", "??"}  # unknown-Z row is never erased
+    # Full-range span is a no-op (returns every row).
+    assert len(nid.filter_by_z(std, (1, 118))) == len(std)
+    assert len(nid.filter_by_z(std, None)) == len(std)
+
+
+def test_identify_z_range_excludes_elements():
+    # 6129.9 keV is 16O (Z=8) in TALYS; a high-Z window removes it entirely.
+    def top(res):
+        f = res["TALYS 14 MeV"]
+        f = f[f["Isotope"].notna()]
+        return None if f.empty else f.iloc[0]["Isotope"]
+
+    dbs = ["TALYS 14 MeV"]
+    assert top(nid.identify([6129.9], databases=dbs, top_n=1)) == "16O"
+    assert top(nid.identify([6129.9], databases=dbs, top_n=1, z_range=(1, 20))) == "16O"
+    assert top(nid.identify([6129.9], databases=dbs, top_n=1, z_range=(50, 80))) is None
+
+
+def test_identify_database_selection_subsets():
+    res = nid.identify([661.7], databases=["Common lab sources"])
+    assert list(res) == ["Common lab sources"]
+
+
+# ── line_details: raw strength + decay/daughter for exports ────────────────────
+def test_line_details_decay_library():
+    d = nid.line_details("Common lab sources", "137Cs", 661.657)
+    assert d["strength_label"] == "Intensity (%)"
+    assert d["strength"] > 0
+    assert d["decay"] == "B-"
+    assert d["daughter"] == "Ba"           # element only; export builds "137Ba"
+
+
+def test_line_details_reaction_library_has_no_daughter():
+    d = nid.line_details("TALYS 14 MeV", "16O", 6129.89)
+    assert d["strength_label"] == "XS (mb)" and d["strength"] > 0
+    assert "daughter" not in d and "decay" not in d
+
+
+def test_line_details_no_match_returns_empty():
+    assert nid.line_details("TALYS 14 MeV", "16O", 12.3) == {}

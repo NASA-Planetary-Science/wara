@@ -51,8 +51,9 @@ from wara import parse_NIST
 
 __all__ = [
     "DATABASES", "ABUNDANCE_WEIGHTED", "HALF_LIFE_WEIGHTED",
-    "load_database", "standardize",
+    "load_database", "standardize", "clear_cache", "line_details",
     "abundance_factor", "element_factor", "half_life_factor",
+    "atomic_number", "filter_by_z",
     "NATURAL_ABUNDANCE_PPM",
     "score_database", "identify",
     "rank_candidates", "identify_best", "escape_relations",
@@ -123,6 +124,75 @@ def load_database(name):
         raise KeyError(f"Unknown database '{name}'. Choose from {list(DATABASES)}")
     path = str(files("wara").joinpath("nuclear-data", DATABASES[name]))
     return pd.read_csv(path)
+
+
+# Standardizing a database (CSV read + regex parsing + decay-duplicate merge) is
+# the same every time for a given file, so cache the result. Repeated
+# identification (e.g. toggling databases/Z-range in the GUI) then reuses it
+# instead of re-reading and re-parsing the CSV on every call. The cached frame
+# is treated as read-only by all internal callers (filter_by_z / score_database
+# never mutate it); use :func:`clear_cache` if the shipped data ever changes.
+_STANDARDIZED_CACHE = {}
+_RAW_CACHE = {}
+
+
+def _raw(name):
+    """Cached raw DataFrame for database *name* (read-only) — keeps every
+    original column (strength, decay mode, daughter) that ``standardize`` drops,
+    for detail lookups such as :func:`line_details`."""
+    raw = _RAW_CACHE.get(name)
+    if raw is None:
+        raw = load_database(name)
+        _RAW_CACHE[name] = raw
+    return raw
+
+
+def _standardized(name):
+    """Cached standardized DataFrame for database *name* (read-only)."""
+    std = _STANDARDIZED_CACHE.get(name)
+    if std is None:
+        std = standardize(load_database(name))
+        _STANDARDIZED_CACHE[name] = std
+    return std
+
+
+def clear_cache():
+    """Drop the cached standardized/raw databases (and abundance lookups)."""
+    _STANDARDIZED_CACHE.clear()
+    _RAW_CACHE.clear()
+    _ABUNDANCE_CACHE.clear()
+
+
+def line_details(name, isotope, energy, tol=0.5):
+    """Original-database detail for a specific (*isotope*, line ≈ *energy*) row of
+    database *name*: the line strength with its column label, and — for decay
+    libraries — the decay mode and daughter.
+
+    Returns a dict with any of ``strength`` (float), ``strength_label`` (e.g.
+    ``"Intensity (%)"``/``"XS (mb)"``/``"Sigma (mb)"``), ``decay`` and
+    ``daughter`` that the library provides; ``{}`` if no row matches. Used to
+    enrich exported identification tables — reads the raw CSV columns that
+    :func:`standardize` discards."""
+    raw = _raw(name)
+    iso = raw["Isotope"].astype(str).str.strip()
+    e = pd.to_numeric(raw["Energy (keV)"], errors="coerce")
+    m = (iso == str(isotope).strip()) & (np.abs(e - float(energy)) <= tol)
+    if not m.any():
+        return {}
+    r = raw.loc[(np.abs(e - float(energy)) + (~m) * 1e9).idxmin()]  # nearest matching line
+    out = {}
+    col = next((c for c in STRENGTH_COLUMNS if c in raw.columns), None)
+    if col is not None:
+        val = pd.to_numeric(r[col], errors="coerce")
+        if pd.notna(val):
+            out["strength"] = float(val)
+            out["strength_label"] = col
+    for key, column in (("decay", "Decay"), ("daughter", "Daughter")):
+        if column in raw.columns:
+            v = str(r[column]).strip()
+            if v and v.lower() != "nan":
+                out[key] = v
+    return out
 
 
 def standardize(df):
@@ -271,6 +341,49 @@ def element_factor(isotope):
     if ppm is None:
         return 1.0
     return max(NATURAL_WEIGHT_FLOOR, float(np.log10(ppm)) + 1.0)
+
+
+# ── Atomic number (Z) lookup and range filtering ──────────────────────────────
+# Element → atomic number, from the shipped periodic-table list. The file is one
+# symbol per row in Z order (H, He, Li, …), so Z is simply the 1-based row index.
+_SYMBOL_TO_Z_CACHE = None
+
+
+def _symbol_to_z():
+    """{'Fe': 26, 'Cs': 55, …} built once from ``elements_symbols.csv``."""
+    global _SYMBOL_TO_Z_CACHE
+    if _SYMBOL_TO_Z_CACHE is None:
+        path = str(files("wara").joinpath("nuclear-data", "elements_symbols.csv"))
+        symbols = pd.read_csv(path)["Sym"].astype(str).str.strip()
+        _SYMBOL_TO_Z_CACHE = {sym.capitalize(): z
+                              for z, sym in enumerate(symbols, start=1)}
+    return _SYMBOL_TO_Z_CACHE
+
+
+def atomic_number(isotope):
+    """Atomic number Z of *isotope*'s element (``'16O'`` → 8, ``'137Cs'`` → 55,
+    bare ``'Fe'`` → 26), or ``None`` when the element can't be resolved."""
+    m = _ELEMENT_RE.match(str(isotope))
+    if not m:
+        return None
+    return _symbol_to_z().get(m.group(1).capitalize())
+
+
+def filter_by_z(std, z_range):
+    """Restrict a standardized frame to isotopes whose element Z is within
+    ``z_range`` = ``(z_min, z_max)`` inclusive.
+
+    ``z_range`` of ``None`` (or a full 1–118 span) is a no-op. Rows whose Z can't
+    be resolved are kept — the filter only drops elements it can positively place
+    outside the range, so an unparseable name is never silently erased."""
+    if z_range is None:
+        return std
+    z_min, z_max = z_range
+    if z_min <= 1 and z_max >= 118:
+        return std
+    z = std["Isotope"].map(atomic_number)
+    keep = z.isna() | ((z >= z_min) & (z <= z_max))
+    return std[keep].reset_index(drop=True)
 
 
 # ── Half-life procurability prior (check-source libraries) ───────────────────
@@ -516,19 +629,22 @@ def score_database(energies, std, tol=DEFAULT_TOL, escape_peaks=True, top_n=3,
 
 def identify(energies, databases=None, tol=DEFAULT_TOL, escape_peaks=True,
              top_n=3, weight_abundance=True, weight_element=True,
-             weight_half_life=True):
+             weight_half_life=True, z_range=None):
     """Stage 1 for every database: ``{database_name: score_database(...)}`` —
     the top ``top_n`` candidates for each database, per energy. Abundance and
     element-naturalness weighting are applied only to the reaction-on-natural-
     target libraries (:data:`ABUNDANCE_WEIGHTED`); source/decay libraries (lab
     sources, natural radiation, delayed activation) carry specific radionuclides,
     not sample elements, so neither prior applies. The half-life procurability
-    prior applies only to the check-source libraries (:data:`HALF_LIFE_WEIGHTED`)."""
+    prior applies only to the check-source libraries (:data:`HALF_LIFE_WEIGHTED`).
+
+    ``z_range`` = ``(z_min, z_max)`` restricts candidates to elements within that
+    atomic-number span (see :func:`filter_by_z`); ``None`` considers all."""
     names = list(DATABASES) if databases is None else list(databases)
     return {
         name: score_database(
-            energies, standardize(load_database(name)), tol=tol,
-            escape_peaks=escape_peaks, top_n=top_n,
+            energies, filter_by_z(_standardized(name), z_range),
+            tol=tol, escape_peaks=escape_peaks, top_n=top_n,
             weight_abundance=weight_abundance and name in ABUNDANCE_WEIGHTED,
             weight_element=weight_element and name in ABUNDANCE_WEIGHTED,
             weight_half_life=weight_half_life and name in HALF_LIFE_WEIGHTED)
@@ -543,17 +659,20 @@ _RANK_COLS = ["Energy", "Rank", "Database", "Isotope", "Probability",
 
 def rank_candidates(energies, databases=None, tol=DEFAULT_TOL, escape_peaks=True,
                     per_database=1, top_n=None, weight_abundance=True,
-                    weight_element=True, weight_half_life=True):
+                    weight_element=True, weight_half_life=True, z_range=None):
     """Pool the most likely isotope(s) from **each** database and give each a
     comparable probability (relative strength × abundance × element-naturalness ×
     corroboration). Long DataFrame, one row per candidate per energy, sorted by
-    descending probability within each energy."""
+    descending probability within each energy.
+
+    ``z_range`` = ``(z_min, z_max)`` restricts candidates to elements within that
+    atomic-number span (see :func:`filter_by_z`); ``None`` considers all."""
     names = list(DATABASES) if databases is None else list(databases)
     ref = np.unique(np.asarray(list(energies), dtype=float))
 
     prepared = {}
     for name in names:
-        std = standardize(load_database(name))
+        std = filter_by_z(_standardized(name), z_range)
         if std.empty:
             continue
         weighted = weight_abundance and name in ABUNDANCE_WEIGHTED

@@ -648,6 +648,132 @@ class CustomizePanel(QFrame):
         self.btn_labels.setCursor(Qt.PointingHandCursor); lay.addWidget(self.btn_labels)
 
 
+class IsotopeIDPanel(QFrame):
+    """Collapsible options revealed under 'Isotope ID': the on/off toggle, the
+    set of nuclear databases to consult, an atomic-number (Z) range to restrict
+    candidates to, and a button to export the identified-isotope table.
+
+    Emits :attr:`changed` once whenever the database selection or Z-range
+    changes. Bulk operations (All / None) toggle every checkbox behind a guard
+    and emit :attr:`changed` a single time, so listeners re-identify once rather
+    than once per checkbox."""
+
+    changed = pyqtSignal()
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setObjectName("subpanel")
+        self._bulk = False           # suppress per-checkbox signals during All/None
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(10, 8, 10, 10); lay.setSpacing(6)
+
+        # The actual on/off for the hover feature (was a standalone checkbox).
+        self.cb_enable = QCheckBox("Enable Isotope ID")
+        self.cb_enable.setToolTip(
+            "Hover a found peak to see the most likely isotope from each selected "
+            "database, with a probability.\nNeeds a calibrated spectrum with found peaks.")
+        lay.addWidget(self.cb_enable)
+
+        # ── Databases ────────────────────────────────────────────────
+        # Header labels use a non-wrapping font; let them shrink (Ignored width)
+        # so they never force the panel wider than the fixed options column.
+        db_hdr = header("DATABASES")
+        db_hdr.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
+        hdr = QHBoxLayout(); hdr.setContentsMargins(0, 0, 0, 0); hdr.setSpacing(4)
+        hdr.addWidget(db_hdr, 1)
+        self.btn_all = QPushButton("All"); self.btn_none = QPushButton("None")
+        for b in (self.btn_all, self.btn_none):
+            b.setObjectName("mini_btn"); b.setCursor(Qt.PointingHandCursor)
+            hdr.addWidget(b, 0)
+        hdr_box = QWidget(); hdr_box.setLayout(hdr); lay.addWidget(hdr_box)
+
+        # Lazy import so opening the GUI doesn't pull in the heavy identifier
+        # (and its pandas/NIST parsing) until the Spectrum tab is built.
+        from wara.nuclide_identificator import DATABASES
+        self.db_checks = {}
+        for name in DATABASES:
+            row, cb = self._db_row(name)
+            self.db_checks[name] = cb
+            lay.addWidget(row)
+        self.btn_all.clicked.connect(lambda: self._set_all(True))
+        self.btn_none.clicked.connect(lambda: self._set_all(False))
+
+        lay.addWidget(hsep())
+
+        # ── Atomic-number (Z) range ──────────────────────────────────
+        z_hdr = header("ATOMIC NUMBER (Z)")
+        z_hdr.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
+        lay.addWidget(z_hdr)
+        self.z_min = SpinBox(); self.z_min.setRange(1, 118); self.z_min.setValue(1)
+        self.z_max = SpinBox(); self.z_max.setRange(1, 118); self.z_max.setValue(118)
+        self.z_min.valueChanged.connect(self._on_change)
+        self.z_max.valueChanged.connect(self._on_change)
+        for z in (self.z_min, self.z_max):
+            z.setMaximumWidth(56)
+            z.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Fixed)
+            z.setToolTip(
+                "Restrict candidates to this atomic-number range.\nThe full range "
+                "(1–118) considers every element; narrow it when you know certain "
+                "elements can't be present (e.g. exclude Gd, Z = 64).")
+        zrow = QWidget(); zl = QHBoxLayout(zrow)
+        zl.setContentsMargins(0, 0, 0, 0); zl.setSpacing(4)
+        zl.addWidget(QLabel("Z")); zl.addWidget(self.z_min)
+        zl.addWidget(QLabel("to")); zl.addWidget(self.z_max); zl.addStretch(1)
+        lay.addWidget(zrow)
+
+        lay.addWidget(hsep())
+        self.btn_export = QPushButton("Export table…"); self.btn_export.setObjectName("action_btn")
+        self.btn_export.setToolTip(
+            "Save a CSV of the identified isotopes — the top candidate from each "
+            "selected database for every found peak")
+        self.btn_export.setCursor(Qt.PointingHandCursor)
+        lay.addWidget(self.btn_export)
+
+    def _db_row(self, name):
+        """A database row: an indicator-only checkbox beside a word-wrapping
+        label (so long library names wrap instead of overflowing the fixed-width
+        options column). Clicking the label toggles the checkbox."""
+        row = QWidget()
+        h = QHBoxLayout(row); h.setContentsMargins(0, 0, 0, 0); h.setSpacing(6)
+        cb = QCheckBox(); cb.setChecked(True)
+        cb.setToolTip(f"Include the '{name}' library in identification")
+        cb.toggled.connect(self._on_change)
+        lbl = QLabel(name); lbl.setWordWrap(True)
+        lbl.setToolTip(cb.toolTip())
+        # Don't let the longest name dictate the panel's minimum width.
+        lbl.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
+        lbl.setCursor(Qt.PointingHandCursor)
+        lbl.mousePressEvent = lambda _e, c=cb: c.toggle()
+        h.addWidget(cb, 0, Qt.AlignTop); h.addWidget(lbl, 1)
+        return row, cb
+
+    def _on_change(self, *_):
+        """Coalesced 'settings changed' notification (suppressed mid-bulk)."""
+        if not self._bulk:
+            self.changed.emit()
+
+    def _set_all(self, state):
+        """Check/uncheck every database with a single ``changed`` at the end, so
+        listeners re-identify once instead of once per checkbox."""
+        self._bulk = True
+        try:
+            for cb in self.db_checks.values():
+                cb.setChecked(state)
+        finally:
+            self._bulk = False
+        self._on_change()
+
+    def selected_databases(self):
+        """Display names of the currently-ticked databases (in menu order)."""
+        return [name for name, cb in self.db_checks.items() if cb.isChecked()]
+
+    def z_range(self):
+        """The chosen ``(z_min, z_max)`` atomic-number span (normalised so
+        min ≤ max even if the user inverts the spin boxes)."""
+        lo, hi = int(self.z_min.value()), int(self.z_max.value())
+        return (min(lo, hi), max(lo, hi))
+
+
 # ── Spectrum options column ──────────────────────────────────────────────────
 class SpectrumOptions(QScrollArea):
     """Scrollable options for the Spectrum tab. Exposes its controls and stat
@@ -699,11 +825,6 @@ class SpectrumOptions(QScrollArea):
         self.cb_peaks = QCheckBox("Show Peaks"); self.cb_peaks.setChecked(True)
         self.cb_peaks.setToolTip("Show or hide the peak markers on the plot")
         lay.addWidget(self.cb_peaks)
-        self.cb_isotope_id = QCheckBox("Isotope ID")
-        self.cb_isotope_id.setToolTip(
-            "Hover a found peak to see the most likely isotope from each nuclear "
-            "database, with a probability.\nNeeds a calibrated spectrum with found peaks.")
-        lay.addWidget(self.cb_isotope_id)
         self.btn_fit = QPushButton("Drag and Fit"); self.btn_fit.setObjectName("fit_btn")
         self.btn_fit.setCheckable(True)
         self.btn_fit.setToolTip(
@@ -721,6 +842,22 @@ class SpectrumOptions(QScrollArea):
         self.btn_iso = QPushButton("Nuclear Database"); self.btn_iso.setObjectName("yellow_btn")
         self.btn_iso.setToolTip("Look up gamma-ray energies by isotope to identify peaks")
         self.btn_iso.setCursor(Qt.PointingHandCursor); lay.addWidget(self.btn_iso)
+
+        # Isotope ID is a collapsible drop-down (like Auto-Find Peaks): the on/off
+        # toggle plus database selection, an atomic-number range, and CSV export
+        # all live inside iso_panel. Sits under Nuclear Database (its companion
+        # lookup) with a distinct colour of its own.
+        self.btn_isotope = QPushButton("Isotope ID  ▾"); self.btn_isotope.setObjectName("isotope_btn")
+        self.btn_isotope.setToolTip(
+            "Expand to enable hover identification and configure databases, "
+            "atomic-number range, and export")
+        self.btn_isotope.setCursor(Qt.PointingHandCursor); lay.addWidget(self.btn_isotope)
+        self.iso_panel = IsotopeIDPanel(); self.iso_panel.setVisible(False)
+        lay.addWidget(self.iso_panel)
+        self.btn_isotope.clicked.connect(self._toggle_isotope)
+        # Backward-compat alias: the on/off checkbox now lives inside the panel,
+        # but existing wiring still refers to opts.cb_isotope_id.
+        self.cb_isotope_id = self.iso_panel.cb_enable
 
         # Spectrum actions
         lay.addWidget(hsep()); lay.addWidget(header("SPECTRUM"))
@@ -767,6 +904,11 @@ class SpectrumOptions(QScrollArea):
         show = not self.pf_panel.isVisible()
         self.pf_panel.setVisible(show)
         self.btn_find.setText("Auto-Find Peaks  ▴" if show else "Auto-Find Peaks  ▾")
+
+    def _toggle_isotope(self):
+        show = not self.iso_panel.isVisible()
+        self.iso_panel.setVisible(show)
+        self.btn_isotope.setText("Isotope ID  ▴" if show else "Isotope ID  ▾")
 
     def _toggle_addsub(self):
         show = not self.addsub_panel.isVisible()

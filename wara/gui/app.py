@@ -402,6 +402,12 @@ class WaraApp(QMainWindow):
         pf.detector.currentTextChanged.connect(self._apply_detector_preset)
         opts.cb_peaks.toggled.connect(self.spectrum_page.canvas.set_show_peaks)
         opts.cb_isotope_id.toggled.connect(self._toggle_isotope_id)
+        # Database selection and Z-range change what Isotope ID reports — rebuild
+        # the hover overlay when they change (only re-runs while ID is enabled).
+        # The panel coalesces bulk All/None into a single `changed`, so this
+        # re-identifies once rather than once per checkbox.
+        opts.iso_panel.changed.connect(self._on_iso_settings_changed)
+        opts.iso_panel.btn_export.clicked.connect(self._export_isotope_table)
         pf.cb_snr.toggled.connect(self._toggle_snr)
         opts.cb_manual.toggled.connect(self._toggle_manual)
         # Entering zoom/pan takes over canvas clicks — drop manual peak mode.
@@ -1042,17 +1048,27 @@ class WaraApp(QMainWindow):
         if announce:
             self.statusBar().showMessage("  Isotope ID on  ·  hover a peak to see candidates")
 
+    def _on_iso_settings_changed(self, *_):
+        """Database selection or Z-range changed: drop the cache and rebuild the
+        hover overlay (a no-op while Isotope ID is disabled)."""
+        self._iso_key = None
+        self._refresh_isotope_id()
+
     def _compute_isotope_info(self):
-        """Identify every found-peak energy across all databases; cache the
-        per-peak hover text keyed by the peak position."""
+        """Identify every found-peak energy across the selected databases and
+        Z-range; cache the per-peak hover text keyed by the peak position."""
         from . import isotope_id   # lazy: pulls in the heavy identifier
         energies = [float(x) for x in self.spectrum_page.canvas.peak_xs()]
-        key = tuple(round(e, 3) for e in energies)
+        iso = self.spectrum_opts.iso_panel
+        databases = iso.selected_databases()
+        z_range = iso.z_range()
+        key = (tuple(round(e, 3) for e in energies), tuple(databases), z_range)
         if key == self._iso_key and self._iso_info_cache is not None:
             return self._iso_info_cache
         tol = isotope_id.fwhm_tol(self.search)
         try:
-            results = isotope_id.identify(energies, tol=tol)
+            results = isotope_id.identify(energies, tol=tol, databases=databases,
+                                          z_range=z_range)
             escapes = isotope_id.escape_relations(energies, tol=tol)
         except Exception as exc:  # noqa: BLE001 — surface, don't crash the GUI
             self.statusBar().showMessage(f"  Isotope ID failed: {exc}")
@@ -1068,6 +1084,49 @@ class WaraApp(QMainWindow):
         """Colored HTML hover text (shared with the Drag-and-Fit ID popup)."""
         from . import isotope_id
         return isotope_id.format_html(energy, results)
+
+    def _export_isotope_table(self):
+        """Save a CSV of the identified isotopes — the top candidate from each
+        selected database for every found peak — honouring the current database
+        and Z-range selection."""
+        from . import isotope_id
+        calibrated = self.spect is not None and getattr(self.spect, "energies", None) is not None
+        has_peaks = (self.search is not None
+                     and getattr(self.search, "peaks_idx", None) is not None
+                     and len(self.search.peaks_idx) > 0
+                     and bool(self.spectrum_page.canvas.peak_xs()))
+        if not (calibrated and has_peaks):
+            self.statusBar().showMessage(
+                "  Export needs a calibrated spectrum with found peaks")
+            return
+        iso = self.spectrum_opts.iso_panel
+        energies = [float(x) for x in self.spectrum_page.canvas.peak_xs()]
+        QApplication.setOverrideCursor(Qt.WaitCursor)
+        try:
+            df = isotope_id.best_per_database_table(
+                energies, tol=isotope_id.fwhm_tol(self.search),
+                databases=iso.selected_databases(), z_range=iso.z_range())
+        except Exception as exc:  # noqa: BLE001 — surface, don't crash the GUI
+            self.statusBar().showMessage(f"  Isotope export failed: {exc}")
+            return
+        finally:
+            QApplication.restoreOverrideCursor()
+        if df.empty:
+            self.statusBar().showMessage(
+                "  No isotope matches to export (check databases / Z-range)")
+            return
+        path, _ = QFileDialog.getSaveFileName(
+            self, "Export Isotope Table", "isotope_id.csv", "CSV (*.csv)")
+        if not path:
+            return
+        if not path.lower().endswith(".csv"):
+            path += ".csv"
+        try:
+            df.to_csv(path, index=False)
+        except OSError as exc:
+            self.statusBar().showMessage(f"  Could not save: {exc}")
+            return
+        self.statusBar().showMessage(f"  Exported {len(df)} row(s) to {path}")
 
     # ── Drag and Fit ─────────────────────────────────────────────────────────
     def _toggle_drag_fit(self):

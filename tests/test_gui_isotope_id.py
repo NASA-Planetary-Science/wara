@@ -187,3 +187,83 @@ def test_set_isotope_id_off_hides_annotation(app):
     canvas.set_isotope_id(False)
     assert canvas._iso_hover is None
     assert not canvas._iso_on
+
+
+# ── drop-down panel: backward compat + database / Z-range controls ─────────────
+def test_checkbox_alias_still_toggles_activation(app):
+    # The on/off checkbox now lives inside iso_panel but keeps the old alias.
+    assert app.spectrum_opts.cb_isotope_id is app.spectrum_opts.iso_panel.cb_enable
+    _find_peaks(app)
+    app.spectrum_opts.cb_isotope_id.setChecked(True)
+    assert app.spectrum_page.canvas._iso_on
+
+
+def test_panel_defaults(app):
+    iso = app.spectrum_opts.iso_panel
+    assert len(iso.selected_databases()) == len(iso.db_checks)   # all on
+    assert iso.z_range() == (1, 118)                             # full range
+
+
+def test_deselecting_database_changes_hover_result(app):
+    _find_peaks(app)
+    iso = app.spectrum_opts.iso_panel
+    app.spectrum_opts.cb_isotope_id.setChecked(True)
+    canvas = app.spectrum_page.canvas
+    key = next(k for k in canvas._iso_info if abs(k - 6129.9) < app._iso_tol(6129.9))
+    assert "TALYS 14 MeV" in canvas._iso_info[key]
+    # Drop the TALYS library → its 16O line disappears from the hover text.
+    iso.db_checks["TALYS 14 MeV"].setChecked(False)
+    assert "TALYS 14 MeV" not in canvas._iso_info[key]
+
+
+def test_z_range_excludes_element_in_hover(app):
+    _find_peaks(app)
+    iso = app.spectrum_opts.iso_panel
+    app.spectrum_opts.cb_isotope_id.setChecked(True)
+    canvas = app.spectrum_page.canvas
+    key = next(k for k in canvas._iso_info if abs(k - 6129.9) < app._iso_tol(6129.9))
+    assert "16O" in canvas._iso_info[key]
+    # Restrict to Z ≥ 50: oxygen (Z=8) can no longer be a candidate.
+    iso.z_min.setValue(50)
+    assert "16O" not in canvas._iso_info[key]
+
+
+def test_export_table_builder_columns_and_rows(app):
+    from wara.gui import isotope_id
+    _find_peaks(app)
+    energies = [float(x) for x in app.spectrum_page.canvas.peak_xs()]
+    df = isotope_id.best_per_database_table(energies)
+    assert list(df.columns) == [
+        "Energy (keV)", "Database", "Isotope (parent)", "Element", "Daughter",
+        "Decay", "Line strength", "Strength type", "Probability (%)",
+        "Matched line (keV)", "Lines seen"]
+    assert df["Isotope (parent)"].astype(str).str.contains("16O").any()
+    assert (df["Element"] == "O").any()
+    # Every match carries a line strength with its column label (mb / %).
+    talys = df[df["Database"] == "TALYS 14 MeV"].iloc[0]
+    assert talys["Strength type"] == "XS (mb)" and talys["Line strength"] > 0
+
+
+def test_export_table_includes_decay_daughter():
+    # A ¹³⁷Cs source line: the parent decays to ¹³⁷Ba, which emits the 661.7 keV
+    # gamma — both the daughter and the decay mode come through.
+    from wara.gui import isotope_id
+    df = isotope_id.best_per_database_table([661.7], tol=3.0)
+    cs = df[(df["Database"] == "Common lab sources")
+            & (df["Isotope (parent)"] == "137Cs")].iloc[0]
+    assert cs["Daughter"] == "137Ba"
+    assert cs["Decay"] == "B-"
+    assert cs["Strength type"] == "Intensity (%)"
+
+
+def test_export_writes_csv(app, tmp_path, monkeypatch):
+    from PyQt5.QtWidgets import QFileDialog
+    _find_peaks(app)
+    out = tmp_path / "iso.csv"
+    monkeypatch.setattr(QFileDialog, "getSaveFileName",
+                        staticmethod(lambda *a, **k: (str(out), "CSV (*.csv)")))
+    app._export_isotope_table()
+    assert out.exists()
+    import pandas as pd
+    saved = pd.read_csv(out)
+    assert "Isotope (parent)" in saved.columns and len(saved) > 0
