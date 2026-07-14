@@ -161,6 +161,21 @@ spect.gaussian_energy_broadening(fwhm_hpge)
 
 ![The same HPGe spectrum broadened with a custom, slightly-worse-resolution curve (examples/spectrum/example_gaussian_broadening.py)](../figs/spectrum_broadening_hpge.png)
 
+Scintillator resolution is conventionally quoted as the percent FWHM at the
+662 keV ¹³⁷Cs line (≈3% for LaBr₃, ≈7% for NaI). `fwhm_pct_at_662` turns that
+single number into a resolution curve — assuming the usual `FWHM(E) ∝ √E`
+scaling — so you don't have to hand-fit one:
+
+```python
+# Degrade to a LaBr-like 3% at 662 keV (keV-calibrated spectrum):
+spect.gaussian_energy_broadening(Spectrum.fwhm_pct_at_662(3.0))
+
+# For a MeV axis, express the 662 keV reference in MeV:
+spect.gaussian_energy_broadening(Spectrum.fwhm_pct_at_662(3.0, e_ref=0.662))
+```
+
+This is what the Spectrum GUI's **Customize → Broaden res.** option uses.
+
 ```{important}
 The FWHM function is evaluated at the spectrum's x-values, so its units should
 match `spect.x` — apply broadening **after** the spectrum is energy-calibrated,

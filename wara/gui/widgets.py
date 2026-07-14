@@ -642,6 +642,19 @@ class CustomizePanel(QFrame):
         self.xconst.setToolTip("Multiplicative factor for the x-axis")
         lay.addWidget(check_row(self.cb_xconst, self.xconst))
 
+        self.cb_broaden = QCheckBox("Broaden res.")
+        self.cb_broaden.setToolTip(
+            "Degrade the energy resolution with Gaussian broadening.\n"
+            "Set the %FWHM at 662 keV (the ¹³⁷Cs line) — the standard way to "
+            "quote scintillator resolution (≈3% LaBr₃, ≈7% NaI).\n"
+            "Needs a calibrated spectrum.")
+        self.broaden = DoubleSpinBox(); self.broaden.setRange(0.1, 100.0)
+        self.broaden.setDecimals(1); self.broaden.setSingleStep(0.5)
+        self.broaden.setValue(3.0); self.broaden.setSuffix(" %")
+        self.broaden.setFixedWidth(84)
+        self.broaden.setToolTip("%FWHM at 662 keV (e.g. 3% ≈ LaBr₃)")
+        lay.addWidget(check_row(self.cb_broaden, self.broaden))
+
         self.btn_labels = QPushButton("Axis & Legend…"); self.btn_labels.setObjectName("action_btn")
         self.btn_labels.setToolTip(
             "Edit axis labels, legend and description; view the spectrum's metadata")

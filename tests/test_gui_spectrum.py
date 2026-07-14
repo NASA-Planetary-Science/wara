@@ -91,6 +91,49 @@ def test_on_cursor_updates_readout(app):
     assert "Counts" in txt
 
 
+def test_fwhm_pct_at_662_helper():
+    """The convenience factory reproduces the quoted resolution at 662 keV and
+    scales as √E away from it."""
+    fwhm = sp.Spectrum.fwhm_pct_at_662(3.0)          # 3% at 662 keV, in keV
+    assert fwhm(662.0) == pytest.approx(0.03 * 662.0)
+    # Scintillator scaling: FWHM(E) ∝ √E.
+    assert fwhm(4 * 662.0) == pytest.approx(2 * fwhm(662.0))
+    # MeV axis: pass e_ref in MeV.
+    fwhm_mev = sp.Spectrum.fwhm_pct_at_662(3.0, e_ref=0.662)
+    assert fwhm_mev(0.662) == pytest.approx(0.03 * 0.662)
+
+
+def test_broaden_needs_calibration(app):
+    """Ticking Broaden on an uncalibrated spectrum unticks itself and leaves the
+    counts untouched (no energy axis to broaden along)."""
+    cust = app.spectrum_opts.customize_panel
+    before = app.spect.counts.copy()
+    cust.cb_broaden.setChecked(True)                  # toggled → live _recompute
+    assert not cust.cb_broaden.isChecked()            # guard unticked it
+    np.testing.assert_array_equal(app.spect.counts, before)
+
+
+def test_broaden_applies_on_calibrated_spectrum(qapp):
+    """On a calibrated spectrum, Broaden redistributes counts (total conserved
+    up to Poisson resampling) without dropping the energy axis."""
+    w = WaraApp()
+    n = 256
+    counts = np.zeros(n); counts[128] = 10000.0       # a single sharp line
+    spect = sp.Spectrum(counts=counts, energies=np.linspace(1, 1500, n),
+                        e_units="keV")
+    w.spect = spect; w._spect_orig = spect.copy()
+    w._active_name = "line"; w._refresh()
+    cust = w.spectrum_opts.customize_panel
+    cust.cb_broaden.setChecked(True)
+    assert cust.cb_broaden.isChecked()
+    # The delta spread into neighbouring channels: the peak channel dropped and
+    # its neighbours gained.
+    assert w.spect.counts[128] < 10000.0
+    assert w.spect.counts[127] > 0 or w.spect.counts[129] > 0
+    assert w.spect.energies is not None               # calibration preserved
+    w.close()
+
+
 def test_readout_uses_x_units(app):
     app._update_cursor_units()
     app._on_cursor(50.0, 10.0)

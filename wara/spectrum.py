@@ -404,6 +404,33 @@ class Spectrum:
         c = 0.117
         return a + b * np.sqrt(E + c * E ** 2)
 
+    @staticmethod
+    def fwhm_pct_at_662(pct, e_ref=662.0):
+        """Return an ``FWHM(E)`` callable from a detector's percent energy
+        resolution at 662 keV.
+
+        The 662 keV ¹³⁷Cs photopeak is the standard reference for quoting
+        scintillator resolution (≈3% for LaBr₃, ≈7% for NaI). Assuming the
+        usual scintillator scaling ``FWHM(E) ∝ √E``, the FWHM at any energy is
+        ``FWHM(E) = (pct/100) · √(e_ref · E)``.
+
+        Parameters
+        ----------
+        pct : float
+            Percent FWHM at 662 keV (e.g. ``3`` for a LaBr₃-like detector).
+        e_ref : float, optional
+            The reference energy (662 keV) expressed in the same units as the
+            spectrum's x-axis — ``662`` for keV (default), ``0.662`` for MeV.
+
+        Returns
+        -------
+        callable
+            A function mapping energy to FWHM in the spectrum's energy units,
+            suitable for :meth:`gaussian_energy_broadening`.
+        """
+        frac = pct / 100.0
+        return lambda E: frac * np.sqrt(e_ref * E)
+
     def apply_calibration(self, cal):
         """
         Apply an energy calibration to the spectrum in place.

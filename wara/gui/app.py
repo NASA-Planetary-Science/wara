@@ -387,12 +387,12 @@ class WaraApp(QMainWindow):
         # Customize: each checkbox applies its option live; changing a value
         # re-applies (recomputed from the original) only when its box is ticked.
         self._cust_checks = [cust.cb_smooth, cust.cb_rebin, cust.cb_shift,
-                             cust.cb_yconst, cust.cb_xconst, opts.cb_cr]
+                             cust.cb_yconst, cust.cb_xconst, cust.cb_broaden, opts.cb_cr]
         for cb in self._cust_checks:
             cb.toggled.connect(self._recompute)
         for cb, spin in ((cust.cb_smooth, cust.smooth_spin), (cust.cb_rebin, cust.rebin),
                          (cust.cb_shift, cust.shift_box), (cust.cb_yconst, cust.yconst),
-                         (cust.cb_xconst, cust.xconst)):
+                         (cust.cb_xconst, cust.xconst), (cust.cb_broaden, cust.broaden)):
             spin.valueChanged.connect(lambda *_, c=cb: c.isChecked() and self._recompute())
         self.spectrum_page.canvas.cursor_moved.connect(self._on_cursor)
         # Peak finding (inline Auto-Find Peaks panel)
@@ -1255,6 +1255,18 @@ class WaraApp(QMainWindow):
                 s.rebin(by=by)
             if c_.cb_smooth.isChecked():
                 s.smooth(num=c_.smooth_spin.value())
+            if c_.cb_broaden.isChecked():
+                if s.energies is None:
+                    self.statusBar().showMessage(
+                        "  Calibrate the spectrum first — broadening needs an energy axis")
+                    c_.cb_broaden.blockSignals(True); c_.cb_broaden.setChecked(False)
+                    c_.cb_broaden.blockSignals(False)
+                else:
+                    # 662 keV in the spectrum's own energy units.
+                    e_ref = 0.662 if (s.e_units and "MeV" in s.e_units) else 662.0
+                    fwhm = s.fwhm_pct_at_662(c_.broaden.value(), e_ref=e_ref)
+                    # Fixed seed so live re-plots don't flicker as the user tweaks.
+                    s.gaussian_energy_broadening(fwhm, random_seed=0)
             if c_.cb_shift.isChecked() and c_.shift_box.value() != 0:
                 s.gain_shift(by=c_.shift_box.value(), energy=s.energies is not None)
             if c_.cb_yconst.isChecked():

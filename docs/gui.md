@@ -97,6 +97,18 @@ specific radionuclides rather than sample elements, so the abundance and element
 priors are not applied to them; the half-life prior applies only to the
 lab-source library.
 
+**How the percentage is assigned.** For each peak, the factors above are combined
+into a single score per candidate, and the scores of all candidates competing at
+that energy are normalised to sum to 100 % **within each database**. The
+percentage shown next to a candidate is therefore its share of the evidence among
+the alternatives *in that library* — a relative likelihood, not an absolute
+confidence that the assignment is correct. Each database reports its own
+independently-normalised percentages (so the same peak can read "98 %" in one
+library and "60 %" in another), and candidates that round to 0 % are dropped. The
+scriptable `rank_candidates` (see below) instead pools the libraries and
+normalises across them, giving one set of probabilities comparable between
+databases.
+
 ### The Isotope ID panel
 
 Expand **Isotope ID** (a drop-down, like **Auto-Find Peaks**) to turn on
