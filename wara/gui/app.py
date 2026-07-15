@@ -429,10 +429,14 @@ class WaraApp(QMainWindow):
         cur_x = self._xlabel or self.spect.x_units
         cur_y = self._ylabel or {"Cts": "Counts", "CPS": "Counts/second"}.get(
             self.spect.y_label, self.spect.y_label)
+        cur_legend = self.spect.label or ""
+        cur_desc = self.spect.description or ""
         dlg = AxisLegendDialog(self, self.spect, cur_x, cur_y)
         if dlg.exec_() != QDialog.Accepted:
             return
         legend, xlabel, ylabel, desc = dlg.values()
+        if (legend, xlabel, ylabel, desc) == (cur_legend, cur_x, cur_y, cur_desc):
+            return   # nothing changed — don't touch the plot
         # Legend label + description belong to the spectrum (persist via baseline).
         self.spect.label = legend or None
         self.spect.description = desc or None
