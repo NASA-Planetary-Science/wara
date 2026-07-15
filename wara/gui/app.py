@@ -1232,10 +1232,25 @@ class WaraApp(QMainWindow):
         o = self.spectrum_opts
         c_ = o.customize_panel
 
-        # Count rate needs a livetime; refuse and untick if absent.
+        # These guards refuse an option and untick it, then return without
+        # rebuilding so we don't clear found peaks over a no-op — the data is
+        # unchanged, so the current plot (and its peaks) stays valid.
+
+        # Count rate needs a livetime.
         if o.cb_cr.isChecked() and not self._spect_orig.cps and self._spect_orig.livetime is None:
             self.statusBar().showMessage("  No livetime in file — cannot set count rate")
             o.cb_cr.blockSignals(True); o.cb_cr.setChecked(False); o.cb_cr.blockSignals(False)
+            return
+
+        # Broadening needs an energy axis — refuse if the original is
+        # uncalibrated, or if 'Remove calibration' would strip it during rebuild.
+        if c_.cb_broaden.isChecked() and (
+                self._spect_orig.energies is None or self._remove_cal):
+            self.statusBar().showMessage(
+                "  Calibrate the spectrum first — broadening needs an energy axis")
+            c_.cb_broaden.blockSignals(True); c_.cb_broaden.setChecked(False)
+            c_.cb_broaden.blockSignals(False)
+            return
 
         s = self._spect_orig.copy()
         try:
@@ -1256,17 +1271,12 @@ class WaraApp(QMainWindow):
             if c_.cb_smooth.isChecked():
                 s.smooth(num=c_.smooth_spin.value())
             if c_.cb_broaden.isChecked():
-                if s.energies is None:
-                    self.statusBar().showMessage(
-                        "  Calibrate the spectrum first — broadening needs an energy axis")
-                    c_.cb_broaden.blockSignals(True); c_.cb_broaden.setChecked(False)
-                    c_.cb_broaden.blockSignals(False)
-                else:
-                    # 662 keV in the spectrum's own energy units.
-                    e_ref = 0.662 if (s.e_units and "MeV" in s.e_units) else 662.0
-                    fwhm = s.fwhm_pct_at_662(c_.broaden.value(), e_ref=e_ref)
-                    # Fixed seed so live re-plots don't flicker as the user tweaks.
-                    s.gaussian_energy_broadening(fwhm, random_seed=0)
+                # The up-front guard guarantees an energy axis here.
+                # 662 keV in the spectrum's own energy units.
+                e_ref = 0.662 if (s.e_units and "MeV" in s.e_units) else 662.0
+                fwhm = s.fwhm_pct_at_662(c_.broaden.value(), e_ref=e_ref)
+                # Fixed seed so live re-plots don't flicker as the user tweaks.
+                s.gaussian_energy_broadening(fwhm, random_seed=0)
             if c_.cb_shift.isChecked() and c_.shift_box.value() != 0:
                 s.gain_shift(by=c_.shift_box.value(), energy=s.energies is not None)
             if c_.cb_yconst.isChecked():

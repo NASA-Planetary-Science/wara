@@ -91,6 +91,18 @@ def test_on_cursor_updates_readout(app):
     assert "Counts" in txt
 
 
+def test_count_rate_without_livetime_keeps_peaks(app):
+    """Ticking 'set as count rate' on a spectrum with no livetime must refuse
+    the conversion *and* leave found peaks intact — the data didn't change, so
+    _recompute should bail before rebuilding and clearing them."""
+    assert app.spect.livetime is None            # fixture spectrum has no livetime
+    sentinel = object()
+    app.search = sentinel                          # stand in for a completed peak search
+    app.spectrum_opts.cb_cr.setChecked(True)       # toggled → live _recompute, guard fires
+    assert not app.spectrum_opts.cb_cr.isChecked()  # conversion refused (unticked)
+    assert app.search is sentinel                  # peaks survived the no-op
+
+
 def test_fwhm_pct_at_662_helper():
     """The convenience factory reproduces the quoted resolution at 662 keV and
     scales as √E away from it."""
@@ -104,13 +116,17 @@ def test_fwhm_pct_at_662_helper():
 
 
 def test_broaden_needs_calibration(app):
-    """Ticking Broaden on an uncalibrated spectrum unticks itself and leaves the
-    counts untouched (no energy axis to broaden along)."""
+    """Ticking Broaden on an uncalibrated spectrum unticks itself, leaves the
+    counts untouched, and keeps found peaks (the guard returns before rebuilding
+    over a no-op — same treatment as the count-rate guard)."""
     cust = app.spectrum_opts.customize_panel
     before = app.spect.counts.copy()
+    sentinel = object()
+    app.search = sentinel                              # stand in for a peak search
     cust.cb_broaden.setChecked(True)                  # toggled → live _recompute
     assert not cust.cb_broaden.isChecked()            # guard unticked it
     np.testing.assert_array_equal(app.spect.counts, before)
+    assert app.search is sentinel                      # peaks survived the no-op
 
 
 def test_broaden_applies_on_calibrated_spectrum(qapp):
