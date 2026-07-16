@@ -464,9 +464,15 @@ class DiagnosticsDialog(QDialog):
         self._fit_tabbar(self.bin_plot_tabs)
         row.addWidget(self.bin_plot_tabs, 1)
 
-        # Control side (scrollable -- there are several groups).
+        # Control side (scrollable -- only the group for the active plot tab shows).
         row.addWidget(self._build_binary_controls(), 0)
+        self.bin_plot_tabs.currentChanged.connect(self._on_bin_tab_changed)
+        self._on_bin_tab_changed(self.bin_plot_tabs.currentIndex())
         return tab
+
+    def _on_bin_tab_changed(self, index):
+        for i, grp in enumerate(self._bin_ctrl_groups):
+            grp.setVisible(i == index)
 
     def _build_binary_controls(self):
         area = QScrollArea()
@@ -477,7 +483,7 @@ class DiagnosticsDialog(QDialog):
         side = QVBoxLayout(inner); side.setSpacing(6)
         side.setContentsMargins(6, 6, 6, 6)
 
-        # ── Run / load ───────────────────────────────────────────────────────
+        # ── Run / load (applies to every tab -- always visible) ────────────────
         side.addWidget(header("RUN"))
         self.ed_bin_date = QLineEdit(); self.ed_bin_date.setPlaceholderText("YYYY-MM-DD")
         r, _ = labeled_row("Date", self.ed_bin_date); side.addWidget(r)
@@ -498,17 +504,22 @@ class DiagnosticsDialog(QDialog):
         self.btn_bin_load.clicked.connect(self._load_bin)
         side.addWidget(self.btn_bin_load)
 
+        side.addWidget(hsep())
+        self._bin_ctrl_groups = []
+
         # ── Energy plot ──────────────────────────────────────────────────────
-        side.addWidget(hsep()); side.addWidget(header("ENERGY"))
+        erg_grp = QWidget(); erg_lay = QVBoxLayout(erg_grp)
+        erg_lay.setContentsMargins(0, 0, 0, 0); erg_lay.setSpacing(6)
+        erg_lay.addWidget(header("ENERGY"))
         en_note = QLabel("Drag a span on the Energy plot to pick events for the "
                          "Energy-traces tab. Toggle channels below; the visible "
                          "ones drive every view.")
         en_note.setObjectName("stat_key"); en_note.setWordWrap(True)
-        side.addWidget(en_note)
+        erg_lay.addWidget(en_note)
         self.cb_bin_log = QCheckBox("Log Y"); self.cb_bin_log.setChecked(True)
         self.cb_bin_log.setToolTip("Logarithmic y-axis on the energy histogram")
         self.cb_bin_log.toggled.connect(self._on_bin_log_toggled)
-        side.addWidget(self.cb_bin_log)
+        erg_lay.addWidget(self.cb_bin_log)
 
         chan_btns = QHBoxLayout(); chan_btns.setContentsMargins(0, 0, 0, 0); chan_btns.setSpacing(6)
         self.btn_bin_ch_all = QPushButton("Show all"); self.btn_bin_ch_all.setObjectName("mini_btn")
@@ -518,7 +529,7 @@ class DiagnosticsDialog(QDialog):
         self.btn_bin_ch_none.setCursor(Qt.PointingHandCursor)
         self.btn_bin_ch_none.clicked.connect(lambda: self._set_all_bin_channels(False))
         chan_btns.addWidget(self.btn_bin_ch_all); chan_btns.addWidget(self.btn_bin_ch_none)
-        cbw = QWidget(); cbw.setLayout(chan_btns); side.addWidget(cbw)
+        cbw = QWidget(); cbw.setLayout(chan_btns); erg_lay.addWidget(cbw)
 
         self.bin_ch_area = QScrollArea()
         self.bin_ch_area.setWidgetResizable(True)
@@ -529,41 +540,47 @@ class DiagnosticsDialog(QDialog):
         self.bin_ch_lay.setContentsMargins(0, 0, 0, 0); self.bin_ch_lay.setSpacing(3)
         self.bin_ch_lay.addStretch(1)
         self.bin_ch_area.setWidget(self.bin_ch_inner)
-        side.addWidget(self.bin_ch_area)
+        erg_lay.addWidget(self.bin_ch_area)
 
         self.btn_bin_send1 = QPushButton("Send energy to spectrum")
         self.btn_bin_send1.setObjectName("open_btn")
         self.btn_bin_send1.setCursor(Qt.PointingHandCursor)
         self.btn_bin_send1.setToolTip("Hand the energy histogram to the Spectrum tab")
         self.btn_bin_send1.clicked.connect(self._send_bin_energy)
-        side.addWidget(self.btn_bin_send1)
+        erg_lay.addWidget(self.btn_bin_send1)
+        side.addWidget(erg_grp); self._bin_ctrl_groups.append(erg_grp)
 
         # ── Energy traces ────────────────────────────────────────────────────
-        side.addWidget(hsep()); side.addWidget(header("ENERGY TRACES"))
+        ergtr_grp = QWidget(); ergtr_lay = QVBoxLayout(ergtr_grp)
+        ergtr_lay.setContentsMargins(0, 0, 0, 0); ergtr_lay.setSpacing(6)
+        ergtr_lay.addWidget(header("ENERGY TRACES"))
         self.lbl_bin_ntr = QLabel("Total traces: --"); self.lbl_bin_ntr.setObjectName("stat_key")
-        side.addWidget(self.lbl_bin_ntr)
+        ergtr_lay.addWidget(self.lbl_bin_ntr)
         self.ed_bin_base_tr = QLineEdit("100"); self.ed_bin_base_tr.setFixedWidth(80)
         self.ed_bin_base_tr.setToolTip("Baseline window (ns) averaged and subtracted")
-        r, _ = labeled_row("Baseline (ns)", self.ed_bin_base_tr); side.addWidget(r)
+        r, _ = labeled_row("Baseline (ns)", self.ed_bin_base_tr); ergtr_lay.addWidget(r)
         self.btn_bin_norm = QPushButton("Normalize baseline")
         self.btn_bin_norm.setObjectName("mini_btn")
         self.btn_bin_norm.setCursor(Qt.PointingHandCursor)
         self.btn_bin_norm.clicked.connect(self._normalize_bin_baseline)
-        side.addWidget(self.btn_bin_norm)
+        ergtr_lay.addWidget(self.btn_bin_norm)
         self.cb_bin_leg_tr = QCheckBox("Legend")
         self.cb_bin_leg_tr.toggled.connect(self._toggle_bin_legend_tr)
-        side.addWidget(self.cb_bin_leg_tr)
+        ergtr_lay.addWidget(self.cb_bin_leg_tr)
+        side.addWidget(ergtr_grp); self._bin_ctrl_groups.append(ergtr_grp)
 
         # ── Random traces ────────────────────────────────────────────────────
-        side.addWidget(hsep()); side.addWidget(header("RANDOM TRACES"))
+        rand_grp = QWidget(); rand_lay = QVBoxLayout(rand_grp)
+        rand_lay.setContentsMargins(0, 0, 0, 0); rand_lay.setSpacing(6)
+        rand_lay.addWidget(header("RANDOM TRACES"))
         self.ed_bin_ntraces = QLineEdit("10"); self.ed_bin_ntraces.setFixedWidth(80)
         self.ed_bin_ntraces.setToolTip("How many traces to sample at random")
-        r, _ = labeled_row("No. traces", self.ed_bin_ntraces); side.addWidget(r)
+        r, _ = labeled_row("No. traces", self.ed_bin_ntraces); rand_lay.addWidget(r)
         self.cb_bin_pileup = QCheckBox("Pileup only")
         self.cb_bin_cfderr = QCheckBox("CFD error only")
         self.cb_bin_flag = QCheckBox("Flagged only")
         for cb in (self.cb_bin_pileup, self.cb_bin_cfderr, self.cb_bin_flag):
-            side.addWidget(cb)
+            rand_lay.addWidget(cb)
         rbtns = QHBoxLayout(); rbtns.setContentsMargins(0, 0, 0, 0); rbtns.setSpacing(6)
         self.btn_bin_sample = QPushButton("Sample")
         self.btn_bin_sample.setObjectName("primary_btn")
@@ -574,36 +591,40 @@ class DiagnosticsDialog(QDialog):
         self.btn_bin_fft.setToolTip("Show the FFT magnitude of the sampled traces")
         self.btn_bin_fft.clicked.connect(self._toggle_bin_fft)
         rbtns.addWidget(self.btn_bin_sample, 1); rbtns.addWidget(self.btn_bin_fft, 0)
-        rbw = QWidget(); rbw.setLayout(rbtns); side.addWidget(rbw)
+        rbw = QWidget(); rbw.setLayout(rbtns); rand_lay.addWidget(rbw)
         self.cb_bin_leg_rand = QCheckBox("Legend")
         self.cb_bin_leg_rand.toggled.connect(self._toggle_bin_legend_rand)
-        side.addWidget(self.cb_bin_leg_rand)
+        rand_lay.addWidget(self.cb_bin_leg_rand)
+        side.addWidget(rand_grp); self._bin_ctrl_groups.append(rand_grp)
 
         # ── Trace energy ─────────────────────────────────────────────────────
-        side.addWidget(hsep()); side.addWidget(header("TRACE ENERGY"))
+        own_grp = QWidget(); own_lay = QVBoxLayout(own_grp)
+        own_lay.setContentsMargins(0, 0, 0, 0); own_lay.setSpacing(6)
+        own_lay.addWidget(header("TRACE ENERGY"))
         tr_note = QLabel("Energy from integrating each trace (baseline-subtracted) "
                          "over the bounds below. Blank bounds = whole trace.")
         tr_note.setObjectName("stat_key"); tr_note.setWordWrap(True)
-        side.addWidget(tr_note)
+        own_lay.addWidget(tr_note)
         self.ed_bin_a = QLineEdit(); self.ed_bin_a.setFixedWidth(80)
         self.ed_bin_a.setPlaceholderText("start"); self.ed_bin_a.setToolTip("Integration start (ns)")
-        r, _ = labeled_row("Bound a (ns)", self.ed_bin_a); side.addWidget(r)
+        r, _ = labeled_row("Bound a (ns)", self.ed_bin_a); own_lay.addWidget(r)
         self.ed_bin_b = QLineEdit(); self.ed_bin_b.setFixedWidth(80)
         self.ed_bin_b.setPlaceholderText("end"); self.ed_bin_b.setToolTip("Integration end (ns)")
-        r, _ = labeled_row("Bound b (ns)", self.ed_bin_b); side.addWidget(r)
+        r, _ = labeled_row("Bound b (ns)", self.ed_bin_b); own_lay.addWidget(r)
         self.ed_bin_base = QLineEdit("100"); self.ed_bin_base.setFixedWidth(80)
         self.ed_bin_base.setToolTip("Baseline window (ns) averaged and subtracted")
-        r, _ = labeled_row("Baseline (ns)", self.ed_bin_base); side.addWidget(r)
+        r, _ = labeled_row("Baseline (ns)", self.ed_bin_base); own_lay.addWidget(r)
         self.btn_bin_calc = QPushButton("Calc energy")
         self.btn_bin_calc.setObjectName("primary_btn")
         self.btn_bin_calc.setCursor(Qt.PointingHandCursor)
         self.btn_bin_calc.clicked.connect(self._calc_bin_trace_energy)
-        side.addWidget(self.btn_bin_calc)
+        own_lay.addWidget(self.btn_bin_calc)
         self.btn_bin_send2 = QPushButton("Send trace energy to spectrum")
         self.btn_bin_send2.setObjectName("open_btn")
         self.btn_bin_send2.setCursor(Qt.PointingHandCursor)
         self.btn_bin_send2.clicked.connect(self._send_bin_trace_energy)
-        side.addWidget(self.btn_bin_send2)
+        own_lay.addWidget(self.btn_bin_send2)
+        side.addWidget(own_grp); self._bin_ctrl_groups.append(own_grp)
 
         self.lbl_bin_state = QLabel(""); self.lbl_bin_state.setObjectName("stat_key")
         self.lbl_bin_state.setWordWrap(True); side.addWidget(self.lbl_bin_state)
