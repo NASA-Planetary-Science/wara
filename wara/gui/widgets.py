@@ -6,7 +6,7 @@ from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
 
 from PyQt5.QtWidgets import (
     QWidget, QLabel, QPushButton, QVBoxLayout, QHBoxLayout, QFrame,
-    QSizePolicy, QSpacerItem, QCheckBox, QSpinBox, QDoubleSpinBox, QComboBox,
+    QSizePolicy, QCheckBox, QSpinBox, QDoubleSpinBox, QComboBox,
     QScrollArea, QLineEdit,
 )
 from PyQt5.QtCore import Qt, pyqtSignal
@@ -18,6 +18,17 @@ from . import theme as T
 from importlib.resources import files as _files
 _LOGO_PATH = str(_files("wara").joinpath("ui/wara-logo.png"))
 _LOGO_ARR = None
+
+
+def display_y_label(spect):
+    """Human-readable y-axis label for a spectrum's ``y_label`` code.
+
+    Single source of truth shared by the plot canvas and the Axis & Legend
+    dialog — the dialog compares its fields against this to detect no-op
+    accepts, so both must always agree.
+    """
+    return {"Cts": "Counts", "CPS": "Counts/second"}.get(
+        spect.y_label, spect.y_label)
 
 
 def _logo_array():
@@ -408,8 +419,7 @@ class SpectrumCanvas(FigureCanvas):
                     alpha=0.95, label=self._active_label)
         # Only switch to log if there is positive data, else matplotlib warns.
         ax.set_yscale("log" if (self._log and (y > 0).any()) else "linear")
-        y_label = self._ylabel or {"Cts": "Counts", "CPS": "Counts/second"}.get(
-            self._spect.y_label, self._spect.y_label)
+        y_label = self._ylabel or display_y_label(self._spect)
         x_label = self._xlabel or self._spect.x_units
         ax.set_xlabel(x_label, color=T.TEXT_DIM, fontsize=12, fontweight="bold")
         ax.set_ylabel(y_label, color=T.TEXT_DIM, fontsize=12, fontweight="bold")

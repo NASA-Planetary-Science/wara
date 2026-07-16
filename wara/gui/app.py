@@ -31,7 +31,7 @@ from . import theme as T
 from .theme import NAV_SECTIONS, TABS_WITH_OPTIONS, STYLESHEET, dot_icon, recolor_toolbar_icons, PlanetaryNavButton
 from .widgets import (
     SpectrumCanvas, SpectrumOptions, PlaceholderOptions, PlaceholderPage,
-    header, hsep,
+    header, hsep, display_y_label,
 )
 from .io import load_spectrum_file, OPEN_FILTER
 from .nuclear import NuclearDatabaseDialog
@@ -427,16 +427,19 @@ class WaraApp(QMainWindow):
         if not self._guard():
             return
         cur_x = self._xlabel or self.spect.x_units
-        cur_y = self._ylabel or {"Cts": "Counts", "CPS": "Counts/second"}.get(
-            self.spect.y_label, self.spect.y_label)
+        cur_y = self._ylabel or display_y_label(self.spect)
         cur_legend = self.spect.label or ""
         cur_desc = self.spect.description or ""
         dlg = AxisLegendDialog(self, self.spect, cur_x, cur_y)
         if dlg.exec_() != QDialog.Accepted:
             return
         legend, xlabel, ylabel, desc = dlg.values()
-        if (legend, xlabel, ylabel, desc) == (cur_legend, cur_x, cur_y, cur_desc):
-            return   # nothing changed — don't touch the plot
+        # dlg.values() strips and returns "" for empty fields; normalize the
+        # pre-open values the same way (x_units / y_label may be None) so an
+        # untouched dialog always compares equal.
+        if (legend, xlabel, ylabel, desc) == (
+                cur_legend, (cur_x or "").strip(), (cur_y or "").strip(), cur_desc):
+            return  # nothing changed — don't touch the plot
         # Legend label + description belong to the spectrum (persist via baseline).
         self.spect.label = legend or None
         self.spect.description = desc or None
