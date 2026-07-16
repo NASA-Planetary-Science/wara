@@ -530,7 +530,10 @@ def test_transparent_overlay_over_albedo(tab, monkeypatch):
     assert "60 % opacity over the albedo Moon" in tab.opts.status.text()
 
 
-def test_transparent_overlay_over_elevation_base(tab, monkeypatch):
+def test_transparent_overlay_from_elevation_base_uses_albedo(tab, monkeypatch):
+    # Coming from the elevation drape, a semi-transparent abundance overlay
+    # must float over the *albedo* Moon, never the elevation color map —
+    # abundance-over-elevation drew two colorbars (dropped in 6a94cd2).
     calls = []
     monkeypatch.setattr(tab, "_js", lambda script: calls.append(script))
     tab._globe_ready = True
@@ -541,11 +544,13 @@ def test_transparent_overlay_over_elevation_base(tab, monkeypatch):
     calls.clear()
     tab.opts.dataset.setCurrentIndex(1)          # ...then composition
     tab.opts.opacity.setValue(50.0)
-    # Base = elevation drape + overlay on top.
-    assert any(c.startswith("waraSetSurface(") and "Elevation (km)" in c
-               for c in calls)
+    # Base reset to albedo + overlay on top; no elevation color drape left.
+    assert "waraResetSurface();" in calls
     assert any(c.startswith("waraSetOverlay(") and "0.50" in c for c in calls)
-    assert "over the LOLA elevation" in tab.opts.status.text()
+    assert not any(c.startswith("waraSetSurface(") and "Elevation (km)" in c
+                   for c in calls)
+    assert not tab._surface_is_abundance
+    assert "over the albedo Moon" in tab.opts.status.text()
     # Leaving Calibrated clears the overlay.
     calls.clear()
     tab.opts.dataset.setCurrentIndex(0)
