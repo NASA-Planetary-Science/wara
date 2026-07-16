@@ -7,12 +7,13 @@ on:
 
 jobs:
   test:
-    runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
         # 3.10 is the requires-python floor; 3.12 covers the modern end.
         python-version: ["3.10", "3.12"]
+    runs-on: ${{ matrix.os }}
     env:
       # GUI tests run headless (the test files also set this themselves).
       QT_QPA_PLATFORM: offscreen
@@ -28,8 +29,9 @@ jobs:
           python-version: ${{ matrix.python-version }}
           cache: pip
 
-      - name: Install Qt runtime libraries
+      - name: Install Qt runtime libraries (Linux only)
         # Minimal system libs PyQt5 needs even on the offscreen platform.
+        if: runner.os == 'Linux'
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \

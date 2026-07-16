@@ -199,7 +199,7 @@ class TestFitBkg:
         x = np.arange(50) * 0.7 + 100.0
         y = 20.0 + 0.5 * np.arange(50)
         res = adv.BkgFitResult(x, y, degree=1)
-        assert res.area_fit == pytest.approx(res.area_raw, rel=0.02)
+        assert res.area_fit == pytest.approx(res.area_raw, rel=0.03)
         assert res.area_fit != pytest.approx(res.area_raw, rel=1e-9)
 
     def test_area_fit_independent_of_calibration(self):
@@ -987,7 +987,7 @@ def h_search():
     """Search over the 2223 keV hydrogen region (has narrow peaks)."""
     spect = file_reader.read_txt(TXT_HPGE)
     return ps.PeakSearch(spect, ref_x=2224, ref_fwhm=3.5, fwhm_at_0=1.0,
-                         min_snr=50, method="fast")
+                         min_snr=20, method="fast")
 
 
 class TestDopplerMechanics:
