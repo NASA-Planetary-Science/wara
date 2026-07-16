@@ -7,6 +7,7 @@ import numpy as np
 import pandas as pd
 import mplcursors
 from scipy.special import erfc, erfcx
+from scipy.integrate import trapezoid
 from wara import spectrum as sp
 from wara.matplotlib_theme import apply_theme
 from wara.peakfit import PeakFit
@@ -39,7 +40,8 @@ class BkgFitResult:
         # identical — a real (if small) distinction between "area under the
         # fitted trapezoid" and "sum of the raw bins".
         y_fit = self.poly(self.x)
-        self.area_fit = float(np.trapz(y_fit, dx=1.0))
+        # scipy's trapezoid, not np.trapz: the latter was removed in NumPy 2.0.
+        self.area_fit = float(trapezoid(y_fit, dx=1.0))
         self.area_fit_err = float(np.sqrt(np.abs(self.area_fit)))
 
         self.area_raw = float(np.sum(self.y))
