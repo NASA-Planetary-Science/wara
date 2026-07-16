@@ -28,12 +28,10 @@ All the information of the binary file encoding was taken from the file
 
 """
 
-import sys
 import numpy as np
 import time
 import struct
 from wara import spectrum as sp
-from wara import peaksearch as ps
 
 
 def read_cnf_file(filename, write_output=False):

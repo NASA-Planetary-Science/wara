@@ -58,3 +58,17 @@ write_to = "wara/version.py"
 # Only collect from tests/ — scratch/ contains test_*-named exploratory
 # scripts that must never be picked up by a bare `pytest` run.
 testpaths = ["tests"]
+
+[tool.ruff]
+# gui_legacy is frozen pending removal; planetary-nuclear-spect holds ad-hoc
+# mission-data scripts (not importable package code); scratch is exploratory.
+extend-exclude = ["wara/gui_legacy", "wara/planetary-nuclear-spect", "scratch"]
+
+[tool.ruff.lint]
+# E702: the GUI modules deliberately pair related Qt layout calls on one line
+# (e.g. `lay.setContentsMargins(...); lay.setSpacing(8)`).
+ignore = ["E702"]
+
+[tool.ruff.lint.per-file-ignores]
+# The package root re-exports its public API.
+"wara/__init__.py" = ["F401", "F403"]

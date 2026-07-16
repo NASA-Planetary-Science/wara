@@ -26,7 +26,6 @@ from PyQt5.QtWidgets import (
     QApplication,
 )
 from PyQt5.QtCore import Qt, pyqtSignal
-from PyQt5.QtGui import QFont
 
 from wara.advanced_fit import (
     fit_bkg, PeakAreaLinearBkg, MultiProfilePeakFit, HypermetFit,

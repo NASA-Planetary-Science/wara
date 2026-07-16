@@ -192,7 +192,6 @@ def time_cut(df, t_start, t_stop, step, xkey="X", ykey="Y", tkey="dt"):
     Y = df[ykey]
     for k in np.arange(t_start, t_stop, step):
         mask = (tdiff > k) & (tdiff < k + step)
-        tdiff2 = tdiff[mask]
         X2 = X[mask]
         Y2 = Y[mask]
         # Z2 = [x for i,x in enumerate(Z) if i not in idx2]
@@ -264,8 +263,8 @@ def read_time_from_settings(settings_file, ch):
         lines = myfile.readlines()
 
     idx = None
-    for i, l in enumerate(lines):
-        tmp = l.replace('"', "").split()
+    for i, line in enumerate(lines):
+        tmp = line.replace('"', "").split()
         if "live_time:" in tmp:
             idx = i
     if idx is None:
@@ -279,8 +278,8 @@ def read_input_CR_from_settings(settings_file, ch=9):
         lines = myfile.readlines()
 
     idx = None
-    for i, l in enumerate(lines):
-        tmp = l.replace('"', "").split()
+    for i, line in enumerate(lines):
+        tmp = line.replace('"', "").split()
         if "input_count_rate:" in tmp:
             idx = i
     if idx is None:
@@ -294,8 +293,8 @@ def read_input_counts_from_settings(settings_file, ch=9):
         lines = myfile.readlines()
 
     idx = None
-    for i, l in enumerate(lines):
-        tmp = l.replace('"', "").split()
+    for i, line in enumerate(lines):
+        tmp = line.replace('"', "").split()
         if "input_counts:" in tmp:
             idx = i
     if idx is None:

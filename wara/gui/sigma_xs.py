@@ -32,14 +32,12 @@ from matplotlib.backends.backend_qt5agg import NavigationToolbar2QT as NavToolba
 from PyQt5.QtWidgets import (
     QDialog, QWidget, QLabel, QPushButton, QVBoxLayout, QHBoxLayout, QGridLayout,
     QLineEdit, QCheckBox, QComboBox, QTabWidget, QSizePolicy, QMessageBox,
-    QFrame,
 )
 from PyQt5.QtCore import Qt, QSize, QTimer
 
 from wara import read_parquet_api, apicalc as api
 from wara import spectrum as sp
 from wara import peaksearch as ps
-from wara import peakfit as pf
 
 from . import theme as T
 from .widgets import hsep, header, labeled_row, stat_row, fmt_count

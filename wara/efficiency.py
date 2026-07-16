@@ -155,7 +155,7 @@ def plot_points(e_vals, eff_vals, err_vals, e_units="keV", ax=None):
         label="Data",
     )
     ax.set_xlabel(f"Energy ({e_units})")
-    ax.set_ylabel(f"Efficiency (%)")
+    ax.set_ylabel("Efficiency (%)")
     ax.legend()
 
 

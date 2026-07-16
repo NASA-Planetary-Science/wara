@@ -25,7 +25,6 @@ QtWebEngine is imported lazily and only when the tab is first activated, so
 the offscreen test suite never loads it.
 """
 import tempfile
-from datetime import date
 from pathlib import Path
 
 import numpy as np
@@ -58,7 +57,7 @@ GLOBE_DETAIL_DEFAULT = "Ultra (0.35°)"
 # Downloads live inside the package's planetary data folder (gitignored), so
 # datasets a user decides to keep survive; the bundled orbit-metadata CSV
 # (tracked in git) sits alongside them.
-from wara.planetary.lp import LP_DATA_DIR as DEFAULT_DATA_DIR
+from wara.planetary.lp import LP_DATA_DIR as DEFAULT_DATA_DIR  # noqa: E402
 
 # Colors for "kept" region spectra; the box on the Moon and the spectrum line
 # share the color. Cyan is reserved for the active selection, grey for the

@@ -106,22 +106,22 @@ def read_txt(filename):
     with open(filename, "r", encoding="utf-8") as myfile:
         filelst = myfile.readlines()
         for i, line in enumerate(filelst):
-            l = line.split()
-            if not l:
+            parts = line.split()
+            if not parts:
                 continue
-            if l[0].lower() == "description:" and len(l) > 1:
-                description = " ".join(l[1:])
-            if l[0].lower() == "label:" and len(l) > 1:
-                plot_label = " ".join(l[1:])
-            if l[0].lower() == "date" and l[1].lower() == "created:" and len(l) > 2:
-                date_created = " ".join(l[2:])
-            if l[0].lower() == "real" and l[1].lower() == "time" and len(l) > 2:
-                realtime = l[3]
-            if l[0].lower() == "live" and l[1].lower() == "time" and len(l) > 2:
-                livetime = l[3]
-            if l[0].lower() == "energy" and l[1].lower() == "calibration:":
-                if len(l) > 2:
-                    erg_cal = " ".join(l[2:])
+            if parts[0].lower() == "description:" and len(parts) > 1:
+                description = " ".join(parts[1:])
+            if parts[0].lower() == "label:" and len(parts) > 1:
+                plot_label = " ".join(parts[1:])
+            if parts[0].lower() == "date" and parts[1].lower() == "created:" and len(parts) > 2:
+                date_created = " ".join(parts[2:])
+            if parts[0].lower() == "real" and parts[1].lower() == "time" and len(parts) > 2:
+                realtime = parts[3]
+            if parts[0].lower() == "live" and parts[1].lower() == "time" and len(parts) > 2:
+                livetime = parts[3]
+            if parts[0].lower() == "energy" and parts[1].lower() == "calibration:":
+                if len(parts) > 2:
+                    erg_cal = " ".join(parts[2:])
                 start_idx = i + 1
                 break
     
@@ -270,46 +270,46 @@ class ReadMCA:
 
         start_idx = None
         for i, line in enumerate(filelst):
-            l = line.lower().split()
-            if l[0] == "tag":
-                self.tag = l[-1]
-            elif l[0] == "description":
-                self.description = l[-1]
-            elif l[0] == "gain":
+            parts = line.lower().split()
+            if parts[0] == "tag":
+                self.tag = parts[-1]
+            elif parts[0] == "description":
+                self.description = parts[-1]
+            elif parts[0] == "gain":
                 try:
-                    self.gain = float(l[-1])
+                    self.gain = float(parts[-1])
                 except ValueError:
                     pass
-            elif l[0] == "threshold":
+            elif parts[0] == "threshold":
                 try:
-                    self.threshold = float(l[-1])
+                    self.threshold = float(parts[-1])
                 except ValueError:
                     pass
-            elif l[0] == "live_mode":
+            elif parts[0] == "live_mode":
                 try:
-                    self.live_mode = float(l[-1])
+                    self.live_mode = float(parts[-1])
                 except ValueError:
                     pass
-            elif l[0] == "preset_time":
+            elif parts[0] == "preset_time":
                 try:
-                    self.preset_time = float(l[-1])
+                    self.preset_time = float(parts[-1])
                 except ValueError:
                     pass
-            elif l[0] == "live_time":
+            elif parts[0] == "live_time":
                 try:
-                    self.live_time = float(l[-1])
+                    self.live_time = float(parts[-1])
                 except ValueError:
                     pass
-            elif l[0] == "real_time":
+            elif parts[0] == "real_time":
                 try:
-                    self.real_time = float(l[-1])
+                    self.real_time = float(parts[-1])
                 except ValueError:
                     pass
-            elif l[0] == "start_time":
-                self.start_time = l[-2] + " " + l[-1]
-            elif l[0] == "serial_number":
-                self.serial_no = l[-1]
-            elif l[0] == "<<data>>":
+            elif parts[0] == "start_time":
+                self.start_time = parts[-2] + " " + parts[-1]
+            elif parts[0] == "serial_number":
+                self.serial_no = parts[-1]
+            elif parts[0] == "<<data>>":
                 start_idx = i
                 break
         if start_idx is None:
@@ -371,30 +371,30 @@ class ReadSPE:
         start_idx = None
         end_idx = None
         for i, line in enumerate(filelst):
-            l = line.lower().split()
-            if l[0] == "$spec_id:":
+            parts = line.lower().split()
+            if parts[0] == "$spec_id:":
                 self.description = filelst[i + 1]
-            if "det#" in l:
-                self.detector = l[1]
-            if "detdesc#" in l:
-                self.detector_description = l[1:]
-            if "ap#" in l:
-                self.version = l[1:]
-            if "$date_mea:" in l:
+            if "det#" in parts:
+                self.detector = parts[1]
+            if "detdesc#" in parts:
+                self.detector_description = parts[1:]
+            if "ap#" in parts:
+                self.version = parts[1:]
+            if "$date_mea:" in parts:
                 self.date = filelst[i + 1].split()[0]
                 self.time_str = filelst[i + 1].split()[1]
                 tme = datetime.datetime.strptime(self.time_str, "%H:%M:%S")
                 self.time_s = tme.hour * 60 * 60 + tme.minute * 60 + tme.second
-            if "$meas_tim:" in l:
+            if "$meas_tim:" in parts:
                 self.real_time = float(filelst[i + 1].split()[1])
                 self.live_time = float(filelst[i + 1].split()[0])
-            if "$data:" in l:
+            if "$data:" in parts:
                 self.channels = int(filelst[i + 1].split()[1])
                 start_idx = i
-            if "$roi:" in l:
+            if "$roi:" in parts:
                 self.ROI = filelst[i + 1].split()[0]
                 end_idx = i
-            if "$ener_fit:" in l:
+            if "$ener_fit:" in parts:
                 self.erg_cal = filelst[i + 1].split()
         if start_idx is None:
             raise ValueError(f"Could not find '$DATA:' section in file: {self.file}")
@@ -421,8 +421,8 @@ def read_lynx_csv(file_name):
 
     istart = None
     for i, line in enumerate(filelst):
-        l = line.lower().split()
-        if "channel," in l and "counts" in l:
+        parts = line.lower().split()
+        if "channel," in parts and "counts" in parts:
             istart = i
             break
     if istart is None:
@@ -473,18 +473,18 @@ class ReadLynxCsv:
         with open(self.file, "r") as myfile:
             filelst = myfile.readlines()
         for i, line in enumerate(filelst):
-            l = line.lower().split()
-            if "start" in l and "time," in l:
-                self.start_time = " ".join(l[2:])
-            if "energy" in l and "calibration," in l:
-                self.energy_calibration = " ".join(l[2:])
-            if "live" in l and "time" in l:
-                self.live_time = l[-1] + l[-2]
-            if "real" in l and "time" in l:
-                self.real_time = l[-1] + l[-2]
-            if "elapsed" in l and "computational," in l:
-                self.elapsed_computational = l[-1]
-            if "channel," in l and "counts" in l:
+            parts = line.lower().split()
+            if "start" in parts and "time," in parts:
+                self.start_time = " ".join(parts[2:])
+            if "energy" in parts and "calibration," in parts:
+                self.energy_calibration = " ".join(parts[2:])
+            if "live" in parts and "time" in parts:
+                self.live_time = parts[-1] + parts[-2]
+            if "real" in parts and "time" in parts:
+                self.real_time = parts[-1] + parts[-2]
+            if "elapsed" in parts and "computational," in parts:
+                self.elapsed_computational = parts[-1]
+            if "channel," in parts and "counts" in parts:
                 istart = i
                 break
         df = pd.read_csv(self.file, skiprows=istart, dtype=float)
@@ -511,8 +511,6 @@ def read_multiscan(file):
     live_time = None
     real_time = None
     eunits = None
-    tot_counts = None
-    count_rate = None
     if file[-8:].lower() != ".pha.txt":
         raise ValueError(f"Expected a .pha.txt file, got: {file}")
 
@@ -521,25 +519,23 @@ def read_multiscan(file):
     istart = None
     cols = None
     for i, line in enumerate(filelst):
-        l = line.lower().strip().split(",")
-        if "name" in l and len(l) > 1:
-            description = l[1]
-        if "time started" in l:
-            start_time = ",".join(l[1:]).strip('"')
-        if "live time when finished" in l:
-            tme = datetime.datetime.strptime(l[1], "%H:%M:%S.%f")
+        parts = line.lower().strip().split(",")
+        if "name" in parts and len(parts) > 1:
+            description = parts[1]
+        if "time started" in parts:
+            start_time = ",".join(parts[1:]).strip('"')
+        if "live time when finished" in parts:
+            tme = datetime.datetime.strptime(parts[1], "%H:%M:%S.%f")
             live_time = tme.hour * 60 * 60 + tme.minute * 60 + tme.second
-        if "real time when finished" in l:
-            tme = datetime.datetime.strptime(l[1], "%H:%M:%S.%f")
+        if "real time when finished" in parts:
+            tme = datetime.datetime.strptime(parts[1], "%H:%M:%S.%f")
             real_time = tme.hour * 60 * 60 + tme.minute * 60 + tme.second
-        if "energy equation" in l:
-            energy_calibration = l[1]
-            eunits = l[1].split("+")[0][-3:]
-        if "total counts" in l:
-            tot_counts = float(l[1])
-        if ["channel", "energy", "counts"] == l:
+        if "energy equation" in parts:
+            energy_calibration = parts[1]
+            eunits = parts[1].split("+")[0][-3:]
+        if ["channel", "energy", "counts"] == parts:
             istart = i
-            cols = l
+            cols = parts
             break
     if istart is None:
         raise ValueError(f"Could not find 'channel,energy,counts' header in file: {file}")
@@ -582,8 +578,8 @@ class ReadMultiScanTlist:
             with open(self.file, mode="r") as f:
                 file_lst = f.readlines()
             for line in file_lst:
-                l = line.strip().split()
-                split_data.append(l)
+                parts = line.strip().split()
+                split_data.append(parts)
         try:
             cols = ["channel", "ts"]
             df = pd.DataFrame(columns=cols, data=split_data, dtype=np.float64)
@@ -624,27 +620,26 @@ class ReadCaenListMode:
             self.filelst = [line.rstrip() for line in myfile]
 
     def parse_header(self):
-        data = []
         for i, line in enumerate(self.filelst):
-            l = line.lower().split(":")
-            if l[0] == "header0":
-                self.header0 = int(l[1])
-            if l[0] == "header1":
-                self.header1 = int(l[1])
-            if l[0] == "header2":
-                self.header2 = int(l[1])
-            if l[0] == "header3":
-                self.header3 = int(l[1])
-            if l[0] == "header4":
-                self.header4 = int(l[1])
+            parts = line.lower().split(":")
+            if parts[0] == "header0":
+                self.header0 = int(parts[1])
+            if parts[0] == "header1":
+                self.header1 = int(parts[1])
+            if parts[0] == "header2":
+                self.header2 = int(parts[1])
+            if parts[0] == "header3":
+                self.header3 = int(parts[1])
+            if parts[0] == "header4":
+                self.header4 = int(parts[1])
                 self.idx_start = i
                 break
 
     def parse_data(self):
         data = []
         for i, line in enumerate(self.filelst[self.idx_start :]):
-            l = line.split()
-            data.append(l)
+            parts = line.split()
+            data.append(parts)
         data = np.array(data[1:], dtype=int)
         cols = ["ts (ns)", "channel", "flag"]
         self.df = pd.DataFrame(columns=cols, data=data)

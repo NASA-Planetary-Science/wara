@@ -115,7 +115,7 @@ class Diagnostics:
                 break
             else:
                 search = None
-        if search == None:
+        if search is None:
             for msnr in np.arange(0.1, 2, 0.2):
                 # print(f"Minimum SNR = {msnr}")
                 search = ps.PeakSearch(
@@ -144,7 +144,7 @@ class Diagnostics:
 
             try:
                 search = self.single_search(spect, xrange=[xmid - width, xmid + width])
-            except:
+            except Exception:
                 search = None
             if search is None:
                 print(f"SEARCH: No fit available for run number {i}")
@@ -161,7 +161,7 @@ class Diagnostics:
                         area = info["area1"]
                         area_err = fit.peak_err[0]["area_err1"]
                         fwhm = info["fwhm1"]
-                except:
+                except Exception:
                     print(f"FIT: No fit available for run number {i}")
 
             # max val

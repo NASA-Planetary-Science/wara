@@ -15,7 +15,6 @@ from collections import defaultdict
 from collections.abc import Iterable
 from itertools import islice
 from pathlib import Path
-from typing import Union
 
 import numpy as np
 import pandas as pd

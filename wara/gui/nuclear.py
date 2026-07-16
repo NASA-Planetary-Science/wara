@@ -11,7 +11,7 @@ import pandas as pd
 from PyQt5.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QFormLayout, QLabel, QLineEdit,
     QComboBox, QPushButton, QCheckBox, QTableView, QAbstractItemView,
-    QColorDialog, QHeaderView, QFrame, QDialogButtonBox,
+    QColorDialog, QFrame, QDialogButtonBox,
 )
 from PyQt5.QtGui import QColor
 from PyQt5.QtCore import Qt, QAbstractTableModel, pyqtSignal

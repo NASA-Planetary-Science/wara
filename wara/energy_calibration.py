@@ -4,7 +4,6 @@ Energy calibration functions
 import lmfit
 import matplotlib.pyplot as plt
 import numpy as np
-import pandas as pd
 from itertools import combinations
 from math import comb
 from scipy.stats import linregress
@@ -641,7 +640,6 @@ def _align_channels_to_energies(pred, ergs, tol):
     one-to-one, monotone pairing — outliers on either side are simply skipped.
     """
     N, M = len(pred), len(ergs)
-    NEG = float("inf")
     # dp[i][j] = (count, cost) for pred[:i] vs ergs[:j]; choice[i][j] records
     # the move taken so we can backtrack the actual pairs.
     dp = [[(0, 0.0)] * (M + 1) for _ in range(N + 1)]

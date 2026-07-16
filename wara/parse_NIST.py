@@ -37,8 +37,8 @@ def isotopic_abundance(element):
         lines = f.readlines()
 
     result = defaultdict()
-    for i, l in enumerate(lines):
-        tmp = l.split()
+    for i, line in enumerate(lines):
+        tmp = line.split()
         if element in tmp:
             Z = re.findall("\d+", lines[i - 1])[0]
             symbol = element
@@ -57,7 +57,7 @@ def isotopic_abundance(element):
 def isotopic_abundance_str(element):
     "Return string of isotopic abundances"
     res = isotopic_abundance(element)
-    if type(res) == str:
+    if isinstance(res, str):
         return res
     keys = list(res.keys())
     vals = list(res.values())

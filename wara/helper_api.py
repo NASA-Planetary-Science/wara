@@ -90,7 +90,7 @@ def read_binary_data(date, runnr):
         print("ERROR: No binary files found")
     try:
         files_sorted = sorted(files, key=lambda x: int(x.name[-9:-4]))
-    except:
+    except Exception:
         files_sorted = files
         print("WARNING: Could not sort binary files")
     df = list_mode_data_reader.read_list_mode_data(files_sorted)
@@ -127,8 +127,8 @@ def read_time_from_settings(settings_file, ch):
     with open(settings_file, mode="r") as myfile:
         lines = myfile.readlines()
 
-    for i, l in enumerate(lines):
-        tmp = l.replace('"', "").split()
+    for i, line in enumerate(lines):
+        tmp = line.replace('"', "").split()
         if "live_time:" in tmp:
             idx = i
     time = float(lines[idx + ch + 1].split(",")[0])
@@ -139,8 +139,8 @@ def read_input_CR_from_settings(settings_file, ch=9):
     with open(settings_file, mode="r") as myfile:
         lines = myfile.readlines()
 
-    for i, l in enumerate(lines):
-        tmp = l.replace('"', "").split()
+    for i, line in enumerate(lines):
+        tmp = line.replace('"', "").split()
         if "input_count_rate:" in tmp:
             idx = i
     CR = float(lines[idx + ch + 1].split(",")[0])
@@ -151,8 +151,8 @@ def read_input_counts_from_settings(settings_file, ch=9):
     with open(settings_file, mode="r") as myfile:
         lines = myfile.readlines()
 
-    for i, l in enumerate(lines):
-        tmp = l.replace('"', "").split()
+    for i, line in enumerate(lines):
+        tmp = line.replace('"', "").split()
         if "input_counts:" in tmp:
             idx = i
     CR = float(lines[idx + ch + 1].split(",")[0])
