@@ -1,6 +1,8 @@
 wara.egg-info
 __pycache__
 *~
+*.log
+.ipynb_checkpoints/
 wara/version.py
 data-path.txt
 .claude

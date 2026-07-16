@@ -53,3 +53,8 @@ wara = ["nuclear-data/*.txt", "nuclear-data/*.csv", "ui/*.ui", "ui/*.png"]
 
 [tool.setuptools_scm]
 write_to = "wara/version.py"
+
+[tool.pytest.ini_options]
+# Only collect from tests/ — scratch/ contains test_*-named exploratory
+# scripts that must never be picked up by a bare `pytest` run.
+testpaths = ["tests"]
