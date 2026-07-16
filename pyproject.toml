@@ -38,7 +38,7 @@ dependencies = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/mauricioAyllon/wara"
+Homepage = "https://github.com/NASA-Planetary-Science/wara"
 
 [project.scripts]
 wara = "wara.cli:main"
