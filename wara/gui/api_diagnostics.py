@@ -61,6 +61,7 @@ class DiagnosticsDialog(QDialog):
 
         # ── MCA state ────────────────────────────────────────────────────────
         self.mca_data = None       # 2D array, one spectrum per row
+        self._mca_date = self._mca_run = None  # run that produced mca_data
         self._mca_visible = []     # per-spectrum visibility flags
         self._mca_colors = []      # per-spectrum plot color (hex)
         self._mca_checks = []      # the visibility QCheckBoxes
@@ -83,6 +84,7 @@ class DiagnosticsDialog(QDialog):
         self._bin_fig = {}
         self._bin_canvas = {}
         self._bin_toolbar = {}
+        self._bin_date = self._bin_run = None  # run that produced df_bin
         self._bin_span = None      # SpanSelector on the energy plot
         self._bin_yscale = "log"
         self._bin_gam = self._bin_gam_x = None    # energy hist (send to spectrum)
@@ -302,6 +304,7 @@ class DiagnosticsDialog(QDialog):
             traceback.print_exc()
             self._state(f"Could not load MCA file: {exc}")
             return
+        self._mca_date, self._mca_run = date, runnr
         n = len(self.mca_data)
         self._mca_visible = [True] * n
         self._mca_colors = self._palette(n)
@@ -384,7 +387,7 @@ class DiagnosticsDialog(QDialog):
                 continue
             try:
                 specs.append((sp.Spectrum(counts=row, e_units="channels"),
-                              f"MCA #{i}"))
+                              f"{self._mca_date}-{self._mca_run}-CH{i}"))
             except Exception as exc:  # noqa: BLE001
                 self._state(f"Could not build spectrum #{i}: {exc}")
                 return
@@ -683,6 +686,7 @@ class DiagnosticsDialog(QDialog):
         if df is None or df.shape[0] == 0:
             self._bin_state("No events found in the loaded data")
             return
+        self._bin_date, self._bin_run = date, runnr
         self.df_bin = df
         self.df_bin_tr = None
         self.df_bin_rand = None
@@ -1021,18 +1025,25 @@ class DiagnosticsDialog(QDialog):
         self._bin_state("Computed energy from trace integration")
 
     # ── send to spectrum ─────────────────────────────────────────────────────
+    def _bin_ch_suffix(self):
+        vis = self._visible_channels()
+        if not vis:
+            return "CH-all"
+        return "CH" + "+".join(str(c) for c in vis)
+
     def _send_bin_energy(self):
         if self._bin_gam is None:
             self._bin_state("Load data (energy histogram) first")
             return
-        self._send_spectrum(self._bin_gam, self._bin_gam_x, "API binary energy")
+        name = f"{self._bin_date}-{self._bin_run}-{self._bin_ch_suffix()}"
+        self._send_spectrum(self._bin_gam, self._bin_gam_x, name)
 
     def _send_bin_trace_energy(self):
         if self._bin_gam2 is None:
             self._bin_state("Calc energy first")
             return
-        self._send_spectrum(self._bin_gam2, self._bin_gam_x2,
-                            "API binary trace energy")
+        name = f"{self._bin_date}-{self._bin_run}-{self._bin_ch_suffix()}-trace"
+        self._send_spectrum(self._bin_gam2, self._bin_gam_x2, name)
 
     def _send_spectrum(self, counts, energies, name):
         try:
