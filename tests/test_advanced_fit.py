@@ -662,7 +662,10 @@ class TestHypermetFunction:
         amp = 1000.0
         y = adv.hypermet(x, amplitude=amp, center=100.0, sigma=5.0,
                          tail_fraction=0.3, tail_tau=8.0)
-        trapezoid = getattr(np, "trapezoid", np.trapz)
+        # scipy's trapezoid works on NumPy 1.x and 2.x alike; the tempting
+        # getattr(np, "trapezoid", np.trapz) shim evaluates np.trapz eagerly
+        # and raises on NumPy 2.
+        from scipy.integrate import trapezoid
         assert trapezoid(y, x) == pytest.approx(amp, rel=1e-3)
 
     def test_zero_tail_reduces_to_gaussian(self):
