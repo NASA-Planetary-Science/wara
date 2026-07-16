@@ -29,7 +29,7 @@
 
 ## Installation
 
-wara runs on Python 3.8 or higher. You can install it by downloading the package directly:
+wara runs on Python 3.10 or higher. You can install it by downloading the package directly:
 ```
 git clone https://github.com/NASA-Planetary-Science/wara.git
 ```

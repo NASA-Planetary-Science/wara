@@ -16,7 +16,9 @@ classifiers = [
     "Programming Language :: Python :: 3",
     "Topic :: Software Development :: Libraries :: Python Modules",
 ]
-requires-python = ">=3.8"
+# PEP 604 unions (str | None) are evaluated at import time in
+# matplotlib_theme.py and apicalc.py, so 3.10 is a hard floor.
+requires-python = ">=3.10"
 dependencies = [
     "docopt >= 0.6.2",
     "lmfit > 1.0.2",
@@ -28,6 +30,7 @@ dependencies = [
     "natsort >= 7.1.1",
     "plotly >= 5.22.0",
     "scipy >= 1.9.3",
+    "PyQt5 >= 5.15",
     "PyQtWebEngine",
     "msgspec",
     "bitstruct",

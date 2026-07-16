@@ -1,6 +1,6 @@
 # Installation
 
-**wara** runs on Python 3.8 or higher.
+**wara** runs on Python 3.10 or higher.
 
 ## From source
 
