@@ -16,6 +16,18 @@ from . import peaksearch as ps
 from .matplotlib_theme import apply_theme, get_theme, DARK
 from .fit_utils import safe_eval_uncertainty
 
+# Public surface of `from wara.peakfit import *` (re-exported by wara/__init__).
+# Without this, the star import also dragged np/pd/lmfit/json/re into the
+# top-level wara namespace.
+__all__ = [
+    "PeakFit",
+    "GaussianComponents",
+    "AddPeaks",
+    "consecutive",
+    "auto_range",
+    "auto_scan",
+]
+
 
 class PeakFit:
     def __init__(
