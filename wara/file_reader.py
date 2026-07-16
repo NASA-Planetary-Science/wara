@@ -585,8 +585,8 @@ class ReadMultiScanTlist:
             df = pd.DataFrame(columns=cols, data=split_data, dtype=np.float64)
             self.df = df
         except (ValueError, TypeError) as e:
-            print("ERROR: Could not open file")
-            print("An unknown error occurred:", str(e))
+            raise ValueError(
+                f"Could not parse time-list data from {self.file}") from e
    
 
 class ReadCaenListMode:

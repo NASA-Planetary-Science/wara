@@ -282,7 +282,9 @@ class Spectrum:
             self.counts_err = np.roll(self.counts_err, shift=by)
             self.counts_err[by:] = self.counts_err[by - 1]
         else:
-            print("No shift applied")
+            import warnings
+            warnings.warn("gain_shift: shift of 0 requested; spectrum "
+                          "unchanged.", stacklevel=2)
             
     def normalize(self, by="counts"):
         """

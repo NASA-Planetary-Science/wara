@@ -722,11 +722,7 @@ def create_directory(directory):
     None.
 
     """
-    if not os.path.exists(directory):
-        os.makedirs(directory)
-        print(f"Directory '{directory}' created successfully.")
-    else:
-        print(f"Directory '{directory}' already exists.")
+    os.makedirs(directory, exist_ok=True)
 
 
 def data_cleanup(runs_dict):

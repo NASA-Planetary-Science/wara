@@ -379,9 +379,10 @@ class ListModeDataReader:
                     header_words
                 )
                 event_header.update(**event_values)
-            except KeyError:
-                print("Something went wrong with the binary data.", flush=True)
-                raise
+            except KeyError as e:
+                raise ValueError(
+                    f"Unrecognized extra-header length {extra_header_length} "
+                    "in binary event data") from e
 
         trace_length = event_length - header_length
         if trace_length:

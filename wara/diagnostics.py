@@ -1,6 +1,8 @@
 """
 """
 
+import warnings
+
 import numpy as np
 import matplotlib.pyplot as plt
 import pandas as pd
@@ -147,7 +149,8 @@ class Diagnostics:
             except Exception:
                 search = None
             if search is None:
-                print(f"SEARCH: No fit available for run number {i}")
+                warnings.warn(f"SEARCH: no fit available for run number {i}",
+                              stacklevel=2)
             else:
                 try:
                     fit = pf.PeakFit(search=search, xrange=[xmid - width, xmid + width])
@@ -162,7 +165,8 @@ class Diagnostics:
                         area_err = fit.peak_err[0]["area_err1"]
                         fwhm = info["fwhm1"]
                 except Exception:
-                    print(f"FIT: No fit available for run number {i}")
+                    warnings.warn(f"FIT: no fit available for run number {i}",
+                                  stacklevel=2)
 
             # max val
             mx = int(xnew - width) + np.argmax(
@@ -192,11 +196,13 @@ class Diagnostics:
             if s.livetime is not None:
                 livetime += s.livetime
             else:
-                print(f"No live time available for file number {i}")
+                warnings.warn(f"No live time available for file number {i}",
+                              stacklevel=2)
             if s.realtime is not None:
                 realtime += s.realtime
             else:
-                print(f"No real time available for file number {i}")
+                warnings.warn(f"No real time available for file number {i}",
+                              stacklevel=2)
             if s.energy_cal is not None:
                 ecal = s.energy_cal
             else:

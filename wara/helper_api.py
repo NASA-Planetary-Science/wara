@@ -9,6 +9,7 @@ from wara import read_parquet_api
 from wara import apicalc as api
 from wara import list_mode_data_reader
 import os
+import warnings
 import json
 
 
@@ -77,7 +78,8 @@ def read_trace_data(date, runnr):
     # load data
     files = list(file_path.glob("trace-data/*.bin"))
     if len(files) == 0:
-        print("ERROR: No trace binary files found")
+        raise FileNotFoundError(
+            f"No trace binary files (*.bin) found in {file_path / 'trace-data'}")
     df = list_mode_data_reader.read_list_mode_data(files)
     return df
 
@@ -87,12 +89,14 @@ def read_binary_data(date, runnr):
     # load data
     files = list(file_path.glob("binary-data/*.bin"))
     if len(files) == 0:
-        print("ERROR: No binary files found")
+        raise FileNotFoundError(
+            f"No binary files (*.bin) found in {file_path / 'binary-data'}")
     try:
         files_sorted = sorted(files, key=lambda x: int(x.name[-9:-4]))
     except Exception:
         files_sorted = files
-        print("WARNING: Could not sort binary files")
+        warnings.warn("Could not sort binary files by run index; "
+                      "processing them in glob order.", stacklevel=2)
     df = list_mode_data_reader.read_list_mode_data(files_sorted)
     return df
 
@@ -232,11 +236,7 @@ def create_directory(directory):
     Parameters:
     directory (str): Directory path to check/create.
     """
-    if not os.path.exists(directory):
-        os.makedirs(directory)
-        print(f"Directory '{directory}' created successfully.")
-    else:
-        print(f"Directory '{directory}' already exists.")
+    os.makedirs(directory, exist_ok=True)
 
 
 def data_reduction(dates, run_numbers, new_date, new_run_number, ch):

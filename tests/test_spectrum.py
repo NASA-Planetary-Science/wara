@@ -236,12 +236,11 @@ class TestGainShift:
         spec_no_cal.gain_shift(by=-10)
         assert np.all(spec_no_cal.counts[-10:] == spec_no_cal.counts[-11])
 
-    def test_zero_shift_does_nothing(self, spec_no_cal, capsys):
+    def test_zero_shift_does_nothing(self, spec_no_cal):
         counts_before = spec_no_cal.counts.copy()
-        spec_no_cal.gain_shift(by=0)
+        with pytest.warns(UserWarning, match="shift of 0"):
+            spec_no_cal.gain_shift(by=0)
         assert np.array_equal(spec_no_cal.counts, counts_before)
-        captured = capsys.readouterr()
-        assert "No shift applied" in captured.out
 
     def test_energy_shift(self, spec_with_cal):
         counts_before = spec_with_cal.counts.copy()

@@ -24,8 +24,7 @@ def get_files_in_path(date, runnr, folder="binary-data", data_path_txt=None):
     # TODO: merge with read_parquet_file
     DATE = dateparser.parse(date)
     if DATE is None:
-        print(f"ERROR: cannot parse date '{date}'")
-        return []
+        raise ValueError(f"Cannot parse date '{date}'")
     date_dir = f"{DATE.year}-{DATE.month:02d}-{DATE.day:02d}"
     fname = f"RUN-{DATE.year}-{DATE.month:02d}-{DATE.day:02d}-{runnr:05d}"
     for DATA_PATH in get_data_path(data_path_txt):
@@ -41,8 +40,7 @@ def load_parquet_data_files(date, runnr, data_path_txt=None):
     # only channels 4 (LaBr==True) and 5 (LaBr==False)
     DATE = dateparser.parse(date)
     if DATE is None:
-        print(f"ERROR: cannot parse date '{date}'")
-        return []
+        raise ValueError(f"Cannot parse date '{date}'")
     date_dir = f"{DATE.year}-{DATE.month:02d}-{DATE.day:02d}"
     fname = f"RUN-{DATE.year}-{DATE.month:02d}-{DATE.day:02d}-{runnr:05d}"
     for DATA_PATH in get_data_path(data_path_txt):

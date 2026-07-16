@@ -31,6 +31,7 @@ All the information of the binary file encoding was taken from the file
 import numpy as np
 import time
 import struct
+import warnings
 from wara import spectrum as sp
 
 
@@ -134,7 +135,8 @@ def read_cnf_file(filename, write_output=False):
 
             # For known sections: section header ir repeated in section block
             if sec_id_header != uint32_at(f, sec_loc):
-                print("File {}: Format error\n".format(filename))
+                warnings.warn(f"File {filename}: format error (section header "
+                              "mismatch); data may be incomplete.", stacklevel=2)
 
     # Once the file is read, some derived magnitudes can be obtained
 
