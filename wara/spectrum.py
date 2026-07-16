@@ -211,21 +211,37 @@ class Spectrum:
         """
         Rebins data by adding 'by' adjacent bins at a time.
         Errors are propagated in quadrature.
+        If the number of channels is not divisible by 'by', the leftover
+        trailing channels are dropped (with a warning).
         """
-        new_size = int(self.counts.shape[0] / by)
-        new_cts = self.counts.reshape((new_size, -1)).sum(axis=1)
+        by = int(by)
+        if by < 1:
+            raise ValueError(f"'by' must be a positive integer, got {by}")
+        new_size = self.counts.shape[0] // by
+        if new_size == 0:
+            raise ValueError(
+                f"Cannot rebin {self.counts.shape[0]} channels by {by}: "
+                "fewer channels than the bin width.")
+        n = new_size * by
+        if n != self.counts.shape[0]:
+            import warnings
+            warnings.warn(
+                f"rebin: {self.counts.shape[0]} channels not divisible by "
+                f"{by}; dropping the last {self.counts.shape[0] - n} "
+                "channel(s).", stacklevel=2)
+        new_cts = self.counts[:n].reshape((new_size, -1)).sum(axis=1)
         # errors add in quadrature across combined bins
-        new_err = np.sqrt((self.counts_err**2).reshape((new_size, -1)).sum(axis=1))
+        new_err = np.sqrt((self.counts_err[:n]**2).reshape((new_size, -1)).sum(axis=1))
         self.counts = new_cts
         self.counts_err = new_err
         self.channels = np.arange(0, len(new_cts), 1)
         # Average the real ADC coordinate over each combined bin so it stays
         # aligned 1:1 with the rebinned counts.
         if self.adc_channels is not None:
-            self.adc_channels = self.adc_channels.reshape((new_size, -1)).mean(axis=1)
+            self.adc_channels = self.adc_channels[:n].reshape((new_size, -1)).mean(axis=1)
 
         if self.energies is not None:
-            new_erg = self.energies.reshape((new_size, -1)).mean(axis=1)
+            new_erg = self.energies[:n].reshape((new_size, -1)).mean(axis=1)
             self.energies = new_erg
             self.x = new_erg
         else:

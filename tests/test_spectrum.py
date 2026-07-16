@@ -201,6 +201,26 @@ class TestRebin:
         spec_no_cal.rebin(by=2)
         assert np.array_equal(spec_no_cal.x, spec_no_cal.channels)
 
+    def test_rebin_non_divisible_drops_tail_with_warning(self):
+        spec = Spectrum(counts=np.arange(10, dtype=float),
+                        energies=np.arange(10, dtype=float))
+        with pytest.warns(UserWarning, match="dropping the last 1"):
+            spec.rebin(by=3)
+        assert len(spec.counts) == 3
+        assert len(spec.energies) == 3
+        # Only the trailing leftover channel (value 9) is dropped.
+        assert np.isclose(spec.counts.sum(), np.arange(9).sum())
+
+    def test_rebin_by_larger_than_spectrum_raises(self):
+        spec = Spectrum(counts=np.ones(4))
+        with pytest.raises(ValueError, match="fewer channels"):
+            spec.rebin(by=5)
+
+    def test_rebin_nonpositive_by_raises(self):
+        spec = Spectrum(counts=np.ones(8))
+        with pytest.raises(ValueError, match="positive integer"):
+            spec.rebin(by=0)
+
 
 # ---------------------------------------------------------------------------
 # gain_shift()
