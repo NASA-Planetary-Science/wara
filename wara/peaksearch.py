@@ -377,76 +377,86 @@ class PeakSearch:
 
     def calculate_fast(self):
         """
-        Fast peak finding using segmented FFT convolution with km-style
-        normalization. Approximates calculate_km using overlapping segments
-        with locally constant sigma. Primary output is peaks_idx and snr.
-        Decomposition components are not computed.
+        Fast peak finding approximating calculate_km with FFT convolutions.
+
+        Uses the same edge-differenced Gaussian-derivative kernel (a
+        symmetric Mexican-hat) and pos/neg normalization as calculate_km,
+        but evaluated at a small geometric ladder of sigma scales spanning
+        the fwhm curve. Each scale is convolved over the full array, and the
+        per-channel SNR is linearly interpolated between the two scales
+        bracketing that channel's own sigma. The SNR is therefore smooth by
+        construction — earlier segmented versions stitched hard boundaries
+        between locally-constant-sigma blocks, and the seam discontinuity
+        could split one physical peak into two reported maxima.
+
+        Primary output is peaks_idx and snr. Decomposition components are
+        not computed.
         """
         from scipy.signal import fftconvolve
-    
+
         if self.spectrum.cps and self.spectrum.livetime is not None:
             spect_cts = self.spectrum.counts * self.spectrum.livetime
         else:
             spect_cts = self.spectrum.counts
-    
+
         channels = self.spectrum.channels[self.channel_idx]
         counts = spect_cts[self.channel_idx]
         n = len(counts)
-    
-        fwhm_vals = self.fwhm(channels)
-        sigma_vals = fwhm_vals / 2.355
+
         sigma_min = 0.5
-    
-        snr = np.zeros(n)
-        n_segments = 100
-        segment_size = n // n_segments
-    
-        for seg in range(n_segments):
-            i_start = seg * segment_size
-            i_end = min(n, (seg + 1) * segment_size)
-            mid = (i_start + i_end) // 2
-            sigma = max(sigma_min, sigma_vals[mid])
-    
-            kernel_half_width = max(3, int(4 * sigma))
-            kernel_x = np.arange(-kernel_half_width, kernel_half_width + 1, dtype=float)
-    
-            # Match calculate_km normalization
-            kernel_raw = -kernel_x * np.exp(-0.5 * (kernel_x / sigma) ** 2)
+        sigma_vals = np.maximum(self.fwhm(channels) / 2.355, sigma_min)
+
+        # Geometric ladder of scales; ratio 1.15 keeps the matched-filter
+        # mismatch between neighboring scales negligible.
+        s_lo, s_hi = sigma_vals.min(), sigma_vals.max()
+        if s_hi / s_lo > 1.0:
+            n_scales = int(np.ceil(np.log(s_hi / s_lo) / np.log(1.15))) + 1
+            n_scales = max(n_scales, 2)
+        else:
+            n_scales = 1
+        scales = np.geomspace(s_lo, s_hi, n_scales)
+
+        snr_scales = np.empty((n_scales, n))
+        for k, sigma in enumerate(scales):
+            half_width = max(3, int(np.ceil(4 * sigma)))
+            u = np.arange(-half_width, half_width + 1, dtype=float)
+            # Same kernel as calculate_km: difference of the Gaussian first
+            # derivative across each bin's edges, centered so it is exactly
+            # symmetric (correlation == convolution).
+            g1_lo = gaussian_derivative(u - 0.5, 0.0, sigma)
+            g1_hi = gaussian_derivative(u + 0.5, 0.0, sigma)
+            kernel_raw = g1_lo - g1_hi
             kern_pos = kernel_raw.clip(0)
             kern_neg = -kernel_raw.clip(-np.inf, 0)
             if kern_neg.sum() > 0:
                 kern_neg *= kern_pos.sum() / kern_neg.sum()
             kernel = kern_pos - kern_neg
-    
-            # Convolve with full spectrum for correct boundary behavior
-            conv = fftconvolve(counts, kernel, mode="same")
-    
-            # Noise matching calculate_km: sqrt(kernel^2 @ counts)
-            noise_conv = fftconvolve(counts, kernel ** 2, mode="same")
-            noise = np.sqrt(np.abs(noise_conv))
+
+            signal = fftconvolve(counts, kernel, mode="same")
+            noise = np.sqrt(np.abs(fftconvolve(counts, kernel**2, mode="same")))
             noise[noise == 0] = 1
-    
-            snr[i_start:i_end] = (conv / noise)[i_start:i_end]
-    
+            snr_scales[k] = signal / noise
+
+        if n_scales == 1:
+            snr = snr_scales[0]
+        else:
+            # Blend the two scales bracketing each channel's sigma.
+            pos = np.interp(np.log(sigma_vals), np.log(scales),
+                            np.arange(n_scales))
+            k0 = np.clip(pos.astype(int), 0, n_scales - 2)
+            frac = pos - k0
+            cols = np.arange(n)
+            snr = (1 - frac) * snr_scales[k0, cols] + frac * snr_scales[k0 + 1, cols]
+
         clipped_snr = snr.clip(0)
         peaks_idx = find_peaks(clipped_snr, height=self.min_snr)[0]
 
         # Reject matched-filter ringing at the data edges (incl. the
-        # zero-padded FFT boundaries) before refining. See _edge_guard_mask.
+        # zero-padded FFT boundaries). See _edge_guard_mask.
         peaks_idx = peaks_idx[self._edge_guard_mask(peaks_idx, channels, counts)]
 
-        # Refine peak positions using local argmax within fwhm window
-        refined_peaks = []
-        for idx in peaks_idx:
-            fwhm_local = int(self.fwhm(channels[idx]))
-            i_start = max(0, idx - fwhm_local)
-            i_end = min(n, idx + fwhm_local)
-            local_max = np.argmax(counts[i_start:i_end]) + i_start
-            refined_peaks.append(local_max)
-    
-        refined_peaks = np.array(refined_peaks) if refined_peaks else np.array([], dtype=int)
         self.snr = clipped_snr
-        self.peaks_idx = channels[refined_peaks] if self.xrange is not None else refined_peaks
+        self.peaks_idx = channels[peaks_idx] if self.xrange is not None else peaks_idx
         self.fwhm_guess = self.fwhm(self.peaks_idx)
     
     def _get_x(self):
