@@ -7,7 +7,7 @@ from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
 from PyQt5.QtWidgets import (
     QWidget, QLabel, QPushButton, QVBoxLayout, QHBoxLayout, QFrame,
     QSizePolicy, QCheckBox, QSpinBox, QDoubleSpinBox, QComboBox,
-    QScrollArea, QLineEdit,
+    QScrollArea, QLineEdit, QDialog,
 )
 from PyQt5.QtCore import Qt, pyqtSignal
 
@@ -671,6 +671,66 @@ class CustomizePanel(QFrame):
         self.btn_labels.setCursor(Qt.PointingHandCursor); lay.addWidget(self.btn_labels)
 
 
+class DatabaseListDialog(QDialog):
+    """Pop-up picker for the gamma-ray line databases used by Isotope ID.
+
+    Edits a scratch copy of the selection (its own checkboxes, seeded from
+    the real ones) so toggling boxes here doesn't re-identify on every click.
+    The real checkboxes — and one ``changed`` — are only updated if the user
+    clicks OK; Cancel (or closing the window) discards the edits."""
+
+    def __init__(self, db_checks, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Database list")
+        self.setStyleSheet(T.STYLESHEET)
+        self.db_checks = db_checks
+        self._scratch = {}
+        lay = QVBoxLayout(self)
+        lay.addWidget(header("DATABASES"))
+
+        btn_row = QHBoxLayout(); btn_row.setContentsMargins(0, 0, 0, 0); btn_row.setSpacing(4)
+        btn_row.addStretch(1)
+        btn_all = QPushButton("All"); btn_none = QPushButton("None")
+        for b in (btn_all, btn_none):
+            b.setObjectName("mini_btn"); b.setCursor(Qt.PointingHandCursor)
+            btn_row.addWidget(b, 0)
+        lay.addLayout(btn_row)
+        btn_all.clicked.connect(lambda: self._set_all(True))
+        btn_none.clicked.connect(lambda: self._set_all(False))
+
+        for name, real_cb in db_checks.items():
+            cb = QCheckBox(); cb.setChecked(real_cb.isChecked())
+            cb.setToolTip(f"Include the '{name}' library in identification")
+            self._scratch[name] = cb
+            row = QWidget()
+            h = QHBoxLayout(row); h.setContentsMargins(0, 0, 0, 0); h.setSpacing(6)
+            lbl = QLabel(name)
+            lbl.setToolTip(cb.toolTip())
+            lbl.setCursor(Qt.PointingHandCursor)
+            lbl.mousePressEvent = lambda _e, c=cb: c.toggle()
+            h.addWidget(cb, 0); h.addWidget(lbl, 1)
+            lay.addWidget(row)
+
+        btns = QHBoxLayout(); btns.addStretch(1)
+        btn_cancel = QPushButton("Cancel"); btn_cancel.setObjectName("mini_btn")
+        btn_cancel.setCursor(Qt.PointingHandCursor)
+        btn_cancel.clicked.connect(self.reject)
+        btn_ok = QPushButton("OK"); btn_ok.setObjectName("open_btn")
+        btn_ok.setCursor(Qt.PointingHandCursor)
+        btn_ok.clicked.connect(self.accept)
+        btns.addWidget(btn_cancel); btns.addWidget(btn_ok)
+        lay.addLayout(btns)
+
+    def _set_all(self, state):
+        for cb in self._scratch.values():
+            cb.setChecked(state)
+
+    def accept(self):
+        for name, cb in self._scratch.items():
+            self.db_checks[name].setChecked(cb.isChecked())
+        super().accept()
+
+
 class IsotopeIDPanel(QFrame):
     """Collapsible options revealed under 'Isotope ID': the on/off toggle, the
     set of nuclear databases to consult, an atomic-number (Z) range to restrict
@@ -698,28 +758,27 @@ class IsotopeIDPanel(QFrame):
         lay.addWidget(self.cb_enable)
 
         # ── Databases ────────────────────────────────────────────────
-        # Header labels use a non-wrapping font; let them shrink (Ignored width)
-        # so they never force the panel wider than the fixed options column.
-        db_hdr = header("DATABASES")
-        db_hdr.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
-        hdr = QHBoxLayout(); hdr.setContentsMargins(0, 0, 0, 0); hdr.setSpacing(4)
-        hdr.addWidget(db_hdr, 1)
-        self.btn_all = QPushButton("All"); self.btn_none = QPushButton("None")
-        for b in (self.btn_all, self.btn_none):
-            b.setObjectName("mini_btn"); b.setCursor(Qt.PointingHandCursor)
-            hdr.addWidget(b, 0)
-        hdr_box = QWidget(); hdr_box.setLayout(hdr); lay.addWidget(hdr_box)
-
+        # The per-database checkboxes used to sit inline here, cluttering the
+        # panel; they now live in a pop-up dialog opened on demand, with a
+        # summary label showing how many are selected.
         # Lazy import so opening the GUI doesn't pull in the heavy identifier
         # (and its pandas/NIST parsing) until the Spectrum tab is built.
         from wara.nuclide_identificator import DATABASES
         self.db_checks = {}
         for name in DATABASES:
-            row, cb = self._db_row(name)
+            cb = QCheckBox(); cb.setChecked(True)
+            cb.toggled.connect(self._on_change)
             self.db_checks[name] = cb
-            lay.addWidget(row)
-        self.btn_all.clicked.connect(lambda: self._set_all(True))
-        self.btn_none.clicked.connect(lambda: self._set_all(False))
+
+        self.btn_databases = QPushButton("Database list…"); self.btn_databases.setObjectName("action_btn")
+        self.btn_databases.setToolTip("Choose which gamma-ray line databases to consult")
+        self.btn_databases.setCursor(Qt.PointingHandCursor)
+        lay.addWidget(self.btn_databases)
+        self.lbl_db_summary = QLabel(); self.lbl_db_summary.setObjectName("stat_key")
+        self.lbl_db_summary.setAlignment(Qt.AlignCenter)
+        lay.addWidget(self.lbl_db_summary)
+        self.btn_databases.clicked.connect(self._open_database_dialog)
+        self._update_db_summary()
 
         lay.addWidget(hsep())
 
@@ -752,23 +811,24 @@ class IsotopeIDPanel(QFrame):
         self.btn_export.setCursor(Qt.PointingHandCursor)
         lay.addWidget(self.btn_export)
 
-    def _db_row(self, name):
-        """A database row: an indicator-only checkbox beside a word-wrapping
-        label (so long library names wrap instead of overflowing the fixed-width
-        options column). Clicking the label toggles the checkbox."""
-        row = QWidget()
-        h = QHBoxLayout(row); h.setContentsMargins(0, 0, 0, 0); h.setSpacing(6)
-        cb = QCheckBox(); cb.setChecked(True)
-        cb.setToolTip(f"Include the '{name}' library in identification")
-        cb.toggled.connect(self._on_change)
-        lbl = QLabel(name); lbl.setWordWrap(True)
-        lbl.setToolTip(cb.toolTip())
-        # Don't let the longest name dictate the panel's minimum width.
-        lbl.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
-        lbl.setCursor(Qt.PointingHandCursor)
-        lbl.mousePressEvent = lambda _e, c=cb: c.toggle()
-        h.addWidget(cb, 0, Qt.AlignTop); h.addWidget(lbl, 1)
-        return row, cb
+    def _open_database_dialog(self):
+        """Open the pop-up database picker; refresh the summary label and emit
+        a single ``changed`` afterwards if the selection actually changed."""
+        before = self.selected_databases()
+        self._bulk = True   # OK reconciles every checkbox; suppress per-box signals
+        try:
+            dlg = DatabaseListDialog(self.db_checks, self)
+            dlg.exec_()
+        finally:
+            self._bulk = False
+        self._update_db_summary()
+        if self.selected_databases() != before:
+            self._on_change()
+
+    def _update_db_summary(self):
+        n = len(self.selected_databases())
+        total = len(self.db_checks)
+        self.lbl_db_summary.setText(f"{n} / {total} selected")
 
     def _on_change(self, *_):
         """Coalesced 'settings changed' notification (suppressed mid-bulk)."""
@@ -784,6 +844,7 @@ class IsotopeIDPanel(QFrame):
                 cb.setChecked(state)
         finally:
             self._bulk = False
+        self._update_db_summary()
         self._on_change()
 
     def selected_databases(self):
