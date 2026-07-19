@@ -359,10 +359,82 @@ class TestApiXyzFull:
         Zns = api_xyz(df_ns, dt_unit="ns", use_det=False)[2]
         np.testing.assert_allclose(Zs, Zns, rtol=1e-9)
 
+    def test_unphysical_events_masked_only_with_detector(self):
+        from wara.apicalc import api_xyz
+        # prompt-gamma-like events: dt ~ 0, so c*dta < |D| and no positive
+        # neutron flight time exists -> NaN with the detector term; the
+        # straight-ray model must keep returning finite values (backup path).
+        df = _xy_df(n=600)
+        df = pd.concat([df, pd.DataFrame({"X2": [0.1, -0.1, 0.0],
+                                          "Y2": [0.0, 0.1, -0.1],
+                                          "dt": [-6e-9] * 3})],
+                       ignore_index=True)
+        _, _, Z_det = api_xyz(df, dt_unit="s", use_det=True)
+        _, _, Z_ray = api_xyz(df, dt_unit="s", use_det=False)
+        assert np.isnan(Z_det[-3:]).all()
+        assert np.isfinite(Z_ray[-3:]).all()
+        # the normal (physical) events stay finite in both models
+        assert np.isfinite(Z_det[:-3]).all()
+
     def test_invalid_dt_unit_raises(self):
         from wara.apicalc import api_xyz
         with pytest.raises(ValueError, match="dt_unit"):
             api_xyz(_xy_df(), dt_unit="minutes")
+
+
+class TestFitToffset:
+    @staticmethod
+    def _front_edge(Z, zrange=(-80, 0), bins=160):
+        """Shallow (closest-to-source) half-max edge of the depth histogram."""
+        Z = Z[np.isfinite(Z)]
+        h, ed = np.histogram(Z, bins=bins, range=zrange)
+        ctr = 0.5 * (ed[:-1] + ed[1:])
+        above = np.flatnonzero(h >= h.max() / 2)
+        return float(ctr[above[-1]])   # largest Z = shallowest
+
+    def test_places_front_face_at_z0(self):
+        from wara.apicalc import api_xyz, fit_toffset
+        df = _xy_df(n=6000, dt_ns=35.0)     # 1 ns sigma -> thin "sample"
+        dt_ns = df["dt"].to_numpy() * 1e9
+        toff = fit_toffset(dt_ns, z0=-25.0, z_t=6.7,
+                           det_pos=(-18.0, 0.0, -25.0), dt_unit="ns")
+        _, _, Z = api_xyz(df, det_pos=(-18.0, 0.0, -25.0), toffset=toff * 1e-9,
+                          dt_unit="s", use_det=True)
+        # the front (shallow) edge of the depth distribution is the promise
+        assert abs(self._front_edge(Z) - (-25.0)) < 8.0
+
+    def test_peak_anchor_places_mode_at_z0(self):
+        from wara.apicalc import api_xyz, fit_toffset
+        df = _xy_df(n=6000, dt_ns=35.0)
+        dt_ns = df["dt"].to_numpy() * 1e9
+        toff = fit_toffset(dt_ns, z0=-25.0, z_t=6.7,
+                           det_pos=(-18.0, 0.0, -25.0), dt_unit="ns",
+                           anchor="peak")
+        _, _, Z = api_xyz(df, det_pos=(-18.0, 0.0, -25.0), toffset=toff * 1e-9,
+                          dt_unit="s", use_det=True)
+        Zf = Z[np.isfinite(Z)]
+        h, ed = np.histogram(Zf, bins=160, range=(-80, 0))
+        zmode = float(0.5 * (ed[:-1] + ed[1:])[np.argmax(h)])
+        assert abs(zmode - (-25.0)) < 8.0
+
+    def test_invalid_anchor_raises(self):
+        from wara.apicalc import fit_toffset
+        with pytest.raises(ValueError, match="anchor"):
+            fit_toffset([1.0], anchor="median")
+
+    def test_units_consistent(self):
+        from wara.apicalc import fit_toffset
+        rng = np.random.default_rng(1)
+        dt_s = rng.normal(30e-9, 2e-9, 2000)
+        t_s = fit_toffset(dt_s, dt_unit="s")
+        t_ns = fit_toffset(dt_s * 1e9, dt_unit="ns")
+        assert t_ns == pytest.approx(t_s * 1e9, rel=1e-6)
+
+    def test_empty_and_bad_unit(self):
+        from wara.apicalc import fit_toffset
+        assert fit_toffset([], dt_unit="ns") == 0.0
+        with pytest.raises(ValueError, match="dt_unit"):
+            fit_toffset([1.0], dt_unit="minutes")
 
 
 class TestApiXyzSimpleStillAvailable:

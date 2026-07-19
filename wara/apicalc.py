@@ -1017,7 +1017,9 @@ def api_xyz(
     Returns
     -------
     (X, Y, Z) : tuple of numpy.ndarray
-        Interaction coordinates in **cm**.
+        Interaction coordinates in **cm**. With ``use_det=True``, events whose
+        timing is inconsistent with a real interaction (no positive neutron
+        and gamma flight times -- e.g. prompt source gammas) are NaN.
     """
     if not isinstance(df, pd.DataFrame):
         raise TypeError("df must be a pandas dataframe")
@@ -1069,6 +1071,13 @@ def api_xyz(
         B2 = -(2.0 * c * c * dta - 2.0 * (dx * vnx + dy * vny + dz * vnz))
         C2 = c * c * dta * dta - (dx * dx + dy * dy + dz * dz)
         t_n = (-B2 - np.sqrt(B2 * B2 - 4.0 * A2 * C2)) / (2.0 * A2)
+        # Events whose dt is inconsistent with any real neutron interaction
+        # (e.g. prompt source gammas: c*dta < |D|, the gamma alone could not
+        # reach the detector in time) get a negative flight time from this
+        # root; a spurious root also has a negative gamma time. Mask both to
+        # NaN instead of placing them on a mirrored cone above the source.
+        with np.errstate(invalid="ignore"):
+            t_n = np.where((t_n > 0.0) & (dta - t_n >= 0.0), t_n, np.nan)
     else:
         # straight ray: |n| = v_n * dt_a  ->  |v_n_vec| * t_n = v_n * dt_a
         vmag = np.sqrt(vnx * vnx + vny * vny + vnz * vnz)
@@ -1078,6 +1087,108 @@ def api_xyz(
     Y = vny * t_n * 100.0
     Z = vnz * t_n * 100.0
     return X, Y, Z
+
+
+def fit_toffset(
+    dt,
+    z0=-25.0,
+    z_t=6.7,
+    det_pos=None,
+    dt_unit="ns",
+    bins=400,
+    relativistic=True,
+    anchor="edge",
+):
+    r"""Timing offset that places the ``dt`` peak's front face at depth ``z0``.
+
+    The raw alpha-gamma time difference carries an arbitrary electronic zero
+    (the ROOTS "z-align" constant), so the absolute depth scale of
+    :func:`api_xyz` must be calibrated. This picks the offset that puts an
+    anchor point of the ``dt`` distribution at ``z0`` cm along the central
+    (straight-down) ray: ``toffset = dt_anchor + t_alpha_central - t_target``
+    with ``t_alpha_central = z_t / v_alpha`` and ``t_target = |z0| / v_n``
+    (plus the gamma flight time from ``(0, 0, z0)`` to ``det_pos`` when a
+    detector position is given, matching the ``use_det=True`` model).
+
+    The default anchor is the **rising edge** of the dominant peak (first
+    crossing of half its maximum), which corresponds to the sample's *front
+    face* -- the earliest neutrons to interact. Anchoring the peak maximum
+    instead (``anchor="peak"``) is only correct for thin samples; for a thick
+    sample the maximum lies inside it, the offset comes out too large, and the
+    early events collapse onto the source point (an artificial bright spike at
+    the cone apex).
+
+    Parameters
+    ----------
+    dt : array-like
+        Measured alpha-gamma time differences (the raw ``dt`` column).
+    z0 : float
+        Depth [cm] the anchor should land at (negative = below the source,
+        matching the :func:`api_xyz` convention). With the default anchor this
+        is the depth of the sample's front face.
+    z_t : float
+        Source-to-YAP-face distance [cm].
+    det_pos : (x, y, z) or None
+        Gamma-detector centre [cm]. When given, the gamma flight time from the
+        target point is included (use with ``api_xyz(use_det=True)``).
+    dt_unit : {"s", "ns"}
+        Unit of ``dt`` -- the returned offset uses the same unit.
+    bins : int
+        Histogram bins used to locate the anchor (over the 0.2--99.8
+        percentile range).
+    relativistic : bool
+        Use relativistic particle speeds (as :func:`api_xyz` does by default).
+    anchor : {"edge", "peak"}
+        "edge" (default): rising half-maximum of the dominant peak (front
+        face). "peak": the most populated bin.
+
+    Returns
+    -------
+    float
+        The timing offset, in ``dt_unit`` units, to pass to :func:`api_xyz`
+        as ``toffset``.
+    """
+    if dt_unit == "ns":
+        scale = 1e-9
+    elif dt_unit == "s":
+        scale = 1.0
+    else:
+        raise ValueError("dt_unit must be 's' or 'ns'")
+    if anchor not in ("edge", "peak"):
+        raise ValueError("anchor must be 'edge' or 'peak'")
+    dt = np.asarray(dt, dtype=float)
+    dt = dt[np.isfinite(dt)]
+    if dt.size == 0:
+        return 0.0
+    lo, hi = np.percentile(dt, [0.2, 99.8])
+    if hi <= lo:
+        peak = float(dt[0]) * scale
+    else:
+        h, ed = np.histogram(dt, bins=bins, range=(lo, hi))
+        ctr = 0.5 * (ed[:-1] + ed[1:])
+        imax = int(np.argmax(h))
+        if anchor == "peak":
+            peak = float(ctr[imax]) * scale
+        else:
+            # first rising crossing of half-max, linearly interpolated
+            half = h[imax] / 2.0
+            below = np.flatnonzero(h[: imax + 1] < half)
+            if below.size == 0:
+                peak = float(ctr[0]) * scale
+            else:
+                i = int(below[-1])          # last bin below half before the peak
+                frac = (half - h[i]) / max(h[i + 1] - h[i], 1)
+                peak = float(ctr[i] + frac * (ctr[i + 1] - ctr[i])) * scale
+
+    va = _speed(_E_ALPHA, _M_ALPHA, relativistic)
+    vn = _speed(_E_NEUTRON, _M_NEUTRON, relativistic)
+    t_alpha_central = (z_t / 100.0) / va
+    t_target = (abs(z0) / 100.0) / vn
+    if det_pos is not None:
+        d = np.asarray(det_pos, dtype=float) / 100.0
+        n = np.array([0.0, 0.0, -abs(z0) / 100.0])
+        t_target += float(np.linalg.norm(d - n)) / SC.c
+    return (peak + t_alpha_central - t_target) / scale
 
 
 def api_xyz_simple(df, det_pos=[0, 22.2, -25.515], toffset=None, use_det=True):

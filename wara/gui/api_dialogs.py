@@ -6,7 +6,8 @@ per-run statistics table. The heavyweight dialogs live in their own modules
 from PyQt5.QtWidgets import (
     QDialog, QDialogButtonBox, QGridLayout, QHBoxLayout, QHeaderView, QLabel,
     QLineEdit, QPushButton, QSizePolicy, QTableWidget, QTableWidgetItem,
-    QVBoxLayout, QWidget, QColorDialog, QAbstractItemView,
+    QVBoxLayout, QWidget, QColorDialog, QAbstractItemView, QComboBox,
+    QCheckBox,
 )
 from PyQt5.QtGui import QColor
 from PyQt5.QtCore import Qt
@@ -121,20 +122,35 @@ class EnergySelectionDialog(QDialog):
 class Api3DDialog(QDialog):
     """Pop-out Plotly volume render of the reconstructed X-Y-Z hit cloud.
 
-    Port of the legacy ``WindowAPI3D`` / ``create_plot_api3D``. The controller
-    fills :attr:`browser` (a ``QWebEngineView``) with a Plotly ``Volume`` figure
-    built from the *current* (filtered) event dataframe; the controls here only
-    set the histogram resolution and isosurface look. Like the legacy window the
-    gamma-detector position is ignored (``api_xyz(use_det=False)``), so no
-    detector-position fields are exposed."""
+    Port of the legacy ``WindowAPI3D`` / ``create_plot_api3D``, upgraded to the
+    full ``apicalc.api_xyz`` reconstruction. The controller fills
+    :attr:`browser` (a ``QWebEngineView``) with a Plotly ``Volume`` figure built
+    from the *current* (filtered) event dataframe. The right-hand controls set
+    the histogram resolution / isosurface look plus the reconstruction
+    geometry: the gamma-detector position relative to the neutron source (used
+    by the default "Full (detector)" model), the source-YAP distance, the beam
+    energy, and the depth calibration. "Simple (no detector)" is the previous
+    behaviour (straight-ray, detector ignored), kept as the backup model."""
 
-    # (label, attribute, default) for the numeric controls.
+    # (label, attribute, default) for the numeric render controls.
     FIELDS = [
         ("No. of bins", "no_bins", "50"),
         ("Iso min", "isomin", "0.1"),
         ("Iso max", "isomax", "0.8"),
         ("Opacity", "opacity", "0.1"),
         ("Surface count", "surfcount", "20"),
+    ]
+
+    # (label, attribute, default) for the reconstruction-geometry controls.
+    # Frame: origin at the neutron source, +z up toward the YAP, sample at -z.
+    RECON_FIELDS = [
+        ("Det X [cm]", "det_x", "-18"),
+        ("Det Y [cm]", "det_y", "0"),
+        ("Det Z [cm]", "det_z", "-25"),
+        ("Src-YAP [cm]", "z_t", "6.7"),
+        ("Beam [keV]", "beam_kev", "50"),
+        ("Sample Z [cm]", "sample_z", ""),
+        ("t offset [ns]", "toffset", ""),
     ]
 
     def __init__(self, parent=None):
@@ -144,7 +160,9 @@ class Api3DDialog(QDialog):
         # Maximise/minimise help when orbiting the volume.
         self.setWindowFlag(Qt.WindowMaximizeButtonHint, True)
         self.setWindowFlag(Qt.WindowMinimizeButtonHint, True)
-        self.resize(1040, 700)
+        # Tall enough for the render + reconstruction controls and the status
+        # messages under them.
+        self.resize(1040, 800)
 
         # QtWebEngine is imported lazily (as the legacy GUI does via its .ui) so
         # the offscreen test suite never has to load it. AA_ShareOpenGLContexts
@@ -180,8 +198,59 @@ class Api3DDialog(QDialog):
             side.addWidget(row)
             self.fields[attr] = ed
 
+        side.addWidget(header("RECONSTRUCTION"))
+        self.cmb_model = QComboBox()
+        self.cmb_model.addItems(["Full (detector)", "Simple (no detector)"])
+        self.cmb_model.setToolTip(
+            "Full: apicalc.api_xyz with the gamma-detector position (the "
+            "gamma flight time from the interaction point to the detector is "
+            "solved for). Simple: the previous straight-ray reconstruction "
+            "that ignores the detector (backup).")
+        mrow, _ = labeled_row("Model", self.cmb_model)
+        side.addWidget(mrow)
+        for label, attr, default in self.RECON_FIELDS:
+            ed = QLineEdit(default); ed.setFixedWidth(70)
+            row, _ = labeled_row(label, ed)
+            side.addWidget(row)
+            self.fields[attr] = ed
+        self.fields["det_x"].setToolTip(
+            "Gamma-detector centre relative to the neutron source [cm]; "
+            "+z points up toward the YAP, so the sample side is -z.")
+        self.fields["det_y"].setToolTip(self.fields["det_x"].toolTip())
+        self.fields["det_z"].setToolTip(self.fields["det_x"].toolTip())
+        self.fields["z_t"].setToolTip("Neutron source to YAP-face distance [cm]")
+        self.fields["beam_kev"].setToolTip(
+            "Deuteron beam energy [keV] for the center-of-mass correction")
+        self.fields["sample_z"].setToolTip(
+            "Optional: depth [cm] of the sample FRONT FACE. When set (and "
+            "t offset is blank), the timing offset is auto-fitted so the "
+            "rising edge of the dominant dt peak lands at this depth. Leave "
+            "blank if the sample position is unknown.")
+        self.fields["toffset"].setToolTip(
+            "Timing offset [ns] subtracted from dt. A value overrides "
+            "everything; blank with a Sample Z auto-fits the offset; both "
+            "blank uses dt as-is (assumes the dt spectrum is already "
+            "calibrated so 0 ns = production time).")
+
+        self.cb_r2 = QCheckBox("1/r² correction")
+        self.cb_r2.setToolTip(
+            "Weight each event by (r/r_mean)^p, where r is the distance from "
+            "the reconstructed point to the gamma detector -- undoes the "
+            "higher count density on the detector side of the target. p = 2 "
+            "is a point-like 1/r² response; a nearby/large detector behaves "
+            "softer (smaller p). Full (detector) model only.")
+        side.addWidget(self.cb_r2)
+        ed = QLineEdit("2"); ed.setFixedWidth(70)
+        prow, _ = labeled_row("p (2 = 1/r²)", ed)
+        side.addWidget(prow)
+        self.fields["r2_power"] = ed
+        ed.setToolTip(self.cb_r2.toolTip())
+
         self.btn_plot = QPushButton("Plot"); self.btn_plot.setObjectName("open_btn")
         self.btn_plot.setCursor(Qt.PointingHandCursor)
+        # Pressing Enter in any of the option fields re-plots.
+        self.btn_plot.setAutoDefault(True)
+        self.btn_plot.setDefault(True)
         side.addWidget(self.btn_plot)
 
         self.status = QLabel(""); self.status.setObjectName("stat_key")
@@ -198,6 +267,44 @@ class Api3DDialog(QDialog):
             return cast(self.fields[attr].text().strip())
         except (ValueError, KeyError):
             return None
+
+    def recon_params(self):
+        """The reconstruction inputs as a dict, or None if a field is invalid.
+
+        Keys: ``det_pos`` (x, y, z) [cm], ``z_t`` [cm], ``beam_kev``,
+        ``sample_z`` [cm] (float, or None = unknown), ``toffset_ns`` (float,
+        or None = not given), ``use_det`` (bool -- False selects the backup
+        straight-ray model). The timing calibration follows from the two
+        optional fields: a ``toffset_ns`` value wins; else a ``sample_z``
+        auto-fits the offset; both None means dt is used as-is (already
+        calibrated). ``r2_correction`` (bool) and ``r2_power`` (float) drive
+        the optional detector solid-angle weighting."""
+        vals = {}
+        for attr in ("det_x", "det_y", "det_z", "z_t", "beam_kev", "r2_power"):
+            v = self.value(attr, float)
+            if v is None:
+                return None
+            vals[attr] = v
+        # optional fields: blank -> None, anything else must be a number
+        for attr in ("sample_z", "toffset"):
+            txt = self.fields[attr].text().strip()
+            if not txt:
+                vals[attr] = None
+            else:
+                try:
+                    vals[attr] = float(txt)
+                except ValueError:
+                    return None
+        return {
+            "det_pos": (vals["det_x"], vals["det_y"], vals["det_z"]),
+            "z_t": vals["z_t"],
+            "beam_kev": vals["beam_kev"],
+            "sample_z": vals["sample_z"],
+            "toffset_ns": vals["toffset"],
+            "use_det": self.cmb_model.currentIndex() == 0,
+            "r2_correction": self.cb_r2.isChecked(),
+            "r2_power": vals["r2_power"],
+        }
 
 
 class ApplyToDataDialog(QDialog):

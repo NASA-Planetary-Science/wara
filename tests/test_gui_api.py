@@ -50,6 +50,12 @@ class _Stub3DDialog(QWidget):
 
     DEFAULTS = {"no_bins": 12, "isomin": 0.1, "isomax": 0.8,
                 "opacity": 0.1, "surfcount": 10}
+    # Mirrors Api3DDialog.recon_params() with its default field values
+    # (sample_z is set here, unlike the blank GUI default, so the depth
+    # calibration tests exercise the auto-fit path).
+    RECON = {"det_pos": (-18.0, 0.0, -25.0), "z_t": 6.7, "beam_kev": 50.0,
+             "sample_z": -25.0, "toffset_ns": None, "use_det": True,
+             "r2_correction": False, "r2_power": 2.0}
 
     def __init__(self, parent=None):
         super().__init__()
@@ -59,6 +65,9 @@ class _Stub3DDialog(QWidget):
 
     def value(self, attr, cast):
         return cast(self.DEFAULTS[attr])
+
+    def recon_params(self):
+        return dict(self.RECON)
 
 
 class _StubSelDialog:
@@ -362,6 +371,97 @@ def test_3d_xyz_reconstruction_is_finite(api):
     assert len(X) == len(Y) == len(Z) == c.df_current.shape[0]
     assert np.all(np.isfinite(np.asarray(X)))
     assert np.all(np.isfinite(np.asarray(Z)))
+
+
+def test_3d_full_model_calibrates_depth_to_sample_z(api, monkeypatch):
+    """With the auto-fitted t offset, the front (shallow) edge of the depth
+    distribution lands near the dialog's Sample Z depth -- the front-face
+    promise, in cm, so the ns/seconds unit handling in the controller must be
+    right."""
+    _w, c = api
+    c._load()
+    monkeypatch.setattr(api_mod, "Api3DDialog", _Stub3DDialog)
+    c._open_3d()
+    recon = c._api3d_dlg.recon_params()
+    toff = apicalc.fit_toffset(
+        c.df_current[c._dt_key], z0=recon["sample_z"], z_t=recon["z_t"],
+        det_pos=recon["det_pos"], dt_unit="ns")
+    # the promise: an on-axis event at the rising-edge dt reconstructs to
+    # Sample Z. Find the edge the same way fit_toffset does, append central
+    # probe events at that dt, and check where they land (in cm, so the
+    # ns/seconds unit handling in the controller must be right too).
+    dt = c.df_current[c._dt_key].to_numpy(dtype=float)
+    lo, hi = np.percentile(dt, [0.2, 99.8])
+    h, ed = np.histogram(dt, bins=400, range=(lo, hi))
+    ctr = 0.5 * (ed[:-1] + ed[1:])
+    imax = int(np.argmax(h))
+    half = h[imax] / 2.0
+    i = int(np.flatnonzero(h[: imax + 1] < half)[-1])
+    frac = (half - h[i]) / max(h[i + 1] - h[i], 1)
+    dt_edge = ctr[i] + frac * (ctr[i + 1] - ctr[i])
+    probe = c.df_current.iloc[:3].copy()
+    probe["X2"] = 0.0
+    probe["Y2"] = 0.0
+    probe[c._dt_key] = dt_edge
+    c.df_current = pd.concat([c.df_current, probe], ignore_index=True)
+    _, _, Z = c._xyz(recon=recon, toffset_ns=toff)
+    Z = np.asarray(Z, dtype=float)
+    assert np.isfinite(Z[-3:]).all()
+    assert np.allclose(Z[-3:], recon["sample_z"], atol=8.0)   # cm
+
+
+def test_3d_toffset_modes(api, monkeypatch):
+    """Sample Z and t offset are both optional: value in t offset wins; blank
+    t offset with a Sample Z auto-fits; both blank trusts dt (offset 0)."""
+    _w, c = api
+    c._load()
+    monkeypatch.setattr(api_mod, "Api3DDialog", _Stub3DDialog)
+    c._open_3d()
+    calls = []
+    real_fit = apicalc.fit_toffset
+    monkeypatch.setattr(apicalc, "fit_toffset",
+                        lambda *a, **k: (calls.append(1), real_fit(*a, **k))[1])
+    # both blank: dt trusted as calibrated, no auto fit
+    c._api3d_dlg.RECON = dict(_Stub3DDialog.RECON, sample_z=None,
+                              toffset_ns=None)
+    c._create_plot_3d()
+    assert not calls
+    assert "dt used as calibrated" in c._api3d_dlg.status.text()
+    # manual offset only: used directly, still no auto fit
+    c._api3d_dlg.RECON = dict(_Stub3DDialog.RECON, sample_z=None,
+                              toffset_ns=3.0)
+    c._create_plot_3d()
+    assert not calls
+    assert "auto t offset" not in c._api3d_dlg.status.text()
+    # Sample Z given, t offset blank: auto fit kicks in
+    c._api3d_dlg.RECON = dict(_Stub3DDialog.RECON, toffset_ns=None)
+    c._create_plot_3d()
+    assert calls
+    assert "auto t offset" in c._api3d_dlg.status.text()
+    c._cleanup_3d_tmp()
+
+
+def test_3d_r2_correction_weights_volume(api, monkeypatch):
+    """The 1/r² correction renders (status note present) and actually changes
+    the volume histogram relative to the uncorrected render."""
+    _w, c = api
+    c._load()
+    monkeypatch.setattr(api_mod, "Api3DDialog", _Stub3DDialog)
+    c._open_3d()
+    import plotly.graph_objs as go
+    dlg = c._api3d_dlg
+    recon_off = dict(_Stub3DDialog.RECON)
+    recon_on = dict(_Stub3DDialog.RECON, r2_correction=True)
+    t_off = c._volume_trace(go, c.df_current, 12, 0.1, 0.8, 0.1, 10,
+                            recon=recon_off, toffset_ns=0.0)
+    t_on = c._volume_trace(go, c.df_current, 12, 0.1, 0.8, 0.1, 10,
+                           recon=recon_on, toffset_ns=0.0)
+    assert t_off is not None and t_on is not None
+    assert not np.allclose(np.asarray(t_off.value), np.asarray(t_on.value))
+    dlg.RECON = recon_on
+    c._create_plot_3d()
+    assert "1/r² correction" in dlg.status.text()
+    c._cleanup_3d_tmp()
 
 
 def test_3d_view_empty_data_sets_status(api, monkeypatch):

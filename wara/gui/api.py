@@ -20,7 +20,19 @@ Workflow:
   with its *real* channel values (the bin centres) as the channel axis  -- not
   0..nbins indices  -- so a calibration built on it round-trips back here.
 * "3D view" pops out a Plotly volume render (:class:`Api3DDialog`) of the
-  reconstructed X-Y-Z hit cloud for the current (filtered) events.
+  reconstructed X-Y-Z hit cloud for the current (filtered) events. The default
+  reconstruction is the full :func:`wara.apicalc.api_xyz` model, which needs
+  the gamma-detector position relative to the neutron source (entered in the
+  dialog's side menu, cm; +z up toward the YAP, sample at -z); the previous
+  straight-ray, detector-ignoring reconstruction remains available as the
+  "Simple (no detector)" backup model. The absolute depth scale is set by a
+  timing offset: a manual t offset wins; else a user-set Sample Z (sample
+  front-face depth) auto-fits it via :func:`wara.apicalc.fit_toffset`
+  (rising-edge anchor); with both blank the dt spectrum is trusted as already
+  calibrated (offset 0). An optional 1/r² correction weights each event by
+  (r/r_mean)^p (r = reconstructed point to detector) to undo the higher count
+  density on the detector side of the target; p is adjustable because a
+  nearby/large detector behaves softer than the point-like p=2.
 * "Retrieve calibration" pulls the Calibration tab's current calibration curve
   (or equation) and applies that channel→energy polynomial to the dataframe  --
   it is applied to the *real* per-event channel values (which run past the bin
@@ -2438,25 +2450,84 @@ class ApiController:
         self._api3d_dlg.raise_()
         self._api3d_dlg.activateWindow()
 
-    def _xyz(self, df=None):
-        """Reconstructed (X, Y, Z) for *df* (default: the current view). Data
-        that carries a direct X/Y/Z cloud (simulated) is used as-is;
-        reconstructed-position data is mapped via apicalc.api_xyz (the
-        gamma-detector position is ignored, as in the legacy 3D plot)."""
+    def _direct_cloud(self, df=None):
+        """True when *df* already carries a direct X/Y/Z cloud (simulated
+        data), so no reconstruction is needed."""
         df = self.df_current if df is None else df
-        if self.xkey == "X" and "Z" in df.columns:
+        return self.xkey == "X" and "Z" in df.columns
+
+    def _xyz(self, df=None, recon=None, toffset_ns=0.0):
+        """Reconstructed (X, Y, Z) for *df* (default: the current view). Data
+        that carries a direct X/Y/Z cloud (simulated) is used as-is. With a
+        full-model *recon* (an Api3DDialog ``recon_params()`` dict with
+        ``use_det=True``) the position comes from apicalc.api_xyz using the
+        dialog geometry, in cm, with dt read from the active time axis (ns).
+        Otherwise -- no *recon*, or the "Simple (no detector)" backup model --
+        the pre-existing reconstruction is used verbatim (straight ray,
+        detector position ignored, default arguments)."""
+        df = self.df_current if df is None else df
+        if self._direct_cloud(df):
             return df["X"], df["Y"], df["Z"]
-        return apicalc.api_xyz(df=df, use_det=False)
+        if recon is None or not recon["use_det"]:
+            return apicalc.api_xyz(df=df, use_det=False)
+        return apicalc.api_xyz(
+            df=df,
+            det_pos=recon["det_pos"],
+            z_t=recon["z_t"],
+            ion_energy_kev=recon["beam_kev"],
+            toffset=toffset_ns,
+            dt_col=self._dt_key,
+            dt_unit="ns",
+            use_det=True,
+        )
+
+    def _recon_toffset(self, recon):
+        """(toffset_ns, status_note) for the full model per the three timing-
+        calibration modes: a manual t offset wins; else a given Sample Z
+        auto-fits the offset (rising-edge anchor, the ROOTS z-align role);
+        with both blank the dt spectrum is trusted as already calibrated."""
+        if recon["toffset_ns"] is not None:
+            return recon["toffset_ns"], ""
+        if recon["sample_z"] is not None:
+            t = apicalc.fit_toffset(
+                self.df_current[self._dt_key], z0=recon["sample_z"],
+                z_t=recon["z_t"], det_pos=recon["det_pos"], dt_unit="ns")
+            return t, f"  ·  auto t offset {t:.1f} ns"
+        return 0.0, "  ·  dt used as calibrated (t offset 0)"
 
     def _volume_trace(self, go, df, num_bins, iso_min, iso_max, opacity,
-                      surfcount, color=None, name=None):
+                      surfcount, color=None, name=None, recon=None,
+                      toffset_ns=0.0):
         """Build a Plotly Volume from *df*'s reconstructed X-Y-Z cloud, or None
         if the histogram is empty/flat. A *color* gives a single-hue colorscale
         (one selection); otherwise the default Plasma density scale is used."""
         from scipy import ndimage
 
-        X, Y, Z = self._xyz(df)
-        hist, edges = np.histogramdd((X, Y, Z), bins=num_bins)
+        X, Y, Z = self._xyz(df, recon, toffset_ns)
+        X = np.asarray(X, dtype=float)
+        Y = np.asarray(Y, dtype=float)
+        Z = np.asarray(Z, dtype=float)
+        # The detector-term quadratic has no real solution for events whose dt
+        # is inconsistent with the geometry (random coincidences) -> NaN; drop
+        # them so the histogram range stays finite.
+        m = np.isfinite(X) & np.isfinite(Y) & np.isfinite(Z)
+        X, Y, Z = X[m], Y[m], Z[m]
+        if X.size == 0:
+            return None
+        # Optional detector solid-angle correction: weight each event by
+        # (r/r_mean)^p, r = reconstructed point -> gamma detector. Undoes the
+        # higher count density on the detector side of the target. Full model
+        # only (the backup/simple scale is arbitrary, direct clouds ignore the
+        # geometry inputs).
+        w = None
+        if (recon is not None and recon.get("r2_correction")
+                and recon["use_det"] and not self._direct_cloud(df)):
+            dx0, dy0, dz0 = recon["det_pos"]
+            r = np.sqrt((X - dx0) ** 2 + (Y - dy0) ** 2 + (Z - dz0) ** 2)
+            rm = r.mean()
+            if rm > 0:
+                w = (r / rm) ** recon["r2_power"]
+        hist, edges = np.histogramdd((X, Y, Z), bins=num_bins, weights=w)
         centers = [0.5 * (e[1:] + e[:-1]) for e in edges]
         xc, yc, zc = np.meshgrid(*centers, indexing="ij")
         values = hist.flatten()
@@ -2495,18 +2566,37 @@ class ApiController:
         if num_bins < 2 or surfcount < 1:
             self._set_3d_status("Need ≥2 bins and ≥1 surface.")
             return
+        recon = dlg.recon_params()
+        if recon is None:
+            self._set_3d_status("Check the reconstruction inputs  -- they must "
+                                "be numbers (Sample Z and t offset may be "
+                                "blank).")
+            return
 
         self._set_3d_status("Building volume...")
         try:
             import tempfile
             import plotly.graph_objs as go
 
+            # Depth calibration (full model only): a manual t offset wins;
+            # else a given Sample Z auto-fits the offset that places the
+            # rising edge of the current view's dominant dt peak at that depth
+            # (the ROOTS z-align role); with both blank the dt spectrum is
+            # trusted as already calibrated (offset 0). Shared across
+            # selections so they stay mutually aligned. Direct clouds and the
+            # backup simple model skip this entirely.
+            toffset_ns = 0.0
+            toff_note = ""
+            if recon["use_det"] and not self._direct_cloud():
+                toffset_ns, toff_note = self._recon_toffset(recon)
+
             traces = []
             if self.selections:
                 for sel in self.selections:
                     t = self._volume_trace(
                         go, sel["df"], num_bins, iso_min, iso_max, opacity,
-                        surfcount, color=sel["color"], name=sel["label"])
+                        surfcount, color=sel["color"], name=sel["label"],
+                        recon=recon, toffset_ns=toffset_ns)
                     if t is not None:
                         traces.append(t)
                 if not traces:
@@ -2515,7 +2605,8 @@ class ApiController:
                 rendered = f"{len(traces)} selection(s)"
             else:
                 t = self._volume_trace(go, self.df_current, num_bins, iso_min,
-                                       iso_max, opacity, surfcount)
+                                       iso_max, opacity, surfcount,
+                                       recon=recon, toffset_ns=toffset_ns)
                 if t is None:
                     self._set_3d_status("Histogram is empty/flat  -- nothing to render.")
                     return
@@ -2528,12 +2619,22 @@ class ApiController:
                 paper_bgcolor=API_PLOT_BG,
                 margin=dict(l=0, r=0, t=0, b=0),
                 showlegend=bool(self.selections),
-                scene=dict(
-                    dragmode="orbit",
+            )
+            # Full-model coordinates are physical (cm from the neutron
+            # source), so show them; the backup simple model keeps the
+            # original unlabeled axes (its scale is arbitrary).
+            if recon["use_det"] and not self._direct_cloud():
+                axes = dict(
+                    xaxis=dict(title="X [cm]"),
+                    yaxis=dict(title="Y [cm]"),
+                    zaxis=dict(title="Z [cm]"))
+            else:
+                axes = dict(
                     xaxis=dict(title="x", showticklabels=False),
                     yaxis=dict(title="y", showticklabels=False),
-                    zaxis=dict(title="z", showticklabels=False),
-                ),
+                    zaxis=dict(title="z", showticklabels=False))
+            fig.update_layout(
+                scene=dict(dragmode="orbit", **axes),
             )
 
             # Inline plotly.js so the render works offline; load via a temp file
@@ -2549,7 +2650,14 @@ class ApiController:
             dlg.browser.setUrl(QUrl.fromLocalFile(path))
             self._cleanup_3d_tmp()
             self._api3d_tmp = path
-            self._set_3d_status(f"Rendered {rendered}.")
+            model = ("full model (detector)" if recon["use_det"]
+                     else "simple model (no detector)")
+            r2_note = ""
+            if (recon["r2_correction"] and recon["use_det"]
+                    and not self._direct_cloud()):
+                r2_note = f"  ·  1/r² correction (p={recon['r2_power']:g})"
+            self._set_3d_status(
+                f"Rendered {rendered}  ·  {model}{toff_note}{r2_note}.")
         except Exception as exc:  # noqa: BLE001  -- surface render errors to the dialog
             traceback.print_exc()
             self._set_3d_status(f"Could not build the 3D plot: {exc}")
