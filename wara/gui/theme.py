@@ -44,12 +44,13 @@ NAV_SECTIONS = [
     ("Efficiency",  "#5cf04a"),
     ("Resolution",  "#ff5577"),
     ("API",         "#b388ff"),
+    ("Neutrons",    "#4d9bff"),
     ("Planetary",   "#ff8a3d"),
 ]
 
 # Tabs with a real/mocked options column. Others collapse the column.
 TABS_WITH_OPTIONS = {"Spectrum", "Calibration", "Efficiency", "Resolution", "API",
-                     "Planetary"}
+                     "Neutrons", "Planetary"}
 
 
 def apply_mpl_theme():
@@ -228,6 +229,19 @@ QPushButton#fit_btn:hover {{ background-color: #266026; }}
 QPushButton#fit_btn:checked {{
     background-color: #266026; color: {ACCENT_GREEN}; border: 3px solid {ACCENT_GREEN};
 }}
+/* Checkable "arm" toggle (e.g. Neutrons PSD selections). Resting looks like a
+   normal action button; when armed it flips to a bold, filled amber so the
+   active state is unmistakable at a glance. */
+QPushButton#arm_btn {{
+    background-color: {BG_BTN}; color: {TEXT_PRIMARY}; border: 2px solid {BORDER_BTN_BRIGHT};
+    border-radius: 5px; padding: 8px 13px; font-size: 14px; font-weight: 600;
+}}
+QPushButton#arm_btn:hover {{ background-color: #16384f; border: 2px solid {ACCENT_CYAN}; color: {ACCENT_CYAN}; }}
+QPushButton#arm_btn:checked {{
+    background-color: {ACCENT_AMBER}; color: {BG_DARK}; border: 2px solid {ACCENT_AMBER}; font-weight: 800;
+}}
+QPushButton#arm_btn:checked:hover {{ background-color: #ffc93d; border-color: #ffc93d; }}
+
 QPushButton#mini_btn {{
     background-color: {BG_BTN}; color: {TEXT_PRIMARY}; border: 2px solid {BORDER_BTN_BRIGHT};
     border-radius: 4px; padding: 3px 6px; font-size: 13px; font-weight: 600;

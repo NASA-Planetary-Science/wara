@@ -40,6 +40,7 @@ from .calibration import CalibrationOptions, CalibrationPage, CalibrationControl
 from .efficiency import EfficiencyOptions, EfficiencyPage, EfficiencyController
 from .resolution import ResolutionOptions, ResolutionPage, ResolutionController
 from .api import ApiOptions, ApiPage, ApiController
+from .neutrons import NeutronsOptions, NeutronsPage, NeutronsController
 from .planetary import PlanetaryOptions, PlanetaryPage, PlanetaryController
 
 LOGO_PATH = str(files("wara").joinpath("ui/wara-logo.png"))
@@ -214,6 +215,8 @@ class WaraApp(QMainWindow):
         self.resolution = ResolutionController(
             self, self.resolution_opts, self.resolution_page)
         self.api = ApiController(self, self.api_opts, self.api_page)
+        self.neutrons = NeutronsController(
+            self, self.neutrons_opts, self.neutrons_page)
         self.planetary = PlanetaryController(
             self, self.planetary_opts, self.planetary_page)
         self._rebuild_spectra_list()
@@ -284,6 +287,7 @@ class WaraApp(QMainWindow):
         self.efficiency_opts = EfficiencyOptions()
         self.resolution_opts = ResolutionOptions()
         self.api_opts = ApiOptions()
+        self.neutrons_opts = NeutronsOptions()
         self.planetary_opts = PlanetaryOptions()
         for name, _c in NAV_SECTIONS:
             if name == "Spectrum":
@@ -296,6 +300,8 @@ class WaraApp(QMainWindow):
                 self.opt_stack.addWidget(self.resolution_opts)
             elif name == "API":
                 self.opt_stack.addWidget(self.api_opts)
+            elif name == "Neutrons":
+                self.opt_stack.addWidget(self.neutrons_opts)
             elif name == "Planetary":
                 self.opt_stack.addWidget(self.planetary_opts)
             else:
@@ -335,6 +341,7 @@ class WaraApp(QMainWindow):
         self.efficiency_page = EfficiencyPage()
         self.resolution_page = ResolutionPage()
         self.api_page = ApiPage()
+        self.neutrons_page = NeutronsPage()
         self.planetary_page = PlanetaryPage()
         for name, _c in NAV_SECTIONS:
             if name == "Spectrum":
@@ -347,6 +354,8 @@ class WaraApp(QMainWindow):
                 self.stack.addWidget(self.resolution_page)
             elif name == "API":
                 self.stack.addWidget(self.api_page)
+            elif name == "Neutrons":
+                self.stack.addWidget(self.neutrons_page)
             elif name == "Planetary":
                 self.stack.addWidget(self.planetary_page)
             else:
