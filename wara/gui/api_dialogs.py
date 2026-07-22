@@ -416,3 +416,138 @@ class StatsInfoDialog(QDialog):
                 item = QTableWidgetItem(text)
                 item.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
                 self.table.setItem(r, c, item)
+
+
+def _count_pct(g, col, total):
+    """'n (p%)' for the number of True rows of *g[col]* (percent of len(g))."""
+    if col not in g.columns or len(g) == 0:
+        return "--"
+    n = int(g[col].astype(bool).sum())
+    return f"{n:,} ({100.0 * n / len(g):.2f}%)"
+
+
+def _span_seconds(g):
+    """Acquisition span (s) from the timestamp column (ns), or None."""
+    if "timestamp" not in g.columns or len(g) == 0:
+        return None
+    span = float(g["timestamp"].max() - g["timestamp"].min())
+    return span / 1e9 if span > 0 else None
+
+
+class BinaryStatsDialog(QDialog):
+    """Rich per-channel statistics for the loaded list-mode data on the Binary
+    tab (trace / binary / parquet), computed directly from the dataframe.
+
+    Unlike :class:`StatsInfoDialog` (which reads the run's ``-stats-`` JSON), this
+    summarises the events actually loaded: counts and rates, pile-up / CFD-error
+    / trace-flag fractions, and energy / baseline / timing summaries per channel,
+    with a totals row.
+    """
+
+    # (header, tooltip, per-channel formatter fn(group, total) -> str,
+    #  required-column or None). Columns whose required column is absent from the
+    #  dataframe are dropped, so the table adapts to trace/binary/parquet data.
+    COLUMNS = [
+        ("Events", "Number of events",
+         lambda g, tot: f"{len(g):,}", None),
+        ("% total", "Share of all loaded events",
+         lambda g, tot: f"{100.0 * len(g) / tot:.2f}%" if tot else "--", None),
+        ("Duration (s)", "Timestamp span of these events",
+         lambda g, tot: (f"{_span_seconds(g):,.3f}"
+                         if _span_seconds(g) is not None else "--"), "timestamp"),
+        ("Rate (cps)", "Events / timestamp span",
+         lambda g, tot: (f"{len(g) / _span_seconds(g):,.1f}"
+                         if _span_seconds(g) else "--"), "timestamp"),
+        ("Pile-up", "Events flagged as piled-up",
+         lambda g, tot: _count_pct(g, "pileup", tot), "pileup"),
+        ("CFD errors", "Events with a CFD error (forced trigger)",
+         lambda g, tot: _count_pct(g, "CFD_error", tot), "CFD_error"),
+        ("Trace flags", "Events with the trace out-of-range flag set",
+         lambda g, tot: _count_pct(g, "trace_flag", tot), "trace_flag"),
+        ("Traces", "Events carrying a non-empty trace",
+         lambda g, tot: (f"{int(g['trace'].map(lambda t: t is not None and len(t) > 0).sum()):,}"
+                         if "trace" in g.columns else "--"), "trace"),
+        ("Aligned", "Events successfully time-aligned",
+         lambda g, tot: (f"{int(g['align_shift'].notna().sum()):,}"
+                         if "align_shift" in g.columns else "--"), "align_shift"),
+        ("E mean", "Mean energy",
+         lambda g, tot: f"{g['energy'].mean():,.1f}" if len(g) else "--", "energy"),
+        ("E median", "Median energy",
+         lambda g, tot: f"{g['energy'].median():,.0f}" if len(g) else "--", "energy"),
+        ("E min", "Minimum energy",
+         lambda g, tot: f"{g['energy'].min():,.0f}" if len(g) else "--", "energy"),
+        ("E max", "Maximum energy",
+         lambda g, tot: f"{g['energy'].max():,.0f}" if len(g) else "--", "energy"),
+        ("Baseline", "Mean baseline",
+         lambda g, tot: f"{g['baseline'].mean():,.1f}" if len(g) else "--", "baseline"),
+    ]
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("List-mode data statistics")
+        self.setStyleSheet(T.STYLESHEET)
+        self.setWindowFlag(Qt.WindowMaximizeButtonHint, True)
+        self.resize(960, 460)
+
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(10, 10, 10, 10); lay.setSpacing(6)
+        lay.addWidget(header("LIST-MODE DATA STATISTICS"))
+        self.lbl_meta = QLabel(""); self.lbl_meta.setObjectName("stat_key")
+        self.lbl_meta.setWordWrap(True)
+        lay.addWidget(self.lbl_meta)
+
+        self.table = QTableWidget(0, 0)
+        self.table.verticalHeader().setVisible(False)
+        self.table.setEditTriggers(QAbstractItemView.NoEditTriggers)
+        self.table.setSelectionBehavior(QAbstractItemView.SelectRows)
+        lay.addWidget(self.table, 1)
+
+    def populate(self, df, run_label, kind, cfd=None, align=None):
+        total = int(len(df))
+        # Only keep columns whose backing dataframe column exists.
+        cols = [c for c in self.COLUMNS if c[3] is None or c[3] in df.columns]
+
+        # ── metadata summary ──────────────────────────────────────────────────
+        parts = [run_label, f"source: {kind}"]
+        if cfd:
+            parts.append(f"CFD: {cfd}")
+        if align:
+            parts.append(f"align: {align}")
+        parts.append(f"{total:,} events")
+        chans = (sorted(int(c) for c in df["channel"].unique())
+                 if "channel" in df.columns else [])
+        if chans:
+            parts.append(f"channels: {', '.join(map(str, chans))}")
+        span = _span_seconds(df)
+        if span is not None:
+            parts.append(f"duration: {span:,.2f} s")
+            parts.append(f"rate: {total / span:,.1f} cps")
+        meta = "  ·  ".join(parts)
+        meta += "\ncolumns: " + ", ".join(df.columns)
+        self.lbl_meta.setText(meta)
+
+        # ── per-channel table (+ totals row) ──────────────────────────────────
+        self.table.setColumnCount(1 + len(cols))
+        self.table.setHorizontalHeaderLabels(["Channel"] + [h for h, *_ in cols])
+        hh = self.table.horizontalHeader()
+        hh.setSectionResizeMode(QHeaderView.ResizeToContents)
+        hh.setSectionResizeMode(0, QHeaderView.Stretch)
+        for c, (_h, tip, _fn, _need) in enumerate(cols, start=1):
+            self.table.horizontalHeaderItem(c).setToolTip(tip)
+
+        rows = [(str(ch), df[df["channel"] == ch]) for ch in chans]
+        if len(rows) != 1:               # skip a redundant Total when single-channel
+            rows.append(("Total", df))
+        self.table.setRowCount(len(rows))
+        for r, (label, g) in enumerate(rows):
+            ch_item = QTableWidgetItem(label)
+            ch_item.setTextAlignment(Qt.AlignCenter)
+            self.table.setItem(r, 0, ch_item)
+            for c, (_h, _tip, fn, _need) in enumerate(cols, start=1):
+                try:
+                    text = fn(g, total)
+                except Exception:  # noqa: BLE001
+                    text = "--"
+                item = QTableWidgetItem(text)
+                item.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
+                self.table.setItem(r, c, item)

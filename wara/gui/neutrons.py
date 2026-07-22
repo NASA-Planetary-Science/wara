@@ -31,14 +31,15 @@ from matplotlib.backends.backend_qt5agg import NavigationToolbar2QT as NavToolba
 
 from PyQt5.QtWidgets import (
     QWidget, QLabel, QPushButton, QVBoxLayout, QHBoxLayout, QScrollArea,
-    QFileDialog, QSizePolicy,
+    QFileDialog, QSizePolicy, QLineEdit, QDialog, QTableWidget, QTableWidgetItem,
+    QAbstractItemView, QHeaderView,
 )
-from PyQt5.QtCore import Qt, QSize
+from PyQt5.QtCore import Qt, QSize, QTimer
 
 from wara.neutron_psd import NeutronTraces
 
 from . import theme as T
-from .widgets import hsep, header, stat_row, SpinBox
+from .widgets import hsep, header, stat_row, SpinBox, ComboBox, labeled_row
 
 # Pixel tolerance for grabbing a draggable marker line.
 _GRAB_PX = 8
@@ -82,6 +83,14 @@ class NeutronsPage(QWidget):
         self._span = None           # MCA SpanSelector
         self._rect = None           # PSD RectangleSelector
         self.armed = False          # armed for multi-box "PSD selections" mode
+
+        # Axis / marker units, overridden per data source (V for PicoScope,
+        # ADC for PIXIE). ``thresh_scale`` scales the stored threshold for its
+        # readout (×1000 -> mV for volts, ×1 for ADC counts).
+        self.amp_unit = "V"
+        self.charge_unit = "V·ns"
+        self.thresh_scale = 1000.0
+        self.thresh_unit = "mV"
 
         # Controller callbacks (no-ops until wired).
         self.on_params = None        # (threshold_v, gate, prompt, tail) on release
@@ -196,7 +205,7 @@ class NeutronsPage(QWidget):
         # Draggable markers (grabbed by proximity in _on_press).
         self._marker_lines["threshold"] = ax.axhline(
             threshold_v, color=T.ACCENT_RED, ls="--", lw=1.4, zorder=6,
-            label=f"threshold ({threshold_v * 1000:.0f} mV)")
+            label=f"threshold ({threshold_v * self.thresh_scale:.0f} {self.thresh_unit})")
         self._marker_lines["gate"] = ax.axvline(
             gate_start, color=T.ACCENT_CYAN, ls="--", lw=1.4, zorder=6, label="gate start")
         self._marker_lines["prompt"] = ax.axvline(
@@ -205,7 +214,7 @@ class NeutronsPage(QWidget):
             tail_end, color=T.ACCENT_GREEN, ls="--", lw=1.4, zorder=6, label="tail end")
 
         ax.set_xlabel("Time (ns)")
-        ax.set_ylabel("Amplitude (V)")
+        ax.set_ylabel(f"Amplitude ({self.amp_unit})")
         ax.set_xlim(float(time_ns[0]), float(time_ns[-1]))
         ax.legend(loc="upper right", fontsize=8, ncol=2)
         self._style(ax)
@@ -232,7 +241,7 @@ class NeutronsPage(QWidget):
         if energy_range[0] is not None:
             for x in energy_range:
                 ax.axvline(x, color=T.ACCENT_RED, ls=":", lw=1.3, zorder=6)
-        ax.set_xlabel("Pulse integral / energy (V·ns)")
+        ax.set_xlabel(f"Pulse integral / energy ({self.charge_unit})")
         ax.set_ylabel("Counts")
         ax.set_title("MCA spectrum — drag to select an energy window")
         if ax.get_legend_handles_labels()[0]:
@@ -265,7 +274,7 @@ class NeutronsPage(QWidget):
             ax.add_patch(Rectangle(
                 (elo, plo_), ehi - elo, phi_ - plo_, fill=False,
                 edgecolor=color, ls=ls, lw=1.8, zorder=7))
-        ax.set_xlabel("Energy / pulse integral (V·ns)")
+        ax.set_xlabel(f"Energy / pulse integral ({self.charge_unit})")
         ax.set_ylabel("PSD = 1 - Q_prompt / Q_tail")
         ax.set_title("PSD vs. energy — draw coloured selection boxes" if self.armed
                      else "PSD vs. energy — drag a box to select")
@@ -443,6 +452,50 @@ class NeutronsOptions(QScrollArea):
         self.lbl_file.setObjectName("stat_key"); self.lbl_file.setWordWrap(True)
         lay.addWidget(self.lbl_file)
 
+        # ── PIXIE-16 run source ───────────────────────────────────────────────
+        lay.addWidget(hsep()); lay.addWidget(header("PIXIE RUN"))
+        pix_hint = QLabel(
+            "Load time-aligned traces straight from a PIXIE run (same date / run "
+            "/ channel as the API page). Traces are aligned per the option below "
+            "before PSD.")
+        pix_hint.setObjectName("stat_key"); pix_hint.setWordWrap(True)
+        lay.addWidget(pix_hint)
+
+        self.ed_date = QLineEdit(); self.ed_date.setPlaceholderText("YYYY-MM-DD")
+        r, _ = labeled_row("Date", self.ed_date); lay.addWidget(r)
+        self.ed_run = QLineEdit(); self.ed_run.setPlaceholderText("e.g. 19")
+        r, _ = labeled_row("Run", self.ed_run); lay.addWidget(r)
+        self.cmb_channel = ComboBox()
+        self.cmb_channel.setToolTip("Detector channel to analyze (populated on load)")
+        r, _ = labeled_row("Channel", self.cmb_channel); lay.addWidget(r)
+        self.cmb_align = ComboBox()
+        self.cmb_align.addItems(["Fast filter", "Edge", "Peak", "None"])
+        self.cmb_align.setToolTip(
+            "Time-alignment applied to every trace before PSD. 'Fast filter' "
+            "(default) aligns on the reconstructed fast trigger.")
+        r, _ = labeled_row("Align", self.cmb_align); lay.addWidget(r)
+        self.cmb_cfd = ComboBox()
+        self.cmb_cfd.addItems(["CFD on", "CFD off"])
+        self.cmb_cfd.setToolTip("Which CFD acquisition to read (on = enabled).")
+        r, _ = labeled_row("CFD", self.cmb_cfd); lay.addWidget(r)
+
+        self.btn_load_pixie = QPushButton("Load PIXIE run")
+        self.btn_load_pixie.setObjectName("open_btn")
+        self.btn_load_pixie.setCursor(Qt.PointingHandCursor)
+        self.btn_load_pixie.setToolTip(
+            "Read the run with the chosen alignment / CFD and run PSD on the "
+            "selected channel. Change the channel to re-analyze without re-reading.")
+        lay.addWidget(self.btn_load_pixie)
+
+        self.btn_pixie_stats = QPushButton("PIXIE stats")
+        self.btn_pixie_stats.setObjectName("primary_btn")
+        self.btn_pixie_stats.setCursor(Qt.PointingHandCursor)
+        self.btn_pixie_stats.setEnabled(False)
+        self.btn_pixie_stats.setToolTip(
+            "Per-channel event counts, CFD errors, pile-up, trace flags and "
+            "energy summary for the loaded PIXIE run.")
+        lay.addWidget(self.btn_pixie_stats)
+
         lay.addWidget(hsep()); lay.addWidget(header("GATING"))
         hint = QLabel(
             "Drag the coloured markers on the Traces panel. PSD is computed per "
@@ -510,11 +563,85 @@ class NeutronsOptions(QScrollArea):
         # Let full-width buttons shrink with the fixed-width panel instead of
         # forcing the scroll content wider than the viewport (which would clip
         # their right edge). They still stretch to fill the available width.
-        for b in (self.btn_load, self.btn_psd_select, self.btn_reset):
+        for b in (self.btn_load, self.btn_load_pixie, self.btn_pixie_stats,
+                  self.btn_psd_select, self.btn_reset):
             b.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Fixed)
 
         lay.addStretch(1)
         self.setWidget(inner)
+
+
+# ── PIXIE stats dialog ────────────────────────────────────────────────────────
+class PixieStatsDialog(QDialog):
+    """Per-channel event statistics for a loaded PIXIE run: trace counts, CFD
+    errors, pile-up, trace-out-of-range flags and an energy summary."""
+
+    # (header, per-channel-frame -> formatted string).
+    COLUMNS = [
+        ("Traces", lambda g: f"{len(g):,}"),
+        ("CFD errors", lambda g: PixieStatsDialog._count_pct(g, "CFD_error")),
+        ("Pile-up", lambda g: PixieStatsDialog._count_pct(g, "pileup")),
+        ("Trace flags", lambda g: PixieStatsDialog._count_pct(g, "trace_flag")),
+        ("Empty traces", lambda g: f"{int(g['trace'].map(lambda t: t is None or len(t) == 0).sum()):,}"
+            if "trace" in g.columns else "--"),
+        ("Median E", lambda g: f"{g['energy'].median():,.0f}"
+            if "energy" in g.columns and len(g) else "--"),
+        ("Max E", lambda g: f"{g['energy'].max():,.0f}"
+            if "energy" in g.columns and len(g) else "--"),
+    ]
+
+    @staticmethod
+    def _count_pct(g, col):
+        if col not in g.columns or len(g) == 0:
+            return "--"
+        n = int(g[col].astype(bool).sum())
+        return f"{n:,} ({100.0 * n / len(g):.2f}%)"
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("PIXIE trace statistics")
+        self.setStyleSheet(T.STYLESHEET)
+        self.setWindowFlag(Qt.WindowMaximizeButtonHint, True)
+        self.resize(760, 380)
+
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(10, 10, 10, 10); lay.setSpacing(6)
+        lay.addWidget(header("PIXIE TRACE STATISTICS"))
+        self.lbl_meta = QLabel(""); self.lbl_meta.setObjectName("stat_key")
+        self.lbl_meta.setWordWrap(True)
+        lay.addWidget(self.lbl_meta)
+
+        self.table = QTableWidget(0, 1 + len(self.COLUMNS))
+        self.table.setHorizontalHeaderLabels(
+            ["Channel"] + [h for h, _ in self.COLUMNS])
+        self.table.verticalHeader().setVisible(False)
+        self.table.setEditTriggers(QAbstractItemView.NoEditTriggers)
+        self.table.setSelectionBehavior(QAbstractItemView.SelectRows)
+        self.table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
+        lay.addWidget(self.table, 1)
+
+    def populate(self, df, desc):
+        self.lbl_meta.setText(f"{desc}  ·  {len(df):,} total events")
+        if "channel" in df.columns:
+            chans = sorted(int(c) for c in df.channel.unique())
+            groups = [(str(c), df[df.channel == c]) for c in chans]
+        else:
+            groups = []
+        # A "Total" row across all channels always closes the table.
+        rows = groups + [("Total", df)]
+        self.table.setRowCount(len(rows))
+        for r, (label, g) in enumerate(rows):
+            ch_item = QTableWidgetItem(label)
+            ch_item.setTextAlignment(Qt.AlignCenter)
+            self.table.setItem(r, 0, ch_item)
+            for c, (_hdr, fmt) in enumerate(self.COLUMNS, start=1):
+                try:
+                    text = fmt(g)
+                except Exception:  # noqa: BLE001
+                    text = "--"
+                item = QTableWidgetItem(text)
+                item.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
+                self.table.setItem(r, c, item)
 
 
 # ── Controller ──────────────────────────────────────────────────────────────────
@@ -534,10 +661,39 @@ class NeutronsController:
         # commits the gate markers), which flips this True.
         self._analysis_ready = False
         self._rng = np.random.default_rng(0)
+        # Cached PIXIE run so switching channel doesn't re-read from disk.
+        self._pixie_df = None
+        self._pixie_dt = None
+        self._pixie_desc = ""
         self._wire()
+
+    # Bright flash colours keyed by button objectName (mirrors the API tab).
+    _FLASH_BG = {"open_btn": "#c4a8ff", "primary_btn": T.ACCENT_CYAN,
+                 "danger_btn": T.ACCENT_RED}
+
+    def _flash_button(self, button):
+        """Briefly brighten a button so the click registers before the (blocking)
+        load freezes the event loop, then revert to the themed style."""
+        bg = self._FLASH_BG.get(button.objectName(), T.ACCENT_CYAN)
+        button.setStyleSheet(
+            f"background-color:{bg}; border-color:{bg}; "
+            f"color:{T.BG_DARK}; font-weight:800;")
+        button.repaint()
+        QTimer.singleShot(220, lambda: button.setStyleSheet(""))
+
+    def _set_page_units(self, amp_unit, charge_unit, thresh_scale, thresh_unit):
+        """Set the axis / threshold units used by the plot page (V for PicoScope,
+        ADC for PIXIE)."""
+        self.page.amp_unit = amp_unit
+        self.page.charge_unit = charge_unit
+        self.page.thresh_scale = thresh_scale
+        self.page.thresh_unit = thresh_unit
 
     def _wire(self):
         self.opts.btn_load.clicked.connect(self._load)
+        self.opts.btn_load_pixie.clicked.connect(self._load_pixie)
+        self.opts.cmb_channel.activated.connect(lambda *_: self._rebuild_pixie_channel())
+        self.opts.btn_pixie_stats.clicked.connect(self._show_pixie_stats)
         self.opts.btn_reset.clicked.connect(self._clear_selection)
         self.opts.btn_psd_select.toggled.connect(self._on_arm)
         self.opts.spin_shown.valueChanged.connect(lambda *_: self._redraw_traces_only())
@@ -557,6 +713,7 @@ class NeutronsController:
             filter="Trace files (*.npz *.npy *.txt *.csv *.dat);;All files (*)")
         if not path:
             return
+        self._flash_button(self.opts.btn_load)
         try:
             self._status("Loading traces…")
             self.app.repaint()
@@ -569,6 +726,11 @@ class NeutronsController:
             self._status(f"Failed to load: {exc}")
             return
         self.nt = nt
+        # PicoScope traces are in volts; reset the page units in case the last
+        # load was a PIXIE (ADC) run.
+        self._set_page_units("V", "V·ns", 1000.0, "mV")
+        self._pixie_df = None
+        self.opts.btn_pixie_stats.setEnabled(False)
         self._energy_range = (None, None)
         self._psd_region = None
         self._psd_selections = []
@@ -583,6 +745,104 @@ class NeutronsController:
         self._redraw()
         self._status(f"Loaded {nt.n_traces:,} traces — adjust the gate markers "
                      "to compute the PSD and MCA")
+
+    # -- loading: PIXIE run ----------------------------------------------------
+    _ALIGN_MAP = {"Fast filter": "fast", "Edge": "edge", "Peak": "peak",
+                  "None": None}
+    _CFD_MAP = {"CFD on": "on", "CFD off": "off"}
+
+    def _load_pixie(self):
+        """Read a PIXIE run (with the chosen alignment / CFD), populate the
+        channel list and analyze the selected channel."""
+        from wara import helper_api
+
+        date = self.opts.ed_date.text().strip()
+        run_txt = self.opts.ed_run.text().strip()
+        if not date or not run_txt:
+            self._status("Enter a PIXIE date and run number first")
+            return
+        try:
+            runnr = int(run_txt)
+        except ValueError:
+            self._status("Run number must be an integer")
+            return
+        align = self._ALIGN_MAP.get(self.opts.cmb_align.currentText(), "fast")
+        cfd = self._CFD_MAP.get(self.opts.cmb_cfd.currentText(), "on")
+
+        self._flash_button(self.opts.btn_load_pixie)
+        try:
+            self._status("Reading PIXIE run…")
+            self.app.repaint()
+            df = helper_api.read_trace_data(date=date, runnr=runnr, cfd=cfd,
+                                            align=align)
+            dt_ns = helper_api.read_sample_interval_ns(date, runnr)
+        except Exception as exc:  # noqa: BLE001 — surface load errors in the UI
+            self._pixie_df = None
+            self.nt = None
+            self.page.show_empty(f"Could not read PIXIE run:\n{exc}")
+            self._status(f"Failed to read run: {exc}")
+            return
+
+        self._pixie_df = df
+        self._pixie_dt = dt_ns
+        self._pixie_desc = f"{date} run {runnr} · {align or 'no'} align · {cfd}"
+        # PIXIE traces are raw ADC, not volts.
+        self._set_page_units("ADC", "ADC·ns", 1.0, "ADC")
+        self.opts.btn_pixie_stats.setEnabled(True)
+
+        # Populate the channel combo (keep the current pick if still present).
+        chans = (sorted(int(c) for c in df.channel.unique())
+                 if "channel" in df.columns else [])
+        cur = self.opts.cmb_channel.currentText()
+        cb = self.opts.cmb_channel
+        cb.blockSignals(True)
+        cb.clear()
+        cb.addItems([str(c) for c in chans])
+        if cur in [str(c) for c in chans]:
+            cb.setCurrentText(cur)
+        cb.blockSignals(False)
+
+        self._rebuild_pixie_channel()
+
+    def _rebuild_pixie_channel(self):
+        """(Re)build the PSD dataset for the selected channel from the cached
+        PIXIE run — no disk re-read."""
+        if self._pixie_df is None:
+            return
+        txt = self.opts.cmb_channel.currentText()
+        channel = int(txt) if txt else None
+        align = self._ALIGN_MAP.get(self.opts.cmb_align.currentText(), "fast")
+        try:
+            nt = NeutronTraces.from_pixie(
+                channel=channel, align=align, df=self._pixie_df,
+                dt_ns=self._pixie_dt)
+            nt.compute()
+        except Exception as exc:  # noqa: BLE001
+            self.nt = None
+            self.page.show_empty(f"Could not analyze channel:\n{exc}")
+            self._status(f"Failed: {exc}")
+            return
+        self.nt = nt
+        self._energy_range = (None, None)
+        self._psd_region = None
+        self._psd_selections = []
+        self._analysis_ready = False
+        if self.opts.btn_psd_select.isChecked():
+            self.opts.btn_psd_select.setChecked(False)
+        self.opts.lbl_file.setText(
+            f"PIXIE {self._pixie_desc} · ch {channel}\n{nt.n_traces:,} traces")
+        self._redraw()
+        self._status(f"Loaded {nt.n_traces:,} PIXIE traces (ch {channel}) — "
+                     "adjust the gate markers to compute the PSD and MCA")
+
+    def _show_pixie_stats(self):
+        """Pop up per-channel event statistics for the loaded PIXIE run."""
+        if self._pixie_df is None:
+            self._status("Load a PIXIE run first")
+            return
+        dlg = PixieStatsDialog(self.app)
+        dlg.populate(self._pixie_df, self._pixie_desc)
+        dlg.exec_()
 
     # -- marker drag (recompute) ----------------------------------------------
     def _on_params(self, threshold_v, gate, prompt, tail):
@@ -678,7 +938,8 @@ class NeutronsController:
             self.page.show_empty()
             return
         nt = self.nt
-        self.opts.lbl_thresh.setText(f"{nt.threshold_v * 1000:.0f} mV")
+        self.opts.lbl_thresh.setText(
+            f"{nt.threshold_v * self.page.thresh_scale:.0f} {self.page.thresh_unit}")
         self.opts.lbl_gate.setText(f"{nt.gate_start_ns:.1f} ns")
         self.opts.lbl_prompt.setText(f"{nt.prompt_end_ns:.1f} ns")
         self.opts.lbl_tail.setText(f"{nt.tail_end_ns:.1f} ns")

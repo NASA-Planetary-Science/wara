@@ -222,6 +222,52 @@ class NeutronTraces:
         time_ns, traces, mean = load_trace_file(path)
         return cls(time_ns, traces, mean=mean)
 
+    @classmethod
+    def from_pixie(cls, date=None, runnr=None, channel=None, cfd="on",
+                   align="fast", df=None, dt_ns=None):
+        """Build a PSD dataset from PIXIE-16 list-mode traces.
+
+        Reads a run with :func:`wara.helper_api.read_trace_data` (time-aligning
+        the traces via *align*, one of ``"fast"``/``"edge"``/``"peak"``/``None``,
+        and selecting the *cfd* acquisition), keeps clean single pulses of the
+        selected *channel*, and stacks them into the trace matrix. PIXIE pulses
+        are positive-going ADC on a large pedestal, so a baseline-subtracted mean
+        is passed as the polarity / gate-start reference.
+
+        Pass a pre-read *df* (and *dt_ns*) to rebuild for a different *channel*
+        without re-reading the run from disk.
+        """
+        from wara import helper_api
+
+        if df is None:
+            df = helper_api.read_trace_data(date=date, runnr=runnr, cfd=cfd,
+                                            align=align)
+        if dt_ns is None:
+            dt_ns = helper_api.read_sample_interval_ns(date, runnr)
+
+        if channel is not None and "channel" in df.columns:
+            df = df[df.channel == channel]
+        if "pileup" in df.columns:
+            df = df[df.pileup == 0]              # pile-up wrecks the PSD integrals
+        if align is not None and "align_shift" in df.columns:
+            df = df[df.align_shift.notna()]      # drop traces that failed to align
+        if df.shape[0] == 0:
+            raise ValueError(
+                f"No usable traces for run {runnr}, channel {channel} "
+                f"(cfd={cfd}, align={align})")
+
+        lengths = df["trace"].map(lambda t: len(t) if hasattr(t, "__len__") else 0)
+        modal = int(lengths.mode().iloc[0])
+        df = df[lengths == modal]
+        traces = np.stack([np.asarray(t, dtype=np.float32) for t in df["trace"]])
+        time_ns = np.arange(modal, dtype=float) * float(dt_ns)
+
+        # Baseline-subtracted mean: the raw pedestal (~8000 ADC) would otherwise
+        # sit above the auto-pre-trigger's 20%-of-peak rise test and break it.
+        npre = max(int(round(0.1 * modal)), 5)
+        mean_ref = (traces - traces[:, :npre].mean(axis=1, keepdims=True)).mean(axis=0)
+        return cls(time_ns, traces, mean=mean_ref)
+
     def set_params(self, *, threshold_v=None, gate_start_ns=None,
                    prompt_end_ns=None, tail_end_ns=None):
         """Update one or more analysis parameters (unset ones are unchanged)."""

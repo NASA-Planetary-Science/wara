@@ -24,7 +24,7 @@ from wara import spectrum as sp
 from . import theme as T
 from .widgets import hsep, header, labeled_row
 from .api_common import API_PLOT_BG, _combo_row, _draw_axes_placeholder
-from .api_dialogs import StatsInfoDialog
+from .api_dialogs import StatsInfoDialog, BinaryStatsDialog
 
 
 class DiagnosticsDialog(QDialog):
@@ -70,6 +70,8 @@ class DiagnosticsDialog(QDialog):
         self._mca_canvas = {}
         self._mca_toolbar = {}
         self._stats_dlg = None     # StatsInfoDialog (created lazily)
+        self._bin_stats_dlg = None  # BinaryStatsDialog (created lazily)
+        self._bin_kind = None      # source of the loaded df ("Trace data", ...)
 
         # ── Binary state ─────────────────────────────────────────────────────
         self.df_bin = None         # full loaded list-mode dataframe
@@ -85,6 +87,8 @@ class DiagnosticsDialog(QDialog):
         self._bin_canvas = {}
         self._bin_toolbar = {}
         self._bin_date = self._bin_run = None  # run that produced df_bin
+        self._bin_align = False     # LGL-sum time alignment on/off
+        self._bin_lgl = {}          # {channel: (L, G)} slow-filter windows
         self._bin_span = None      # SpanSelector on the energy plot
         self._bin_yscale = "log"
         self._bin_gam = self._bin_gam_x = None    # energy hist (send to spectrum)
@@ -433,6 +437,23 @@ class DiagnosticsDialog(QDialog):
         self._stats_dlg.activateWindow()
         self._state(f"Run stats from {fname}")
 
+    def _open_bin_stats(self):
+        """Per-channel statistics of the loaded list-mode data (Binary tab)."""
+        if self.df_bin is None or self.df_bin.shape[0] == 0:
+            self._bin_state("Load data first")
+            return
+        cfd = (self.cmb_bin_cfd.currentText()
+               if self._bin_kind == "Trace data" else None)
+        if self._bin_stats_dlg is None:
+            self._bin_stats_dlg = BinaryStatsDialog(self)
+        self._bin_stats_dlg.populate(
+            self.df_bin, f"{self._bin_date}  ·  run {self._bin_run}",
+            self._bin_kind, cfd=cfd)
+        self._bin_stats_dlg.show()
+        self._bin_stats_dlg.raise_()
+        self._bin_stats_dlg.activateWindow()
+        self._bin_state(f"Statistics for {self.df_bin.shape[0]:,} events")
+
     # ════════════════════════════════════════════════════════════════════════
     # Binary tab
     # ════════════════════════════════════════════════════════════════════════
@@ -496,6 +517,29 @@ class DiagnosticsDialog(QDialog):
         self.cmb_bin_type.addItems(["Trace data", "Binary data", "Parquet"])
         self.cmb_bin_type.setToolTip("Which list-mode source to read for this run")
         side.addWidget(_combo_row("Source", self.cmb_bin_type))
+        self.cmb_bin_cfd = QComboBox()
+        self.cmb_bin_cfd.addItems(["All", "CFD on", "CFD off"])
+        self.cmb_bin_cfd.setToolTip(
+            "Filter trace acquisitions by CFD state (Trace data only). "
+            "'CFD on' = CFD unchanged/enabled, 'CFD off' = CFD disabled.")
+        self._cmb_bin_cfd_row = _combo_row("CFD", self.cmb_bin_cfd)
+        side.addWidget(self._cmb_bin_cfd_row)
+        self.cb_bin_align = QCheckBox("Align on LGL sums")
+        self.cb_bin_align.setToolTip(
+            "Time-align traces on their energy-filter (leading/gap/leading) sum "
+            "windows and overlay those windows on the Energy-traces and Random-"
+            "traces plots. Applied on the fly -- no reload needed.")
+        self.cb_bin_align.toggled.connect(self._toggle_bin_align)
+        self._cb_bin_align_row = self.cb_bin_align
+        side.addWidget(self._cb_bin_align_row)
+        # CFD filtering and trace alignment only apply to raw trace data
+        self.cmb_bin_type.currentTextChanged.connect(
+            lambda k: self._cmb_bin_cfd_row.setVisible(k == "Trace data"))
+        self.cmb_bin_type.currentTextChanged.connect(
+            lambda k: self._cb_bin_align_row.setVisible(k == "Trace data"))
+        _is_trace = self.cmb_bin_type.currentText() == "Trace data"
+        self._cmb_bin_cfd_row.setVisible(_is_trace)
+        self._cb_bin_align_row.setVisible(_is_trace)
         self.ed_bin_bins = QLineEdit("4098"); self.ed_bin_bins.setFixedWidth(80)
         self.ed_bin_bins.setToolTip("Number of bins for the energy histograms")
         r, _ = labeled_row("Bins", self.ed_bin_bins); side.addWidget(r)
@@ -506,6 +550,16 @@ class DiagnosticsDialog(QDialog):
                                      "per-channel energy histogram")
         self.btn_bin_load.clicked.connect(self._load_bin)
         side.addWidget(self.btn_bin_load)
+
+        self.btn_bin_info = QPushButton("Run stats...")
+        self.btn_bin_info.setObjectName("action_btn")
+        self.btn_bin_info.setCursor(Qt.PointingHandCursor)
+        self.btn_bin_info.setEnabled(False)
+        self.btn_bin_info.setToolTip("Per-channel statistics of the loaded data: "
+                                     "counts, rates, pile-up / CFD-error / trace-"
+                                     "flag fractions and energy summaries")
+        self.btn_bin_info.clicked.connect(self._open_bin_stats)
+        side.addWidget(self.btn_bin_info)
 
         side.addWidget(hsep())
         self._bin_ctrl_groups = []
@@ -674,7 +728,11 @@ class DiagnosticsDialog(QDialog):
         QApplication.processEvents()
         try:
             if kind == "Trace data":
-                df = helper_api.read_trace_data(date=date, runnr=runnr)
+                cfd = {"CFD on": "on", "CFD off": "off"}.get(
+                    self.cmb_bin_cfd.currentText())
+                # Raw traces are kept in memory; alignment is applied at plot
+                # time so the "Align on LGL sums" checkbox needs no reload.
+                df = helper_api.read_trace_data(date=date, runnr=runnr, cfd=cfd)
             elif kind == "Binary data":
                 df = helper_api.read_binary_data(date=date, runnr=runnr)
             else:
@@ -687,6 +745,8 @@ class DiagnosticsDialog(QDialog):
             self._bin_state("No events found in the loaded data")
             return
         self._bin_date, self._bin_run = date, runnr
+        self._bin_kind = kind
+        self.btn_bin_info.setEnabled(True)
         self.df_bin = df
         self.df_bin_tr = None
         self.df_bin_rand = None
@@ -695,6 +755,25 @@ class DiagnosticsDialog(QDialog):
             self._bin_chans = sorted(int(c) for c in df.channel.unique())
         else:
             self._bin_chans = []
+        # Per-channel energy-filter window geometry for LGL-sum alignment. Only
+        # available for trace data that carries the Esum columns and a settings
+        # file; if unavailable the align checkbox is disabled.
+        self._bin_lgl = {}
+        has_esums = {"Esum_trailing", "Esum_gap", "Esum_leading"} <= set(df.columns)
+        if kind == "Trace data" and has_esums:
+            for c in self._bin_chans:
+                try:
+                    self._bin_lgl[c] = helper_api.read_slow_filter_geometry(
+                        date, runnr, c)
+                except Exception:  # noqa: BLE001
+                    pass
+        can_align = bool(self._bin_lgl)
+        self.cb_bin_align.setEnabled(can_align)
+        if not can_align and self.cb_bin_align.isChecked():
+            self.cb_bin_align.blockSignals(True)
+            self.cb_bin_align.setChecked(False)
+            self.cb_bin_align.blockSignals(False)
+            self._bin_align = False
         palette = self._palette(len(self._bin_chans))
         self._bin_ch_visible = {c: True for c in self._bin_chans}
         self._bin_ch_colors = {c: palette[i] for i, c in enumerate(self._bin_chans)}
@@ -827,6 +906,51 @@ class DiagnosticsDialog(QDialog):
         return (f"i:{i}; E:{rowobj.energy}; pu:{rowobj.pileup}, "
                 f"flag:{rowobj.trace_flag}, CFDerr:{rowobj.CFD_error}")
 
+    # Common trailing-window start (in samples) that every aligned trace's LGL
+    # window is shifted to, so all pulses line up and share one window overlay.
+    ALIGN_REF_START = 40
+
+    def _aligned_trace(self, rowobj):
+        """Return ``(trace, bounds)`` for one event.
+
+        When "Align on LGL sums" is on, the trace is shifted so its
+        energy-filter (trailing/gap/leading) sum window lands at a common
+        reference and ``bounds`` are the four window edges (in samples). When off
+        or unavailable, the raw trace is returned with ``bounds=None``.
+        """
+        trace = rowobj.trace
+        if trace is None or len(trace) == 0 or not self._bin_align:
+            return trace, None
+        geo = self._bin_lgl.get(int(getattr(rowobj, "channel", -1)))
+        if geo is None:
+            return trace, None
+        L, G = geo
+        try:
+            res = helper_api.find_LGL_sums(
+                trace, rowobj.Esum_trailing, rowobj.Esum_gap,
+                rowobj.Esum_leading, L, G, relative=True)
+        except Exception:  # noqa: BLE001
+            return trace, None
+        tr = np.asarray(trace, dtype=float)
+        shift = self.ALIGN_REF_START - res["start"]  # multiple of the filter step
+        aligned = np.roll(tr, shift)
+        if shift > 0:
+            aligned[:shift] = tr[0]
+        elif shift < 0:
+            aligned[shift:] = tr[-1]
+        r = self.ALIGN_REF_START
+        return aligned, (r, r + L, r + L + G, r + 2 * L + G)
+
+    def _draw_lgl_windows(self, ax, bounds_set):
+        """Overlay the trailing | gap | leading (L | G | L) window regions."""
+        for b in bounds_set:
+            xs = [x * self.NS_PER_PT for x in b]
+            for x in xs:
+                ax.axvline(x, color=T.ACCENT_CYAN, ls="--", lw=1.0, alpha=0.7)
+            ax.axvspan(xs[0], xs[1], color=T.ACCENT_CYAN, alpha=0.06)   # trailing
+            ax.axvspan(xs[1], xs[2], color=T.ACCENT_AMBER, alpha=0.08)  # gap
+            ax.axvspan(xs[2], xs[3], color=T.ACCENT_CYAN, alpha=0.06)   # leading
+
     # A per-event legend is only built up to this many traces. Beyond it the
     # matplotlib "best" legend solver runs over every line on each redraw (e.g.
     # when zooming), which freezes/blanks the canvas -- so the legend is skipped.
@@ -841,20 +965,27 @@ class DiagnosticsDialog(QDialog):
         # Only label traces when there are few enough for a usable legend.
         label = df.shape[0] <= self.MAX_TRACE_LEGEND
         n = 0
+        bounds_set = []
         for i in df.index:
-            trace = df.loc[i].trace
+            rowobj = df.loc[i]
             # Traces can vary in length (and some events have none) -- give each
-            # its own time axis and skip empty ones.
+            # its own time axis and skip empty ones. When alignment is on the
+            # trace is shifted onto the common LGL-sum grid.
+            trace, bounds = self._aligned_trace(rowobj)
             if trace is None or len(trace) == 0:
                 continue
             ax.plot(self._trace_time_axis(trace), trace, lw=0.8,
-                    label=self._trace_label(df.loc[i], i) if label else None)
+                    label=self._trace_label(rowobj, i) if label else None)
+            if bounds is not None and bounds not in bounds_set:
+                bounds_set.append(bounds)
             n += 1
         if n == 0:
             self._draw_placeholder(ax, "Selected events carry no traces",
                                    "Time (ns)", "linear")
             canvas.draw_idle()
             return
+        if bounds_set:
+            self._draw_lgl_windows(ax, bounds_set)
         self._style_axis(ax, "Time (ns)", "linear")
         ax.set_ylabel("Amplitude (a.u.)", color=T.TEXT_DIM, fontsize=12)
         if label:
@@ -878,15 +1009,18 @@ class DiagnosticsDialog(QDialog):
         self.ed_bin_base_tr.setText(str(baseline))
         base_pts = max(int(baseline / self.NS_PER_PT), 1)
         n = 0
+        bounds_set = []
         for i in self.df_bin_tr.index:
-            trace = self.df_bin_tr.loc[i].trace
             # Per-trace baseline subtraction so variable-length / empty traces
-            # don't force a ragged vstack.
+            # don't force a ragged vstack; alignment applied when enabled.
+            trace, bounds = self._aligned_trace(self.df_bin_tr.loc[i])
             if trace is None or len(trace) == 0:
                 continue
             trace = np.asarray(trace, dtype=float)
             norm = trace - trace[:base_pts].mean()
             ax.plot(self._trace_time_axis(trace), norm, lw=0.8)
+            if bounds is not None and bounds not in bounds_set:
+                bounds_set.append(bounds)
             n += 1
         if n == 0:
             self._draw_placeholder(ax, "Selected events carry no traces",
@@ -894,6 +1028,8 @@ class DiagnosticsDialog(QDialog):
             self._bin_canvas["ergtr"].draw_idle()
             self._bin_state("No traces to normalize")
             return
+        if bounds_set:
+            self._draw_lgl_windows(ax, bounds_set)
         self._style_axis(ax, "Time (ns)", "linear")
         ax.set_ylabel("Amplitude (a.u.)", color=T.TEXT_DIM, fontsize=12)
         self._bin_fig["ergtr"].tight_layout()
@@ -906,6 +1042,23 @@ class DiagnosticsDialog(QDialog):
         if ax.get_legend() is not None:
             ax.get_legend().set_visible(checked)
             self._bin_canvas["ergtr"].draw_idle()
+
+    def _toggle_bin_align(self, checked):
+        # Alignment is applied at plot time, so just redraw the two trace views
+        # from the data already in memory -- no reload.
+        self._bin_align = checked
+        if self.df_bin_tr is not None and self.df_bin_tr.shape[0] > 0:
+            self._plot_bin_traces(self.df_bin_tr, self._bin_ax["ergtr"],
+                                  self._bin_canvas["ergtr"], self._bin_fig["ergtr"],
+                                  self.cb_bin_leg_tr.isChecked(),
+                                  toolbar=self._bin_toolbar["ergtr"])
+        if (self.df_bin_rand is not None and self.df_bin_rand.shape[0] > 0
+                and not self.btn_bin_fft.isChecked()):
+            self._plot_bin_traces(self.df_bin_rand, self._bin_ax["rand"],
+                                  self._bin_canvas["rand"], self._bin_fig["rand"],
+                                  self.cb_bin_leg_rand.isChecked(),
+                                  toolbar=self._bin_toolbar["rand"])
+        self._bin_state(f"LGL-sum alignment {'on' if checked else 'off'}")
 
     # ── random traces / FFT ──────────────────────────────────────────────────
     def _sample_bin_traces(self):
