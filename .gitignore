@@ -5,7 +5,10 @@ __pycache__
 .ipynb_checkpoints/
 wara/version.py
 data-path.txt
-.claude
+# Track shared CLAUDE.md and .claude/skills; keep local settings out of git
+.claude/*
+!.claude/skills/
+.claude/settings.local.json
 docs/_build/
 docs/autoapi/
 # LP-GRS data downloaded by the planetary examples
