@@ -32,11 +32,12 @@ from matplotlib.backends.backend_qt5agg import NavigationToolbar2QT as NavToolba
 from PyQt5.QtWidgets import (
     QWidget, QLabel, QPushButton, QVBoxLayout, QHBoxLayout, QScrollArea,
     QFileDialog, QSizePolicy, QLineEdit, QDialog, QTableWidget, QTableWidgetItem,
-    QAbstractItemView, QHeaderView,
+    QAbstractItemView, QHeaderView, QCheckBox,
 )
 from PyQt5.QtCore import Qt, QSize, QTimer
 
 from wara.neutron_psd import NeutronTraces
+from wara import spectrum as sp
 
 from . import theme as T
 from .widgets import hsep, header, stat_row, SpinBox, ComboBox, labeled_row
@@ -161,7 +162,7 @@ class NeutronsPage(QWidget):
 
     # -- drawing: traces panel -------------------------------------------------
     def draw_traces(self, time_ns, groups, threshold_v, gate_start,
-                    prompt_end, tail_end, n_shown, n_total):
+                    prompt_end, tail_end, n_shown, n_total, log_y=False):
         """Draw the sampled traces plus the draggable markers.
 
         *groups* is a list of ``(traces, color)`` tuples, each an already-
@@ -216,11 +217,14 @@ class NeutronsPage(QWidget):
         ax.set_xlabel("Time (ns)")
         ax.set_ylabel(f"Amplitude ({self.amp_unit})")
         ax.set_xlim(float(time_ns[0]), float(time_ns[-1]))
+        # Log amplitude masks the near-zero baseline (and any negative
+        # undershoot), leaving the positive pulse body -- useful for the tail.
+        ax.set_yscale("log" if log_y else "linear")
         ax.legend(loc="upper right", fontsize=8, ncol=2)
         self._style(ax)
 
     # -- drawing: MCA panel ----------------------------------------------------
-    def draw_mca(self, energy_all, overlays, bins, energy_range):
+    def draw_mca(self, energy_all, overlays, bins, energy_range, log_y=True):
         """Histogram all valid energies with per-selection subsets overlaid.
 
         *overlays* is a list of ``(energy_array, color, label)`` tuples drawn as
@@ -237,7 +241,7 @@ class NeutronsPage(QWidget):
                 if len(energy_sel):
                     ax.hist(energy_sel, bins=bins, range=rng, histtype="stepfilled",
                             color=color, alpha=0.5, label=label)
-            ax.set_yscale("log")
+        ax.set_yscale("log" if log_y else "linear")
         if energy_range[0] is not None:
             for x in energy_range:
                 ax.axvline(x, color=T.ACCENT_RED, ls=":", lw=1.3, zorder=6)
@@ -250,7 +254,7 @@ class NeutronsPage(QWidget):
         self._attach_span()
 
     # -- drawing: PSD panel ----------------------------------------------------
-    def draw_psd(self, energy, psd, bins, energy_range, rects):
+    def draw_psd(self, energy, psd, bins, energy_range, rects, log_counts=True):
         """2-D energy-vs-PSD histogram with the active MCA band and one or more
         selection rectangles overlaid; (re)attaches the rectangle selector.
 
@@ -266,7 +270,7 @@ class NeutronsPage(QWidget):
             pad = 0.05 * (phi - plo) if phi > plo else 0.1
             ax.hist2d(energy, psd, bins=[bins, bins],
                       range=[list(ex), [plo - pad, phi + pad]],
-                      norm=LogNorm(), cmap="jet")
+                      norm=LogNorm() if log_counts else None, cmap="jet")
         if energy_range[0] is not None:
             for x in energy_range:
                 ax.axvline(x, color=T.TEXT_PRIMARY, ls=":", lw=1.2, zorder=6)
@@ -282,6 +286,14 @@ class NeutronsPage(QWidget):
         self._attach_rect(self.armed)
 
     def finish_draw(self):
+        # Reset the navigation toolbar's zoom/pan history so the freshly drawn
+        # view becomes the new 'Home'. Without this, after a selection redraws a
+        # panel with a new axis range, pressing Home restores the stale pre-
+        # selection limits and squashes/cuts off the filtered traces.
+        try:
+            self.toolbar.update()
+        except Exception:  # noqa: BLE001
+            pass
         self.canvas.draw_idle()
 
     # -- selectors -------------------------------------------------------------
@@ -498,13 +510,10 @@ class NeutronsOptions(QScrollArea):
 
         lay.addWidget(hsep()); lay.addWidget(header("GATING"))
         hint = QLabel(
-            "Drag the coloured markers on the Traces panel. PSD is computed per "
-            "pulse from the charge integrated over each gate window:\n"
             "• Q_prompt = ∫ gate start → prompt end\n"
             "• Q_tail = ∫ prompt end → tail end\n"
             "• Energy = ∫ gate start → tail end\n"
-            "• PSD = 1 − Q_prompt / Q_tail\n"
-            "Pulses peaking below the threshold are excluded.")
+            "• PSD = 1 − Q_prompt / Q_tail")
         hint.setObjectName("stat_key"); hint.setWordWrap(True)
         lay.addWidget(hint)
         self.row_thresh, self.lbl_thresh = stat_row("Threshold", T.ACCENT_RED)
@@ -524,13 +533,32 @@ class NeutronsOptions(QScrollArea):
             "Maximum number of traces drawn (a random sample)")
         drow.addWidget(lbl_shown); drow.addStretch(1); drow.addWidget(self.spin_shown)
         lay.addLayout(drow)
-        brow = QHBoxLayout()
-        self.spin_bins = SpinBox(); self.spin_bins.setRange(32, 1024)
-        self.spin_bins.setValue(512); self.spin_bins.setSingleStep(32)
-        self.spin_bins.setMaximumWidth(84)
-        self.spin_bins.setToolTip("Histogram bins for the MCA and PSD panels")
-        brow.addWidget(QLabel("Bins:")); brow.addStretch(1); brow.addWidget(self.spin_bins)
-        lay.addLayout(brow)
+        mrow = QHBoxLayout()
+        self.spin_bins_mca = SpinBox(); self.spin_bins_mca.setRange(32, 8192)
+        self.spin_bins_mca.setValue(512); self.spin_bins_mca.setSingleStep(32)
+        self.spin_bins_mca.setMaximumWidth(84)
+        self.spin_bins_mca.setToolTip("Histogram bins for the MCA spectrum")
+        mrow.addWidget(QLabel("MCA bins:")); mrow.addStretch(1)
+        mrow.addWidget(self.spin_bins_mca)
+        lay.addLayout(mrow)
+        prow = QHBoxLayout()
+        self.spin_bins_psd = SpinBox(); self.spin_bins_psd.setRange(32, 1024)
+        self.spin_bins_psd.setValue(300); self.spin_bins_psd.setSingleStep(32)
+        self.spin_bins_psd.setMaximumWidth(84)
+        self.spin_bins_psd.setToolTip("2-D histogram bins for the PSD-vs-energy panel")
+        prow.addWidget(QLabel("PSD bins:")); prow.addStretch(1)
+        prow.addWidget(self.spin_bins_psd)
+        lay.addLayout(prow)
+
+        self.cb_mca_log = QCheckBox("MCA log Y"); self.cb_mca_log.setChecked(True)
+        self.cb_mca_log.setToolTip("Logarithmic y-axis on the MCA spectrum")
+        lay.addWidget(self.cb_mca_log)
+        self.cb_traces_log = QCheckBox("Traces log Y")
+        self.cb_traces_log.setToolTip("Logarithmic y-axis on the Traces panel")
+        lay.addWidget(self.cb_traces_log)
+        self.cb_psd_log = QCheckBox("PSD log counts"); self.cb_psd_log.setChecked(True)
+        self.cb_psd_log.setToolTip("Logarithmic colour scale for the PSD density")
+        lay.addWidget(self.cb_psd_log)
 
         lay.addWidget(hsep()); lay.addWidget(header("SELECTION"))
         selhint = QLabel(
@@ -560,11 +588,20 @@ class NeutronsOptions(QScrollArea):
         self.btn_reset.setToolTip("Clear the MCA span and all PSD box selections")
         lay.addWidget(self.btn_reset)
 
+        self.btn_send_spec = QPushButton("Send to spectrum")
+        self.btn_send_spec.setObjectName("primary_btn")
+        self.btn_send_spec.setCursor(Qt.PointingHandCursor)
+        self.btn_send_spec.setEnabled(False)
+        self.btn_send_spec.setToolTip(
+            "Send the current MCA spectrum (the selected pulses, or all valid "
+            "pulses when nothing is selected) to the Spectrum tab")
+        lay.addWidget(self.btn_send_spec)
+
         # Let full-width buttons shrink with the fixed-width panel instead of
         # forcing the scroll content wider than the viewport (which would clip
         # their right edge). They still stretch to fill the available width.
         for b in (self.btn_load, self.btn_load_pixie, self.btn_pixie_stats,
-                  self.btn_psd_select, self.btn_reset):
+                  self.btn_psd_select, self.btn_reset, self.btn_send_spec):
             b.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Fixed)
 
         lay.addStretch(1)
@@ -694,10 +731,15 @@ class NeutronsController:
         self.opts.btn_load_pixie.clicked.connect(self._load_pixie)
         self.opts.cmb_channel.activated.connect(lambda *_: self._rebuild_pixie_channel())
         self.opts.btn_pixie_stats.clicked.connect(self._show_pixie_stats)
+        self.opts.btn_send_spec.clicked.connect(self._send_to_spectrum)
         self.opts.btn_reset.clicked.connect(self._clear_selection)
         self.opts.btn_psd_select.toggled.connect(self._on_arm)
         self.opts.spin_shown.valueChanged.connect(lambda *_: self._redraw_traces_only())
-        self.opts.spin_bins.valueChanged.connect(lambda *_: self._redraw())
+        self.opts.cb_traces_log.toggled.connect(lambda *_: self._redraw_traces_only())
+        self.opts.spin_bins_mca.valueChanged.connect(lambda *_: self._redraw())
+        self.opts.spin_bins_psd.valueChanged.connect(lambda *_: self._redraw())
+        self.opts.cb_mca_log.toggled.connect(lambda *_: self._redraw())
+        self.opts.cb_psd_log.toggled.connect(lambda *_: self._redraw())
         self.page.on_params = self._on_params
         self.page.on_energy_range = self._on_energy_range
         self.page.on_psd_region = self._on_psd_region
@@ -844,6 +886,36 @@ class NeutronsController:
         dlg.populate(self._pixie_df, self._pixie_desc)
         dlg.exec_()
 
+    def _send_to_spectrum(self):
+        """Histogram the current MCA selection and load it on the Spectrum tab."""
+        if self.nt is None or not self._analysis_ready:
+            self._status("Adjust the gate markers to build a spectrum first")
+            return
+        nt = self.nt
+        mask = self._selection_mask()
+        energies = nt.energy[mask]
+        if energies.size == 0:
+            self._status("No pulses in the current selection to send")
+            return
+        bins = self.opts.spin_bins_mca.value()
+        rng = (float(energies.min()), float(energies.max()))
+        cts, edges = np.histogram(energies, bins=bins, range=rng)
+        centers = 0.5 * (edges[1:] + edges[:-1])
+        # Uncalibrated pulse-integral axis: carry the real values on adc_channels
+        # (a pure coordinate) while counts stay on the 0..N index, matching how
+        # the API tab sends an uncalibrated spectrum.
+        try:
+            spect = sp.Spectrum(counts=cts, adc_channels=centers)
+        except Exception as exc:  # noqa: BLE001
+            self._status(f"Could not build spectrum: {exc}")
+            return
+        name = "Neutrons spectrum"
+        if self._pixie_df is not None:
+            name = f"Neutrons {self._pixie_desc}"
+        self.app.load_external_spectrum(spect, name, switch_tab=False)
+        self._flash_button(self.opts.btn_send_spec)
+        self._status(f"Sent {int(cts.sum()):,}-count spectrum to the Spectrum tab")
+
     # -- marker drag (recompute) ----------------------------------------------
     def _on_params(self, threshold_v, gate, prompt, tail):
         if self.nt is None:
@@ -948,14 +1020,15 @@ class NeutronsController:
         # markers only and leave the MCA/PSD panels blank with a prompt.
         if not self._analysis_ready:
             self.opts.lbl_sel.setText("—")
+            self.opts.btn_send_spec.setEnabled(False)
             self._draw_traces(self._selection_groups())
             self.page.draw_pending(
                 "Adjust the gate markers on the\n"
                 "Traces panel to populate this plot")
             self.page.finish_draw()
             return
+        self.opts.btn_send_spec.setEnabled(True)
 
-        bins = self.opts.spin_bins.value()
         valid = nt.valid
         energy_all = nt.energy[valid]
 
@@ -969,9 +1042,11 @@ class NeutronsController:
 
         overlays = [(nt.energy[m], color or T.ACCENT_AMBER, label)
                     for m, color, label in groups]
-        self.page.draw_mca(energy_all, overlays, bins, self._energy_range)
-        self.page.draw_psd(energy_all, nt.psd[valid], bins,
-                           self._energy_range, self._psd_rects())
+        self.page.draw_mca(energy_all, overlays, self.opts.spin_bins_mca.value(),
+                           self._energy_range, log_y=self.opts.cb_mca_log.isChecked())
+        self.page.draw_psd(energy_all, nt.psd[valid], self.opts.spin_bins_psd.value(),
+                           self._energy_range, self._psd_rects(),
+                           log_counts=self.opts.cb_psd_log.isChecked())
         self._draw_traces(groups)
         self.page.finish_draw()
 
@@ -1022,4 +1097,5 @@ class NeutronsController:
         n_shown = sum(len(tr) for tr, _c in draw_groups)
         self.page.draw_traces(
             nt.time_ns, draw_groups, nt.threshold_v, nt.gate_start_ns,
-            nt.prompt_end_ns, nt.tail_end_ns, n_shown=n_shown, n_total=n_total)
+            nt.prompt_end_ns, nt.tail_end_ns, n_shown=n_shown, n_total=n_total,
+            log_y=self.opts.cb_traces_log.isChecked())
