@@ -16,6 +16,11 @@ linked, cross-filtering panels:
 The MCA span and PSD rectangle are independent filters that AND together; the
 Traces panel always shows a sample of the surviving pulses.
 
+Arming **Figure of merit** turns the PSD rubber band into a slice selector: the
+pulses inside the dragged box are projected onto the PSD axis and fitted with a
+double Gaussian in a pop-out window (:class:`FOMDialog`), which reports
+``FOM = |mu_n - mu_gamma| / (FWHM_gamma + FWHM_n)``. Disarming closes it.
+
 The numerics live in :mod:`wara.neutron_psd`; this module is purely the Qt/
 matplotlib front-end.
 """
@@ -84,6 +89,7 @@ class NeutronsPage(QWidget):
         self._span = None           # MCA SpanSelector
         self._rect = None           # PSD RectangleSelector
         self.armed = False          # armed for multi-box "PSD selections" mode
+        self.fom_armed = False      # armed for figure-of-merit slice selection
 
         # Axis / marker units, overridden per data source (V for PicoScope,
         # ADC for PIXIE). ``thresh_scale`` scales the stored threshold for its
@@ -98,6 +104,7 @@ class NeutronsPage(QWidget):
         self.on_energy_range = None  # (lo, hi) or (None, None) to clear
         self.on_psd_region = None    # (elo, ehi, plo, phi) or None to clear
         self.on_psd_add = None       # (elo, ehi, plo, phi) — armed additive box
+        self.on_fom_region = None    # (elo, ehi, plo, phi) — FOM slice box
 
         self.canvas.mpl_connect("button_press_event", self._on_press)
         self.canvas.mpl_connect("motion_notify_event", self._on_motion)
@@ -113,6 +120,14 @@ class NeutronsPage(QWidget):
         self.ax_traces = self.fig.add_subplot(gs[0, 0])
         self.ax_mca = self.fig.add_subplot(gs[1, 0])
         self.ax_psd = self.fig.add_subplot(gs[:, 1])
+
+    def set_fom_mode(self, on):
+        """Arm/disarm figure-of-merit mode: the PSD rubber band then selects the
+        slice to project into the pop-out FOM window instead of cross-filtering.
+
+        The canvas layout is unchanged; the caller must redraw so the PSD panel
+        picks up the new selector styling and title."""
+        self.fom_armed = bool(on)
 
     def draw_pending(self, msg):
         """Blank the MCA and PSD panels with a prompt and detach their
@@ -162,7 +177,8 @@ class NeutronsPage(QWidget):
 
     # -- drawing: traces panel -------------------------------------------------
     def draw_traces(self, time_ns, groups, threshold_v, gate_start,
-                    prompt_end, tail_end, n_shown, n_total, log_y=False):
+                    prompt_end, tail_end, n_shown, n_total, log_y=False,
+                    average=False):
         """Draw the sampled traces plus the draggable markers.
 
         *groups* is a list of ``(traces, color)`` tuples, each an already-
@@ -171,12 +187,24 @@ class NeutronsPage(QWidget):
         otherwise every pulse in the group is drawn in that solid colour (the
         armed "PSD selections" mode). *n_total* is how many pulses passed the
         filter across all groups.
+
+        With *average* set each group holds a single already-averaged trace,
+        drawn as one bold line (one per PSD selection when armed); *n_shown* is
+        then how many pulses went into those averages.
         """
         ax = self.ax_traces
         ax.clear()
         self._marker_lines = {}
         drawn = sum(len(tr) for tr, _c in groups)
-        if drawn:
+        if drawn and average:
+            for traces, color in groups:
+                if not len(traces):
+                    continue
+                ax.plot(time_ns, traces[0], lw=2.0, alpha=0.95, zorder=5,
+                        color=color or T.ACCENT_CYAN)
+            ax.set_title(f"Traces — average of {n_shown:,} of "
+                         f"{n_total:,} selected pulses")
+        elif drawn:
             for traces, color in groups:
                 if not len(traces):
                     continue
@@ -280,10 +308,15 @@ class NeutronsPage(QWidget):
                 edgecolor=color, ls=ls, lw=1.8, zorder=7))
         ax.set_xlabel(f"Energy / pulse integral ({self.charge_unit})")
         ax.set_ylabel("PSD = 1 - Q_prompt / Q_tail")
-        ax.set_title("PSD vs. energy — draw coloured selection boxes" if self.armed
-                     else "PSD vs. energy — drag a box to select")
+        if self.armed:
+            title = "PSD vs. energy — draw coloured selection boxes"
+        elif self.fom_armed:
+            title = "PSD vs. energy — drag a slice across BOTH bands"
+        else:
+            title = "PSD vs. energy — drag a box to select"
+        ax.set_title(title)
         self._style(ax, grid=False)
-        self._attach_rect(self.armed)
+        self._attach_rect()
 
     def finish_draw(self):
         # Reset the navigation toolbar's zoom/pan history so the freshly drawn
@@ -304,35 +337,38 @@ class NeutronsPage(QWidget):
             except Exception:  # noqa: BLE001
                 pass
             self._span = None
-        # While armed for PSD selections the MCA span is disabled so selections
-        # are made only on the PSD panel.
-        if self.armed:
+        # While armed (PSD selections or FOM) the MCA span is disabled so
+        # selections are made only on the PSD panel.
+        if self.armed or self.fom_armed:
             return
         self._span = SpanSelector(
             self.ax_mca, self._span_done, "horizontal", useblit=True,
             interactive=True, drag_from_anywhere=True,
             props=dict(alpha=0.25, facecolor=T.ACCENT_AMBER))
 
-    def _attach_rect(self, armed=False):
+    def _attach_rect(self):
         if self._rect is not None:
             try:
                 self._rect.disconnect_events()
             except Exception:  # noqa: BLE001
                 pass
-        # Armed: each drag commits a new box (non-interactive, no lingering
-        # handles). Normal: a single interactive, re-draggable box.
-        # The armed rubber-band needs a bold, high-contrast outline so it reads
-        # against the bright jet histogram while being dragged.
-        if armed:
+        # PSD selections armed: each drag commits a new box (non-interactive, no
+        # lingering handles). FOM armed / normal: a single interactive,
+        # re-draggable box. The armed rubber-bands need a bold, high-contrast
+        # outline so they read against the bright jet histogram while dragged.
+        if self.armed:
             props = dict(facecolor=T.TEXT_PRIMARY, edgecolor=T.TEXT_PRIMARY,
                          linewidth=2.5, linestyle="--", alpha=0.35, fill=True)
+        elif self.fom_armed:
+            props = dict(facecolor=T.ACCENT_GREEN, edgecolor=T.ACCENT_GREEN,
+                         linewidth=2.5, linestyle="--", alpha=0.25, fill=True)
         else:
             props = dict(facecolor=T.TEXT_PRIMARY, edgecolor=T.ACCENT_RED,
                          alpha=0.15, fill=True)
         self._rect = RectangleSelector(
             self.ax_psd, self._rect_done, useblit=True, button=[1],
-            minspanx=0, minspany=0, spancoords="pixels", interactive=not armed,
-            props=props)
+            minspanx=0, minspany=0, spancoords="pixels",
+            interactive=not self.armed, props=props)
 
     def _detach_selectors(self):
         for s in (self._span, self._rect):
@@ -359,10 +395,14 @@ class NeutronsPage(QWidget):
         plo, phi = sorted((epress.ydata, erelease.ydata))
         degenerate = ehi - elo <= 0 or phi - plo <= 0
         region = None if degenerate else (float(elo), float(ehi), float(plo), float(phi))
-        # Armed → additive coloured selection; otherwise the single filter box.
+        # Armed → additive coloured selection; FOM armed → the projection slice;
+        # otherwise the single cross-filter box.
         if self.armed and self.on_psd_add is not None:
             if region is not None:
                 self.on_psd_add(region)
+        elif self.fom_armed:
+            if self.on_fom_region is not None:
+                self.on_fom_region(region)
         elif self.on_psd_region is not None:
             self.on_psd_region(region)
 
@@ -559,6 +599,18 @@ class NeutronsOptions(QScrollArea):
         self.cb_psd_log = QCheckBox("PSD log counts"); self.cb_psd_log.setChecked(True)
         self.cb_psd_log.setToolTip("Logarithmic colour scale for the PSD density")
         lay.addWidget(self.cb_psd_log)
+        self.cb_avg_trace = QCheckBox("Average trace only")
+        self.cb_avg_trace.setToolTip(
+            "Replace the individual traces with a single averaged pulse: the "
+            "mean of the random sample drawn above, or — when 'PSD selections' "
+            "is ON — the mean of every pulse inside each coloured PSD box "
+            "(one averaged trace per selection, in its own colour).")
+        lay.addWidget(self.cb_avg_trace)
+        avg_hint = QLabel(
+            "Averages the drawn sample; with PSD selections ON it averages all "
+            "selected pulses.")
+        avg_hint.setObjectName("stat_key"); avg_hint.setWordWrap(True)
+        lay.addWidget(avg_hint)
 
         lay.addWidget(hsep()); lay.addWidget(header("SELECTION"))
         selhint = QLabel(
@@ -582,6 +634,39 @@ class NeutronsOptions(QScrollArea):
             "Disarm to return to single-selection cross-filtering.")
         lay.addWidget(self.btn_psd_select)
 
+        self.btn_fom = QPushButton("Figure of merit")
+        self.btn_fom.setObjectName("arm_btn")
+        self.btn_fom.setCheckable(True)
+        self.btn_fom.setCursor(Qt.PointingHandCursor)
+        self.btn_fom.setToolTip(
+            "Arm figure-of-merit mode: drag a box on the PSD panel spanning "
+            "BOTH the gamma and the neutron band and the FOM pops up in its own "
+            "window. The pulses inside are projected onto the PSD axis, fitted "
+            "with a double Gaussian, and reduced to "
+            "FOM = |μ_n − μ_γ| / (FWHM_γ + FWHM_n). FOM ≥ 1.27 is the usual "
+            "threshold for clean separation. Disarm to close the window and "
+            "return to normal cross-filtering.")
+        lay.addWidget(self.btn_fom)
+        fom_hint = QLabel(
+            "The FOM box only sets the projected slice — it does not "
+            "cross-filter the panels. Each new box refreshes the pop-out.")
+        fom_hint.setObjectName("stat_key"); fom_hint.setWordWrap(True)
+        lay.addWidget(fom_hint)
+        frow = QHBoxLayout()
+        self.spin_bins_fom = SpinBox(); self.spin_bins_fom.setRange(10, 1000)
+        self.spin_bins_fom.setValue(80); self.spin_bins_fom.setSingleStep(10)
+        self.spin_bins_fom.setMaximumWidth(84)
+        self.spin_bins_fom.setToolTip(
+            "Histogram bins of the 1-D PSD projection fitted for the FOM")
+        lbl_fbins = QLabel("FOM bins:")
+        lbl_fbins.setToolTip("Histogram bins of the 1-D PSD projection fitted "
+                             "for the FOM")
+        frow.addWidget(lbl_fbins); frow.addStretch(1); frow.addWidget(self.spin_bins_fom)
+        lay.addLayout(frow)
+        self.row_fom, self.lbl_fom = stat_row("FOM", T.ACCENT_GREEN)
+        self.lbl_fom.setWordWrap(True)
+        lay.addWidget(self.row_fom)
+
         self.btn_reset = QPushButton("Clear selection")
         self.btn_reset.setObjectName("danger_btn")
         self.btn_reset.setCursor(Qt.PointingHandCursor)
@@ -601,7 +686,8 @@ class NeutronsOptions(QScrollArea):
         # forcing the scroll content wider than the viewport (which would clip
         # their right edge). They still stretch to fill the available width.
         for b in (self.btn_load, self.btn_load_pixie, self.btn_pixie_stats,
-                  self.btn_psd_select, self.btn_reset, self.btn_send_spec):
+                  self.btn_psd_select, self.btn_fom, self.btn_reset,
+                  self.btn_send_spec):
             b.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Fixed)
 
         lay.addStretch(1)
@@ -681,6 +767,133 @@ class PixieStatsDialog(QDialog):
                 self.table.setItem(r, c, item)
 
 
+# ── Figure-of-merit pop-out ───────────────────────────────────────────────────
+class FOMDialog(QDialog):
+    """Pop-out window with the 1-D PSD projection of the selected slice, its
+    double-Gaussian fit and the resulting figure of merit.
+
+    Opened (and refreshed in place) by the controller every time a slice is
+    dragged on the PSD panel while the "Figure of merit" button is armed. It is
+    non-modal and stays on top so the selection can be adjusted with the window
+    open; closing it does not disarm the mode.
+    """
+
+    #: FOM at or above this is the usual threshold for clean n/γ separation.
+    GOOD_FOM = 1.27
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWindowFlags(Qt.Window | Qt.WindowStaysOnTopHint)
+        self.setWindowTitle("Figure of merit")
+        self.setStyleSheet(T.STYLESHEET)
+        self.resize(760, 560)
+
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(8, 8, 8, 8); lay.setSpacing(6)
+        lay.addWidget(header("NEUTRON / GAMMA FIGURE OF MERIT"))
+
+        self.fig = Figure(figsize=(7.4, 4.6), constrained_layout=True,
+                          facecolor=T.BG_PLOT)
+        self.canvas = FigureCanvas(self.fig)
+        self.canvas.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        self.toolbar = NavToolbar(self.canvas, self)
+        self.toolbar.setObjectName("plot_toolbar")
+        self.toolbar.setIconSize(QSize(22, 22))
+        T.recolor_toolbar_icons(self.toolbar, T.TEXT_PRIMARY)
+        lay.addWidget(self.toolbar, 0)
+        lay.addWidget(self.canvas, 1)
+
+        self.ax = self.fig.add_subplot(111)
+        self.lbl = QLabel("")
+        self.lbl.setWordWrap(True)
+        self.lbl.setStyleSheet(
+            f"background:{T.BG_PLOT}; font-size:13px; font-weight:700; "
+            f"padding:4px 8px;")
+        lay.addWidget(self.lbl, 0)
+
+    def _style(self, grid=True):
+        ax = self.ax
+        ax.set_facecolor(T.BG_PLOT)
+        ax.tick_params(colors=T.TEXT_DIM, which="both", length=3, labelsize=9)
+        ax.xaxis.label.set_color(T.TEXT_DIM); ax.yaxis.label.set_color(T.TEXT_DIM)
+        if ax.get_title():
+            ax.title.set_color(T.TEXT_PRIMARY); ax.title.set_fontsize(11)
+        for s in ax.spines.values():
+            s.set_color(T.BORDER)
+        if grid:
+            ax.grid(True, color=T.GRID, linewidth=0.6, alpha=0.5)
+        leg = ax.get_legend()
+        if leg is not None:
+            leg.get_frame().set_facecolor(T.BG_PANEL)
+            leg.get_frame().set_edgecolor(T.BORDER)
+            for txt in leg.get_texts():
+                txt.set_color(T.TEXT_PRIMARY)
+
+    def show_message(self, message):
+        """Blank the plot and explain why there is no fit."""
+        ax = self.ax
+        ax.clear()
+        ax.text(0.5, 0.5, message, transform=ax.transAxes, ha="center",
+                va="center", color=T.TEXT_DIM, fontsize=11, fontweight="bold",
+                wrap=True)
+        ax.set_xticks([]); ax.set_yticks([])
+        ax.set_title("Figure of merit")
+        self._style(grid=False)
+        self.lbl.setText("")
+        self.canvas.draw_idle()
+
+    def plot(self, result, region=None, charge_unit="V·ns"):
+        """Draw *result* (a :class:`wara.neutron_psd.FOMResult`) for the slice
+        *region* — ``(elo, ehi, plo, phi)`` — in units *charge_unit*."""
+        ax = self.ax
+        ax.clear()
+        centers = result.centers
+        ax.bar(centers, result.counts, width=np.diff(result.edges),
+               color=T.TEXT_DIM, alpha=0.35, align="center",
+               label="PSD projection")
+        # Oversample the fit so the Gaussians stay smooth against the bars.
+        xs = np.linspace(centers[0], centers[-1], 600)
+        ax.plot(xs, result.component(xs, "gamma"), color=T.ACCENT_CYAN, lw=1.5,
+                ls="--", label=f"γ: μ={result.mu_gamma:.4g}, "
+                               f"FWHM={result.fwhm_gamma:.3g}")
+        ax.plot(xs, result.component(xs, "neutron"), color=T.ACCENT_AMBER, lw=1.5,
+                ls="--", label=f"n: μ={result.mu_n:.4g}, FWHM={result.fwhm_n:.3g}")
+        ax.plot(xs, result.curve(xs), color=T.ACCENT_RED, lw=2.0,
+                label="double Gaussian")
+        for mu in (result.mu_gamma, result.mu_n):
+            ax.axvline(mu, color=T.TEXT_PRIMARY, ls=":", lw=1.0, zorder=6)
+
+        ok = np.isfinite(result.fom) and result.fom >= self.GOOD_FOM
+        color = T.ACCENT_GREEN if ok else T.ACCENT_RED
+        ax.text(0.02, 0.97,
+                f"FOM = {result.fom:.3f}\n"
+                f"S = {result.separation:.4g}\n"
+                f"ΣFWHM = {result.fwhm_gamma + result.fwhm_n:.4g}\n"
+                f"{result.n_events:,} pulses · R² = {result.r_squared:.3f}",
+                transform=ax.transAxes, ha="left", va="top", fontsize=10,
+                fontweight="bold", color=color,
+                bbox=dict(facecolor=T.BG_PANEL, edgecolor=T.BORDER, alpha=0.85,
+                          boxstyle="round,pad=0.35"))
+        sub = ""
+        if region is not None:
+            elo, ehi, _plo, _phi = region
+            sub = f" — slice {elo:.4g}–{ehi:.4g} {charge_unit}"
+        ax.set_title(f"FOM = S / (FWHM_γ + FWHM_n){sub}")
+        ax.set_xlabel("PSD = 1 - Q_prompt / Q_tail")
+        ax.set_ylabel("Counts")
+        ax.legend(loc="upper right", fontsize=8)
+        self._style()
+
+        verdict = ("clean separation (≥ 1.27)" if ok
+                   else f"below the {self.GOOD_FOM} clean-separation threshold")
+        self.lbl.setText(
+            f"<span style='color:{color}'>FOM = {result.fom:.3f}</span> "
+            f"<span style='color:{T.TEXT_DIM}'>— {verdict} · "
+            f"S = {result.separation:.4g} · "
+            f"FWHM γ/n = {result.fwhm_gamma:.4g} / {result.fwhm_n:.4g}</span>")
+        self.canvas.draw_idle()
+
+
 # ── Controller ──────────────────────────────────────────────────────────────────
 class NeutronsController:
     """Wires the NeutronsOptions panel and NeutronsPage to the loaded dataset."""
@@ -693,6 +906,10 @@ class NeutronsController:
         self._energy_range = (None, None)   # MCA span filter
         self._psd_region = None             # PSD rectangle filter (single mode)
         self._psd_selections = []           # armed mode: list of {region, color}
+        self._fom_region = None             # FOM mode: projected slice box
+        self._fom_result = None             # FOMResult for that slice
+        self._fom_error = None              # why the last FOM fit failed
+        self._fom_dialog = None             # FOMDialog pop-out (lazily created)
         # On load only the Traces panel is drawn; the MCA and PSD panels stay
         # blank until the user makes their first Traces-panel selection (i.e.
         # commits the gate markers), which flips this True.
@@ -734,8 +951,11 @@ class NeutronsController:
         self.opts.btn_send_spec.clicked.connect(self._send_to_spectrum)
         self.opts.btn_reset.clicked.connect(self._clear_selection)
         self.opts.btn_psd_select.toggled.connect(self._on_arm)
+        self.opts.btn_fom.toggled.connect(self._on_fom_arm)
+        self.opts.spin_bins_fom.valueChanged.connect(lambda *_: self._refit_fom())
         self.opts.spin_shown.valueChanged.connect(lambda *_: self._redraw_traces_only())
         self.opts.cb_traces_log.toggled.connect(lambda *_: self._redraw_traces_only())
+        self.opts.cb_avg_trace.toggled.connect(lambda *_: self._redraw_traces_only())
         self.opts.spin_bins_mca.valueChanged.connect(lambda *_: self._redraw())
         self.opts.spin_bins_psd.valueChanged.connect(lambda *_: self._redraw())
         self.opts.cb_mca_log.toggled.connect(lambda *_: self._redraw())
@@ -744,6 +964,7 @@ class NeutronsController:
         self.page.on_energy_range = self._on_energy_range
         self.page.on_psd_region = self._on_psd_region
         self.page.on_psd_add = self._on_psd_add
+        self.page.on_fom_region = self._on_fom_region
 
     def _status(self, msg):
         self.app.statusBar().showMessage(f"  {msg}")
@@ -780,6 +1001,9 @@ class NeutronsController:
         self._analysis_ready = False
         if self.opts.btn_psd_select.isChecked():
             self.opts.btn_psd_select.setChecked(False)  # fires _on_arm to reset
+        if self.opts.btn_fom.isChecked():
+            self.opts.btn_fom.setChecked(False)         # fires _on_fom_arm
+        self._clear_fom()
         import os
         self.opts.lbl_file.setText(
             f"{os.path.basename(path)}\n{nt.n_traces:,} traces · "
@@ -871,6 +1095,9 @@ class NeutronsController:
         self._analysis_ready = False
         if self.opts.btn_psd_select.isChecked():
             self.opts.btn_psd_select.setChecked(False)
+        if self.opts.btn_fom.isChecked():
+            self.opts.btn_fom.setChecked(False)
+        self._clear_fom()
         self.opts.lbl_file.setText(
             f"PIXIE {self._pixie_desc} · ch {channel}\n{nt.n_traces:,} traces")
         self._redraw()
@@ -927,6 +1154,10 @@ class NeutronsController:
         self._status("Recomputing PSD…")
         self.app.repaint()
         self.nt.compute()
+        # New gates → new PSD values, so any standing FOM slice must be re-fitted.
+        if self.page.fom_armed and self._fom_region is not None:
+            self._fit_fom()
+            self._show_fom_dialog(raise_=False)
         self._redraw()
         self._status("PSD recomputed")
 
@@ -938,6 +1169,10 @@ class NeutronsController:
     def _on_arm(self, checked):
         """Toggle multi-box 'PSD selections' mode. Arming clears the single-mode
         filters so selections are made fresh, only on the PSD panel."""
+        # The two armed modes both own the PSD rubber band, so only one at a
+        # time (unchecking fires _on_fom_arm, which closes the FOM pop-out).
+        if checked and self.opts.btn_fom.isChecked():
+            self.opts.btn_fom.setChecked(False)
         self.page.armed = checked
         # Selecting on the PSD panel needs it populated, so arming commits the
         # analysis if the gates haven't been touched yet.
@@ -972,10 +1207,115 @@ class NeutronsController:
         self._redraw()
         self._status(f"Added PSD selection {len(self._psd_selections)}")
 
+    # -- figure of merit -------------------------------------------------------
+    def _on_fom_arm(self, checked):
+        """Toggle figure-of-merit mode: the PSD rubber band then selects the
+        slice to project into the pop-out FOM window instead of cross-filtering.
+        Disarming closes that window."""
+        if checked and self.opts.btn_psd_select.isChecked():
+            self.opts.btn_psd_select.setChecked(False)   # mutually exclusive
+        self.opts.btn_fom.setText(
+            "● Figure of merit ON" if checked else "Figure of merit")
+        self._clear_fom()
+        if not checked and self._fom_dialog is not None:
+            self._fom_dialog.close()
+        # Selecting on the PSD panel needs it populated, so arming commits the
+        # analysis if the gates haven't been touched yet.
+        if checked and self.nt is not None:
+            self._analysis_ready = True
+        self.page.set_fom_mode(checked)
+        if self.nt is None:
+            self.page.show_empty()
+        else:
+            self._redraw()
+        self._status(
+            "Figure of merit armed — drag a box across both PSD bands"
+            if checked else "Figure of merit disarmed")
+
+    def _clear_fom(self):
+        self._fom_region = None
+        self._fom_result = None
+        self._fom_error = None
+        self.opts.lbl_fom.setText("—")
+        # An open pop-out would otherwise keep showing the dropped fit.
+        if self._fom_dialog is not None and self._fom_dialog.isVisible():
+            self._fom_dialog.show_message(
+                "Drag a box on the PSD panel spanning\n"
+                "both the gamma and the neutron band")
+
+    def _on_fom_region(self, region):
+        """A slice was dragged on the PSD panel: project it, fit it and pop the
+        FOM window up (or refresh it if it is already open)."""
+        if region is None or self.nt is None:
+            self._clear_fom()
+            self._redraw()
+            return
+        self._fom_region = region
+        self._fit_fom()
+        self._show_fom_dialog()
+        self._redraw()
+
+    def _refit_fom(self):
+        """Re-fit with the current bin count (FOM bins spin box)."""
+        if self._fom_region is None or self.nt is None:
+            return
+        self._fit_fom()
+        self._show_fom_dialog(raise_=False)
+        self._redraw()
+
+    def _show_fom_dialog(self, raise_=True):
+        """Draw the current fit (or its failure message) in the pop-out window,
+        creating and showing it the first time. *raise_* brings it to the front,
+        which a fresh selection does but a background re-fit does not."""
+        if self._fom_dialog is None:
+            self._fom_dialog = FOMDialog(self.app)
+        dlg = self._fom_dialog
+        if self._fom_result is not None:
+            dlg.plot(self._fom_result, self._fom_region, self.page.charge_unit)
+        else:
+            dlg.show_message(self._fom_error or "No fit for the current slice")
+        if raise_ or dlg.isVisible():
+            dlg.show(); dlg.raise_()
+
+    def _fit_fom(self):
+        """Fit the double Gaussian for the stored slice, recording any failure."""
+        from wara.neutron_psd import figure_of_merit
+
+        nt = self.nt
+        elo, ehi, plo, phi = self._fom_region
+        mask = (nt.valid & (nt.energy >= elo) & (nt.energy <= ehi)
+                & (nt.psd >= plo) & (nt.psd <= phi))
+        if int(mask.sum()) < 10:
+            # Usually a slice left over from before a gate drag: the PSD axis
+            # has moved and the old box no longer covers any pulses.
+            self._fom_result = None
+            self._fom_error = ("No pulses in the selected slice.\n"
+                               "Drag a new box across both PSD bands.")
+            self.opts.lbl_fom.setText("empty slice")
+            self._status("FOM: no pulses in the selected slice")
+            return
+        try:
+            self._fom_result = figure_of_merit(
+                nt.psd[mask], bins=self.opts.spin_bins_fom.value(),
+                psd_range=(plo, phi))
+            self._fom_error = None
+        except Exception as exc:  # noqa: BLE001 — surface fit failures in the UI
+            self._fom_result = None
+            self._fom_error = f"Could not fit this slice:\n{exc}"
+            self.opts.lbl_fom.setText("fit failed")
+            self._status(f"FOM fit failed: {exc}")
+            return
+        r = self._fom_result
+        self.opts.lbl_fom.setText(f"{r.fom:.3f} · {r.n_events:,} pulses")
+        self._status(
+            f"FOM = {r.fom:.3f} (S = {r.separation:.4g}, "
+            f"ΣFWHM = {r.fwhm_gamma + r.fwhm_n:.4g}) from {r.n_events:,} pulses")
+
     def _clear_selection(self):
         self._energy_range = (None, None)
         self._psd_region = None
         self._psd_selections = []
+        self._clear_fom()
         self._redraw()
         self._status("Selection cleared")
 
@@ -1067,6 +1407,10 @@ class NeutronsController:
         else the single dashed cross-filter box."""
         if self._armed:
             return [(*s["region"], s["color"], "solid") for s in self._psd_selections]
+        # FOM mode: keep the projected slice outlined after the rubber band goes.
+        if self.page.fom_armed:
+            return ([(*self._fom_region, T.ACCENT_GREEN, "--")]
+                    if self._fom_region is not None else [])
         if self._psd_region is not None:
             return [(*self._psd_region, T.ACCENT_RED, "--")]
         return []
@@ -1079,23 +1423,35 @@ class NeutronsController:
 
     def _draw_traces(self, groups):
         nt = self.nt
+        average = self.opts.cb_avg_trace.isChecked()
         n_max = self.opts.spin_shown.value()
         # Share the trace budget across groups so a busy multi-selection stays
         # legible (at least a few traces per group).
         per_group = max(5, n_max // max(1, len(groups)))
         n_total = 0
+        n_used = 0          # pulses actually drawn / averaged
         draw_groups = []
         for mask, color, _label in groups:
             idx = np.flatnonzero(mask)
             n_total += idx.size
-            if idx.size > per_group:
+            # Averaging while armed uses *every* pulse in the PSD box; otherwise
+            # it averages exactly the random sample that would have been drawn.
+            subsample = not (average and self._armed)
+            if subsample and idx.size > per_group:
                 idx = self._rng.choice(idx, size=per_group, replace=False)
                 idx.sort()
-            traces = (nt.corrected[idx].astype(float) if idx.size
-                      else np.empty((0, nt.time_ns.size)))
+            n_used += idx.size
+            if average:
+                # Mean in float64 straight from the float32 store (no full copy).
+                traces = (np.mean(nt.corrected[idx], axis=0, dtype=np.float64,
+                                  keepdims=True) if idx.size
+                          else np.empty((0, nt.time_ns.size)))
+            else:
+                traces = (nt.corrected[idx].astype(float) if idx.size
+                          else np.empty((0, nt.time_ns.size)))
             draw_groups.append((traces, color))
-        n_shown = sum(len(tr) for tr, _c in draw_groups)
+        n_shown = n_used if average else sum(len(tr) for tr, _c in draw_groups)
         self.page.draw_traces(
             nt.time_ns, draw_groups, nt.threshold_v, nt.gate_start_ns,
             nt.prompt_end_ns, nt.tail_end_ns, n_shown=n_shown, n_total=n_total,
-            log_y=self.opts.cb_traces_log.isChecked())
+            log_y=self.opts.cb_traces_log.isChecked(), average=average)

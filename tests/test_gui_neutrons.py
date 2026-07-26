@@ -286,6 +286,48 @@ def test_selection_mask_is_union_when_armed(neutrons):
                     & nt.valid).sum()
 
 
+def test_average_trace_only_draws_one_line(neutrons):
+    """Unchecked by default; checked it replaces the sample with its mean."""
+    c = neutrons
+    assert c.opts.cb_avg_trace.isChecked() is False
+    n_lines_sample = len(c.page.ax_traces.lines)
+    c.opts.cb_avg_trace.setChecked(True)      # fires _redraw_traces_only
+    # One averaged pulse + the 4 marker lines (threshold/gate/prompt/tail).
+    assert len(c.page.ax_traces.lines) == 5
+    assert len(c.page.ax_traces.lines) < n_lines_sample
+    # It is the mean of the sampled pulses, not a single trace.
+    y = c.page.ax_traces.lines[0].get_ydata()
+    assert y.shape == c.nt.time_ns.shape
+    assert np.isfinite(y).all()
+    c.opts.cb_avg_trace.setChecked(False)
+    assert len(c.page.ax_traces.lines) == n_lines_sample
+
+
+def test_average_trace_uses_all_selected_when_armed(neutrons):
+    """With PSD selections ON each box contributes one average over *all* its
+    pulses (not just the drawn sample)."""
+    c = neutrons
+    nt = c.nt
+    e = nt.energy[nt.valid]; p = nt.psd[nt.valid]
+    _arm(c, True)
+    # Disjoint in PSD so the two boxes share no pulses.
+    r1 = (float(np.percentile(e, 5)), float(np.percentile(e, 60)),
+          float(np.percentile(p, 5)), float(np.percentile(p, 45)))
+    r2 = (float(np.percentile(e, 40)), float(np.percentile(e, 95)),
+          float(np.percentile(p, 55)), float(np.percentile(p, 95)))
+    c._on_psd_add(r1); c._on_psd_add(r2)
+    c.opts.spin_shown.setValue(10)            # sample far smaller than the boxes
+    c.opts.cb_avg_trace.setChecked(True)
+    # One averaged line per selection + the 4 markers.
+    assert len(c.page.ax_traces.lines) == 2 + 4
+    # The first line is the mean over every pulse in box 1.
+    expected = nt.corrected[c._region_mask(r1) & nt.valid].mean(axis=0)
+    assert np.allclose(c.page.ax_traces.lines[0].get_ydata(), expected, rtol=1e-5)
+    # ... and the title reports all selected pulses as averaged.
+    n_sel = int(c._selection_mask().sum())
+    assert f"{n_sel:,}" in c.page.ax_traces.get_title()
+
+
 def test_disarming_restores_single_mode(neutrons):
     nt = neutrons.nt
     _arm(neutrons, True)
@@ -297,3 +339,136 @@ def test_disarming_restores_single_mode(neutrons):
     groups = neutrons._selection_groups()
     assert len(groups) == 1 and groups[0][1] is None
     assert neutrons._selection_mask().sum() == nt.valid.sum()
+
+
+# ── Figure of merit ─────────────────────────────────────────────────────────────
+def test_figure_of_merit_recovers_known_gaussians():
+    """A synthetic two-Gaussian PSD projection fits back to its inputs."""
+    rng = np.random.default_rng(3)
+    mu_g, sig_g, mu_n, sig_n = 0.10, 0.020, 0.30, 0.025
+    vals = np.concatenate([rng.normal(mu_g, sig_g, 8000),
+                           rng.normal(mu_n, sig_n, 4000)])
+    r = npsd.figure_of_merit(vals, bins=100)
+    assert r.mu_gamma == pytest.approx(mu_g, abs=0.005)
+    assert r.mu_n == pytest.approx(mu_n, abs=0.005)
+    assert r.sigma_gamma == pytest.approx(sig_g, abs=0.004)
+    assert r.fwhm_n == pytest.approx(npsd.SIGMA_TO_FWHM * sig_n, abs=0.01)
+    expected = abs(mu_n - mu_g) / (npsd.SIGMA_TO_FWHM * (sig_g + sig_n))
+    assert r.fom == pytest.approx(expected, rel=0.05)
+    # The lower-mean Gaussian is always the gamma one.
+    assert r.mu_gamma < r.mu_n
+    assert r.separation == pytest.approx(r.mu_n - r.mu_gamma)
+    assert r.r_squared > 0.95
+    assert r.n_events == vals.size
+    assert r.counts.size == 100 and r.centers.size == 100
+    # The fit curve is the sum of its two components.
+    x = r.centers
+    assert np.allclose(r.curve(x),
+                       r.component(x, "gamma") + r.component(x, "neutron"))
+
+
+def test_figure_of_merit_rejects_tiny_and_empty_input():
+    with pytest.raises(ValueError):
+        npsd.figure_of_merit(np.array([0.1, 0.2, 0.3]))
+    with pytest.raises(ValueError):
+        npsd.figure_of_merit(np.linspace(0, 1, 50), psd_range=(0.5, 0.5))
+
+
+def test_neutrontraces_fom_uses_energy_slice():
+    """NeutronTraces.fom projects only the pulses in the energy/PSD window."""
+    t, traces, mean = make_traces(n=1200)
+    nt = npsd.NeutronTraces(t, traces, mean=mean).compute()
+    e = nt.energy[nt.valid]; p = nt.psd[nt.valid]
+    erange = (float(np.percentile(e, 10)), float(np.percentile(e, 90)))
+    prange = (float(np.percentile(p, 1)), float(np.percentile(p, 99)))
+    r = nt.fom(energy_range=erange, psd_range=prange, bins=60)
+    inside = (nt.valid & (nt.energy >= erange[0]) & (nt.energy <= erange[1])
+              & (nt.psd >= prange[0]) & (nt.psd <= prange[1]))
+    assert r.n_events == int(inside.sum()) < int(nt.valid.sum())
+    assert prange[0] <= r.mu_gamma <= r.mu_n <= prange[1]
+    assert np.isfinite(r.fom)
+
+
+def _arm_fom(neutrons, on):
+    neutrons.opts.btn_fom.setChecked(on)   # fires toggled -> _on_fom_arm
+
+
+def test_arming_fom_keeps_the_canvas_layout(neutrons):
+    """Arming only re-arms the PSD rubber band; no panel is added or resized,
+    and no window pops up until a slice is selected."""
+    c = neutrons
+    psd_box_before = c.page.ax_psd.get_position().bounds
+    _arm_fom(c, True)
+    assert c.page.fom_armed is True
+    assert c.page.ax_psd.get_position().bounds == psd_box_before
+    assert len(c.page.fig.axes) == 3
+    assert "ON" in c.opts.btn_fom.text()
+    assert c._fom_result is None and c._fom_dialog is None
+    # The PSD rubber band is still attached (that is how the slice is drawn).
+    assert c.page._rect is not None
+    _arm_fom(c, False)
+    assert c.page.fom_armed is False
+    assert c.opts.btn_fom.text() == "Figure of merit"
+
+
+def test_fom_region_pops_up_the_window(neutrons):
+    c = neutrons
+    nt = c.nt
+    e = nt.energy[nt.valid]; p = nt.psd[nt.valid]
+    _arm_fom(c, True)
+    region = (float(e.min()), float(e.max()),
+              float(np.percentile(p, 0.5)), float(np.percentile(p, 99.5)))
+    c._on_fom_region(region)          # what dragging the PSD box calls
+    r = c._fom_result
+    assert r is not None and c._fom_error is None
+    assert np.isfinite(r.fom) and r.fom > 0
+    assert r.mu_gamma < r.mu_n
+    # The pop-out exists, is shown, and reports the value; so does the options
+    # panel. The main canvas still holds exactly its three panels.
+    dlg = c._fom_dialog
+    assert dlg is not None and dlg.isVisible()
+    assert len(c.page.fig.axes) == 3
+    assert f"{r.fom:.3f}" in c.opts.lbl_fom.text()
+    assert "FOM" in dlg.ax.get_title()
+    assert any(f"{r.fom:.3f}" in t.get_text() for t in dlg.ax.texts)
+    assert f"{r.fom:.3f}" in dlg.lbl.text()
+    # The slice box stays outlined on the PSD panel...
+    rects = c._psd_rects()
+    assert len(rects) == 1 and rects[0][:4] == region and rects[0][5] == "--"
+    # ... and the FOM box does not cross-filter the other panels.
+    assert c._selection_mask().sum() == nt.valid.sum()
+    # Changing the bin count re-fits the same slice and refreshes the window.
+    c.opts.spin_bins_fom.setValue(40)
+    assert c._fom_result.counts.size == 40
+    # Disarming closes the pop-out.
+    _arm_fom(c, False)
+    assert not dlg.isVisible()
+
+
+def test_fom_and_psd_selections_are_mutually_exclusive(neutrons):
+    c = neutrons
+    _arm_fom(c, True)
+    _arm(c, True)
+    assert c.opts.btn_fom.isChecked() is False
+    assert c.page.fom_armed is False
+    assert c.page.armed is True
+    _arm_fom(c, True)
+    assert c.opts.btn_psd_select.isChecked() is False
+    assert c.page.armed is False and c.page.fom_armed is True
+    _arm_fom(c, False)
+
+
+def test_fom_empty_slice_is_surfaced(neutrons):
+    """An empty slice leaves no result and a message in the pop-out."""
+    c = neutrons
+    _arm_fom(c, True)
+    c._on_fom_region((1e9, 2e9, 0.0, 1.0))   # nothing in there
+    assert c._fom_result is None
+    assert c._fom_error and "No pulses" in c._fom_error
+    assert c.opts.lbl_fom.text() == "empty slice"
+    assert any("No pulses" in t.get_text() for t in c._fom_dialog.ax.texts)
+    # Clearing the selection resets the read-out and the window.
+    c._clear_selection()
+    assert c._fom_region is None and c.opts.lbl_fom.text() == "—"
+    assert any("Drag a box" in t.get_text() for t in c._fom_dialog.ax.texts)
+    _arm_fom(c, False)

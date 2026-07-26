@@ -174,6 +174,90 @@ send a selected spectrum back to the Spectrum tab, and explore the reconstructed
 
 See [Associated Particle Imaging](api.md).
 
+## The Neutrons tab
+
+The **Neutrons** tab is an interactive pulse-shape-discrimination (PSD) explorer
+for digitized PMT traces (a PicoScope `.npz`/`.npy`/`.txt`/`.csv` file, or a
+PIXIE-16 run loaded straight from disk). It shows three linked panels:
+
+- **Traces** — a random sample of baseline-corrected pulses with draggable
+  markers for the voltage threshold and the gate-start / prompt-end / tail-end
+  boundaries. Dragging a marker recomputes the energy and PSD of every pulse.
+- **MCA** — the pulse-integral (energy) spectrum; drag a horizontal span to
+  restrict the other panels.
+- **PSD** — a 2-D energy-vs-PSD histogram; drag a box to restrict the other
+  panels. Arming **PSD selections** switches to multi-box mode, where each box
+  gets its own colour in the Traces and MCA panels.
+
+### Averaging the traces
+
+The **Average trace only** checkbox (DISPLAY section, off by default) replaces
+the individual pulses with a single averaged trace:
+
+- normally, the mean of the random sample currently drawn (the *Traces* count
+  set just above the checkbox — 150 by default);
+- with **PSD selections** ON, one averaged trace per coloured box, drawn in that
+  box's colour and averaged over *every* pulse inside it, not just the sampled
+  ones. This is the quickest way to compare the mean pulse shape of a
+  neutron-like against a gamma-like region.
+
+The panel title reports how many pulses went into the average. A runnable
+version of both modes is in
+`examples/other/example_neutron_average_trace.py`; the underlying numerics live
+in {py:mod}`wara.neutron_psd` (see `examples/other/example_neutron_psd.py`).
+
+### Figure of merit
+
+The **Figure of merit** button (SELECTION section) re-arms the PSD rubber band:
+instead of cross-filtering, the box you drag selects the slice to characterise,
+and the result opens in its own window. The main canvas is untouched.
+
+Drag a box on the PSD panel that **spans both the gamma and the neutron band**
+over the energy slice you want to characterise (discrimination varies strongly
+with light output, so the FOM is always quoted for a slice). The pulses inside
+are projected onto the PSD axis, histogrammed into **FOM bins** (80 by default)
+and fitted with a double Gaussian
+
+```
+y(PSD) = A_γ·exp(−(PSD − μ_γ)² / 2σ_γ²) + A_n·exp(−(PSD − μ_n)² / 2σ_n²)
+```
+
+whose lower-mean component is the gamma band and whose higher-mean component is
+the neutron band. Each width is converted with `FWHM = 2√(2 ln 2)·σ ≈ 2.3548·σ`
+and reduced to
+
+```
+FOM = S / (FWHM_γ + FWHM_n) = |μ_n − μ_γ| / (FWHM_γ + FWHM_n)
+```
+
+The pop-out window (with its own matplotlib toolbar, so the fit can be zoomed
+and saved) shows the projection, both components, their sum, and a read-out of
+the FOM, the separation `S`, the summed FWHM, the pulse count and the fit R².
+The read-out is green when `FOM ≥ 1.27` — the usual threshold for clean
+neutron/gamma separation — and red below it; the options panel repeats the value
+next to **FOM**.
+
+Notes:
+
+- The FOM box only sets the projected slice; unlike the normal selection box it
+  does not cross-filter the Traces and MCA panels. It stays outlined in green
+  after the drag, and re-dragging replaces it and refreshes the window.
+- The window is non-modal and stays on top, so the selection can be adjusted
+  while it is open. Closing it does not disarm the mode — the next box reopens
+  it — while disarming **Figure of merit** closes it.
+- **Figure of merit** and **PSD selections** are mutually exclusive — arming one
+  disarms the other, since both own the PSD rubber band.
+- Moving a gate marker re-fits the standing slice with the new PSD values, as
+  does changing **FOM bins**. Loading a new file or run disarms the mode.
+- Fit failures (an empty or single-band slice) are reported in the window
+  instead of a plot.
+
+The numerics are {py:func}`wara.neutron_psd.figure_of_merit` (and
+{py:meth}`wara.neutron_psd.NeutronTraces.fom` for a ready-made dataset), which
+return a `FOMResult` carrying the fitted parameters, the histogram and the
+`curve()` / `component()` helpers. A runnable version is in
+`examples/other/example_neutron_fom.py`.
+
 ## The Planetary tab
 
 The **Planetary** tab visualizes and analyzes data from NASA planetary

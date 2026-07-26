@@ -13,6 +13,7 @@ first). Time is in nanoseconds and amplitude in volts, matching the PicoScope
 from __future__ import annotations
 
 import os
+from dataclasses import dataclass, field
 
 import numpy as np
 
@@ -24,7 +25,14 @@ __all__ = [
     "psd_ratio",
     "auto_pre_trigger",
     "load_trace_file",
+    "double_gaussian",
+    "figure_of_merit",
+    "FOMResult",
+    "SIGMA_TO_FWHM",
 ]
+
+#: ``FWHM = 2*sqrt(2*ln2) * sigma`` — the Gaussian width conversion factor.
+SIGMA_TO_FWHM = 2.0 * np.sqrt(2.0 * np.log(2.0))
 
 
 def _synth_time(traces):
@@ -169,6 +177,191 @@ def psd_ratio(traces_corrected, time_ns, gate_start_ns, prompt_end_ns,
     return psd, q_total
 
 
+# ── Figure of merit ────────────────────────────────────────────────────────────
+def double_gaussian(x, a_g, mu_g, sigma_g, a_n, mu_n, sigma_n):
+    """Sum of two Gaussians (gamma + neutron) evaluated at *x*.
+
+    ``y = a_g*exp(-(x-mu_g)^2 / 2*sigma_g^2) + a_n*exp(-(x-mu_n)^2 / 2*sigma_n^2)``
+    """
+    x = np.asarray(x, dtype=float)
+    return (a_g * np.exp(-((x - mu_g) ** 2) / (2.0 * sigma_g ** 2))
+            + a_n * np.exp(-((x - mu_n) ** 2) / (2.0 * sigma_n ** 2)))
+
+
+@dataclass
+class FOMResult:
+    """Double-Gaussian fit of a 1-D PSD projection and the resulting FOM.
+
+    ``FOM = |mu_n - mu_gamma| / (FWHM_gamma + FWHM_n)``, the standard
+    neutron/gamma separation quality metric; ``FOM >= 1.27`` is the usual
+    threshold for clean discrimination. The two Gaussians are ordered by their
+    means: the lower one is labelled gamma, the higher one neutron.
+    """
+
+    fom: float
+    separation: float
+    mu_gamma: float
+    sigma_gamma: float
+    amp_gamma: float
+    mu_n: float
+    sigma_n: float
+    amp_n: float
+    n_events: int
+    r_squared: float
+    counts: np.ndarray = field(repr=False)
+    edges: np.ndarray = field(repr=False)
+
+    @property
+    def centers(self):
+        """Histogram bin centres of the PSD projection."""
+        return 0.5 * (self.edges[1:] + self.edges[:-1])
+
+    @property
+    def fwhm_gamma(self):
+        return SIGMA_TO_FWHM * self.sigma_gamma
+
+    @property
+    def fwhm_n(self):
+        return SIGMA_TO_FWHM * self.sigma_n
+
+    @property
+    def popt(self):
+        """Fit parameters as ``(a_g, mu_g, sigma_g, a_n, mu_n, sigma_n)``."""
+        return (self.amp_gamma, self.mu_gamma, self.sigma_gamma,
+                self.amp_n, self.mu_n, self.sigma_n)
+
+    def curve(self, x):
+        """The fitted double Gaussian evaluated at *x*."""
+        return double_gaussian(x, *self.popt)
+
+    def component(self, x, which):
+        """One fitted Gaussian, *which* being ``"gamma"`` or ``"neutron"``."""
+        if which not in ("gamma", "neutron"):
+            raise ValueError("which must be 'gamma' or 'neutron'")
+        if which == "gamma":
+            a, mu, s = self.amp_gamma, self.mu_gamma, self.sigma_gamma
+        else:
+            a, mu, s = self.amp_n, self.mu_n, self.sigma_n
+        x = np.asarray(x, dtype=float)
+        return a * np.exp(-((x - mu) ** 2) / (2.0 * s ** 2))
+
+
+def _two_peak_guess(centers, counts):
+    """Initial ``(a, mu, sigma)`` pairs for the two PSD peaks in a histogram.
+
+    Uses the two most prominent maxima of a lightly smoothed histogram; falls
+    back to splitting the distribution at its highest bin when only one peak is
+    resolved (a poorly separated detector still has to produce a fit).
+    """
+    span = float(centers[-1] - centers[0])
+    smooth = np.convolve(counts, np.ones(3) / 3.0, mode="same")
+    idx = []
+    try:
+        from scipy.signal import find_peaks
+
+        found, props = find_peaks(smooth, distance=max(2, len(centers) // 20),
+                                  prominence=0.02 * smooth.max())
+        order = np.argsort(props["prominences"])[::-1]
+        idx = [int(found[i]) for i in order[:2]]
+    except Exception:  # noqa: BLE001 — fall through to the split heuristic
+        idx = []
+    if len(idx) < 2:
+        # One peak only: seed the second on the heaviest side lobe.
+        top = int(np.argmax(smooth))
+        left, right = smooth[:top], smooth[top + 1:]
+        if right.sum() >= left.sum() and right.size:
+            other = top + 1 + int(np.argmax(right))
+        elif left.size:
+            other = int(np.argmax(left))
+        else:
+            other = top
+        idx = [top, other]
+    idx = sorted(idx)
+    guesses = []
+    for i in idx:
+        # Half-maximum width around the peak, floored so curve_fit can move.
+        half = 0.5 * smooth[i]
+        lo = i
+        while lo > 0 and smooth[lo] > half:
+            lo -= 1
+        hi = i
+        while hi < len(smooth) - 1 and smooth[hi] > half:
+            hi += 1
+        fwhm = max(centers[hi] - centers[lo], span / 50.0)
+        guesses.append((float(smooth[i]), float(centers[i]),
+                        float(fwhm / SIGMA_TO_FWHM)))
+    return guesses
+
+
+def figure_of_merit(psd_values, bins=80, psd_range=None):
+    """Fit a double Gaussian to a 1-D PSD projection and return its FOM.
+
+    *psd_values* are the PSD parameters of the pulses in one energy slice (the
+    projection of a horizontal PSD-plot slice onto the PSD axis), which for a
+    discriminating detector shows a gamma peak and a neutron peak. They are
+    histogrammed into *bins* over *psd_range* (``(lo, hi)``, default the data
+    range), fitted with :func:`double_gaussian`, and reduced to
+
+    ``FOM = |mu_n - mu_gamma| / (FWHM_gamma + FWHM_n)``.
+
+    Returns a :class:`FOMResult`. Raises ``ValueError`` when fewer than 10
+    finite values are given and ``RuntimeError`` when the fit does not converge.
+    """
+    from scipy.optimize import curve_fit
+
+    vals = np.asarray(psd_values, dtype=float)
+    vals = vals[np.isfinite(vals)]
+    if vals.size < 10:
+        raise ValueError(
+            f"Need at least 10 finite PSD values to fit, got {vals.size}")
+    if psd_range is None:
+        psd_range = (float(vals.min()), float(vals.max()))
+    lo, hi = float(psd_range[0]), float(psd_range[1])
+    if hi <= lo:
+        raise ValueError(f"Empty PSD range ({lo}, {hi})")
+
+    counts, edges = np.histogram(vals, bins=int(bins), range=(lo, hi))
+    centers = 0.5 * (edges[1:] + edges[:-1])
+    counts = counts.astype(float)
+    if counts.max() <= 0:
+        raise ValueError("PSD projection is empty over the requested range")
+
+    # Nothing narrower than a bin can be resolved: flooring sigma there keeps a
+    # single-bin spike from collapsing the fit's gradient into a delta function.
+    bin_w = float(edges[1] - edges[0])
+    span = hi - lo
+    (a1, m1, s1), (a2, m2, s2) = _two_peak_guess(centers, counts)
+    s1, s2 = max(s1, bin_w), max(s2, bin_w)
+    p0 = [a1, m1, s1, a2, m2, s2]
+    bounds = ([0.0, lo, 0.5 * bin_w] * 2, [10.0 * counts.max(), hi, span] * 2)
+    try:
+        popt, _pcov = curve_fit(double_gaussian, centers, counts, p0=p0,
+                                bounds=bounds, maxfev=20000)
+    except Exception as exc:  # noqa: BLE001 — re-raise with a usable message
+        raise RuntimeError(f"Double-Gaussian fit did not converge: {exc}") from exc
+
+    # Order the two components by mean: lower = gamma, higher = neutron.
+    comp = [tuple(popt[:3]), tuple(popt[3:])]
+    comp.sort(key=lambda c: c[1])
+    (a_g, mu_g, s_g), (a_n, mu_n, s_n) = comp
+    s_g, s_n = abs(s_g), abs(s_n)
+
+    fwhm_sum = SIGMA_TO_FWHM * (s_g + s_n)
+    separation = abs(mu_n - mu_g)
+    fom = separation / fwhm_sum if fwhm_sum > 0 else float("nan")
+
+    resid = counts - double_gaussian(centers, a_g, mu_g, s_g, a_n, mu_n, s_n)
+    ss_tot = float(((counts - counts.mean()) ** 2).sum())
+    r2 = 1.0 - float((resid ** 2).sum()) / ss_tot if ss_tot > 0 else float("nan")
+
+    return FOMResult(
+        fom=float(fom), separation=float(separation),
+        mu_gamma=float(mu_g), sigma_gamma=float(s_g), amp_gamma=float(a_g),
+        mu_n=float(mu_n), sigma_n=float(s_n), amp_n=float(a_n),
+        n_events=int(vals.size), r_squared=float(r2),
+        counts=counts, edges=edges)
+
+
 class NeutronTraces:
     """Loaded trace dataset with a full PSD pipeline behind cached results.
 
@@ -291,3 +484,22 @@ class NeutronTraces:
         positive = self.energy > 0
         self.valid = above & positive & np.isfinite(self.psd)
         return self
+
+    def fom(self, energy_range=None, psd_range=None, bins=80):
+        """Figure of merit of the valid pulses inside an energy/PSD window.
+
+        *energy_range* is the ``(lo, hi)`` slice of the energy axis to project
+        (the whole spectrum when ``None``) and *psd_range* limits the projected
+        PSD axis, which must span both the gamma and the neutron band. See
+        :func:`figure_of_merit`; :meth:`compute` must have been called first.
+        """
+        if self.valid is None:
+            raise RuntimeError("Call compute() before fom()")
+        mask = self.valid.copy()
+        if energy_range is not None:
+            elo, ehi = energy_range
+            mask &= (self.energy >= elo) & (self.energy <= ehi)
+        if psd_range is not None:
+            plo, phi = psd_range
+            mask &= (self.psd >= plo) & (self.psd <= phi)
+        return figure_of_merit(self.psd[mask], bins=bins, psd_range=psd_range)
