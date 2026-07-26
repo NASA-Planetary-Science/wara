@@ -10,8 +10,7 @@ and planetary nuclear spectroscopy. Ships a PyQt5 GUI (entry point: `wara`).
 
 ```bash
 pip install -e .            # editable install (run from repo root)
-wara                        # launch the v2.0 GUI (default)
-wara --legacy               # launch the pre-2.0 GUI (frozen, pending removal)
+wara                        # launch the GUI
 pytest tests -q             # full test suite
 pytest tests/test_spectrum.py   # a single test file
 ruff check .                # lint
@@ -28,8 +27,8 @@ at import time in `matplotlib_theme.py` and `apicalc.py`).
   its own module (`spectrum.py`, `calibration.py`, `efficiency.py`,
   `resolution.py`, `api*.py`, `neutrons.py`, `planetary.py`, `fitting.py`,
   `isotope_id.py`, ...). Shared widgets/theme in `widgets.py`, `theme.py`.
-- `wara/gui_legacy/` — **frozen**, pending removal. Excluded from ruff. Don't
-  add features here; only touch if explicitly asked.
+  The pre-2.0 GUI (`wara/gui_legacy/`) was retired in v2.1 — it is gone from
+  the tree, and `wara --legacy` now prints a notice and launches the current GUI.
 - `wara/nuclear-data/` — bundled `.txt`/`.csv` nuclide databases (package data).
 - `wara/planetary/`, `wara/planetary-nuclear-spect/` — planetary spectroscopy.
   `planetary-nuclear-spect` holds ad-hoc mission-data scripts (not importable

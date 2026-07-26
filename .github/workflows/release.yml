@@ -1,0 +1,75 @@
+name: release
+
+# Publishes to PyPI when a version tag is pushed. setuptools_scm derives the
+# version from that tag, so the tag is the single source of truth.
+on:
+  push:
+    tags: ["v*"]
+  # Manual runs publish to TestPyPI only, for rehearsing a release.
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # setuptools_scm needs full history + tags to derive the version.
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Build sdist and wheel
+        run: |
+          python -m pip install --upgrade pip build twine
+          python -m build
+          python -m twine check dist/*
+
+      - name: Fail if the version is a dev/local build
+        # A non-tag or dirty tree yields e.g. 2.0.1.dev48+gf22a6da5, and PyPI
+        # rejects local version segments. Catch it before the upload job.
+        run: |
+          version=$(python -c "import importlib.metadata as m; print(m.version('wara'))" 2>/dev/null \
+            || ls dist/*.whl | sed -E 's/.*wara-([^-]+)-.*/\1/')
+          echo "Built version: $version"
+          case "$version" in
+            *+*|*dev*) echo "::error::Refusing to publish non-release version $version"; exit 1 ;;
+          esac
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist/
+
+  testpypi:
+    needs: build
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    environment: testpypi
+    permissions:
+      # Required for Trusted Publishing; no API token needed.
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist/
+      - uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          repository-url: https://test.pypi.org/legacy/
+
+  pypi:
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    environment: pypi
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist/
+      - uses: pypa/gh-action-pypi-publish@release/v1

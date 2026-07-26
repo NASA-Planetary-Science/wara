@@ -1,0 +1,5 @@
+# setuptools_scm puts every git-tracked file in the sdist. Drop the ad-hoc
+# mission-data scripts and their raw datasets (~60 MB); they are not part of
+# the importable package and are excluded from the wheel too (see pyproject).
+prune wara/planetary-nuclear-spect
+prune scratch

@@ -15,8 +15,8 @@ A feature is not done until **all four** of these exist. Do them together, not
   (one module per tab — see the `gui-conventions` skill before editing GUI).
 - If it's part of the public API, re-export it from `wara/__init__.py`
   (currently `Spectrum`, `peakfit`, `PeakSearch`).
-- Match the surrounding style. Do **not** add features to `wara/gui_legacy/`
-  (frozen) or `wara/planetary-nuclear-spect/` (ad-hoc scripts).
+- Match the surrounding style. Do **not** add features to
+  `wara/planetary-nuclear-spect/` (ad-hoc scripts).
 
 ## 2. Test
 

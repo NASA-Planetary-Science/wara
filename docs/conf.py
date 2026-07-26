@@ -9,7 +9,7 @@ extensions = [
 ]
 
 autoapi_dirs = ["../wara"]
-autoapi_ignore = ["*/version.py", "*/gui_legacy/*", "*/mplwidget*"]
+autoapi_ignore = ["*/version.py", "*/mplwidget*"]
 autoapi_options = [
     "members",
     "show-inheritance",
