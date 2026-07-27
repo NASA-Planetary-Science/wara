@@ -26,7 +26,8 @@ SNR_PURPLE   = "#b388ff"   # SNR overlay curve
 REF_LINE     = "#ff3df0"   # Nuclear Database reference lines
 
 # Cycling colors for distinct series (API selections, xy bands, …).
-OVERLAY_COLORS = ["#ff8a3d", "#5cf04a", "#ffb300", "#b388ff", "#4d9bff", "#ff5577"]
+# 3rd slot was #ffb300 (amber) -- too close to the 1st (#ff8a3d, orange).
+OVERLAY_COLORS = ["#ff8a3d", "#5cf04a", "#00c2c7", "#b388ff", "#4d9bff", "#ff5577"]
 
 # Palette for loaded spectra on the Spectrum page. A color is assigned when a
 # spectrum is loaded and travels with it as it moves between active and overlay,
