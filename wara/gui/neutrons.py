@@ -947,6 +947,11 @@ class NeutronsController:
         self.opts.btn_load.clicked.connect(self._load)
         self.opts.btn_load_pixie.clicked.connect(self._load_pixie)
         self.opts.cmb_channel.activated.connect(lambda *_: self._rebuild_pixie_channel())
+        # Align re-applies from the cached run (in memory); CFD selects which
+        # acquisition to read, so it re-reads from disk. Both only act once a
+        # run is loaded.
+        self.opts.cmb_align.activated.connect(lambda *_: self._rebuild_pixie_channel())
+        self.opts.cmb_cfd.activated.connect(lambda *_: self._reload_pixie_cfd())
         self.opts.btn_pixie_stats.clicked.connect(self._show_pixie_stats)
         self.opts.btn_send_spec.clicked.connect(self._send_to_spectrum)
         self.opts.btn_reset.clicked.connect(self._clear_selection)
@@ -1069,6 +1074,15 @@ class NeutronsController:
         cb.blockSignals(False)
 
         self._rebuild_pixie_channel()
+
+    def _reload_pixie_cfd(self):
+        """Re-read the current run when the CFD option changes. Unlike align,
+        CFD selects which acquisition files to read, so it needs a disk re-read.
+        No-op until a run has been loaded (so changing CFD beforehand is quiet).
+        """
+        if self._pixie_df is None:
+            return
+        self._load_pixie()
 
     def _rebuild_pixie_channel(self):
         """(Re)build the PSD dataset for the selected channel from the cached
@@ -1384,8 +1398,21 @@ class NeutronsController:
                     for m, color, label in groups]
         self.page.draw_mca(energy_all, overlays, self.opts.spin_bins_mca.value(),
                            self._energy_range, log_y=self.opts.cb_mca_log.isChecked())
-        self.page.draw_psd(energy_all, nt.psd[valid], self.opts.spin_bins_psd.value(),
-                           self._energy_range, self._psd_rects(),
+        # The PSD panel follows the MCA energy selection: restrict its 2-D
+        # histogram to pulses inside the chosen energy window so it re-bins and
+        # zooms to that band. Armed / FOM modes disable the MCA span (and want
+        # the full spectrum to draw boxes / slices against), so skip the filter.
+        psd_mask = valid
+        lo, hi = self._energy_range
+        psd_filtered = lo is not None and not self._armed and not self.page.fom_armed
+        if psd_filtered:
+            psd_mask = valid & (nt.energy >= lo) & (nt.energy <= hi)
+        # Once the histogram is restricted to the window the edge markers would
+        # just sit on the plot borders, so drop them when the PSD is filtered.
+        psd_range = (None, None) if psd_filtered else self._energy_range
+        self.page.draw_psd(nt.energy[psd_mask], nt.psd[psd_mask],
+                           self.opts.spin_bins_psd.value(),
+                           psd_range, self._psd_rects(),
                            log_counts=self.opts.cb_psd_log.isChecked())
         self._draw_traces(groups)
         self.page.finish_draw()
