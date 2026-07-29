@@ -1361,7 +1361,6 @@ Usage:
 
   options:
       -o                        open a blank window (default when no file given)
-      --legacy                  launch the pre-2.0 GUI instead
       --fwhm_at_0=<fwhm0>       FWHM value at x=0
       --min_snr=<msnr>          minimum peak SNR for peak search
       --ref_x=<xref>            x reference channel/energy for fwhm_ref

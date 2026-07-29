@@ -51,10 +51,8 @@ with a navigation rail (Spectrum, Calibration, Efficiency, Resolution, API,
 Planetary), a contextual options panel, and the plot area. Run `wara --help`
 for the full list of command-line options.
 
-> The previous interface is still available during the transition period:
-> ```
-> wara --legacy
-> ```
+> The pre-2.0 interface was retired in v2.1. To use it, install an earlier
+> release: `pip install "wara<2.1"`.
 
 To take a quick tour: click **Open Spectrum** in the navigation rail and load
 **examples → data → test_data_cebr.csv**. On the **Spectrum** tab, expand

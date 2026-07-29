@@ -46,9 +46,23 @@ wara = "wara.cli:main"
 [tool.setuptools.packages.find]
 where = ["."]
 include = ["wara*"]
+# Namespace discovery is on by default, so it otherwise treats the ad-hoc
+# mission-data script folders as packages and ships ~60 MB of raw .TAB/.dat
+# datasets in the wheel. They are not importable package code.
+exclude = ["wara.planetary-nuclear-spect*"]
+
+[tool.setuptools.exclude-package-data]
+# Needed in addition to the packages.find exclude above: include-package-data
+# is on, so setuptools_scm's git-tracked file list would otherwise re-attach
+# these ~60 MB of raw datasets as data files of the `wara` package.
+wara = [
+    "planetary-nuclear-spect/*",
+    "planetary-nuclear-spect/*/*",
+    "planetary-nuclear-spect/*/*/*",
+]
 
 [tool.setuptools.package-data]
-wara = ["nuclear-data/*.txt", "nuclear-data/*.csv", "ui/*.ui", "ui/*.png"]
+wara = ["nuclear-data/*.txt", "nuclear-data/*.csv", "ui/*.png"]
 "wara.planetary" = ["textures/*.png", "data/*.csv"]
 
 [tool.setuptools_scm]
@@ -60,9 +74,9 @@ write_to = "wara/version.py"
 testpaths = ["tests"]
 
 [tool.ruff]
-# gui_legacy is frozen pending removal; planetary-nuclear-spect holds ad-hoc
-# mission-data scripts (not importable package code); scratch is exploratory.
-extend-exclude = ["wara/gui_legacy", "wara/planetary-nuclear-spect", "scratch"]
+# planetary-nuclear-spect holds ad-hoc mission-data scripts (not importable
+# package code); scratch is exploratory.
+extend-exclude = ["wara/planetary-nuclear-spect", "scratch"]
 
 [tool.ruff.lint]
 # E702: the GUI modules deliberately pair related Qt layout calls on one line

@@ -8,8 +8,7 @@ layout with a **navigation rail**, a contextual **options panel**, and the
 ## Launching
 
 ```bash
-wara              # the new GUI (default)
-wara --legacy     # the previous interface, during the transition period
+wara              # the GUI
 ```
 
 You can also open

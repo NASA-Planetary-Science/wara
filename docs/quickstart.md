@@ -16,8 +16,8 @@ with a navigation rail (Spectrum, Calibration, Efficiency, Resolution, API,
 Planetary), a contextual options panel, and the plot area.
 
 ```{note}
-The previous interface is still available during the transition period via
-`wara --legacy`.
+The pre-2.0 interface was retired in v2.1. To use it, install an earlier
+release: `pip install "wara<2.1"`.
 ```
 
 ### A quick tour
@@ -52,7 +52,6 @@ wara examples/data/test_data_cebr.csv --labr --min_snr=5
 | `--ref_x=<x>` | Reference channel/energy for the FWHM curve |
 | `--ref_fwhm=<f>` | FWHM at the reference point |
 | `--fwhm_at_0=<f>` | FWHM value at channel 0 |
-| `--legacy` | Launch the pre-2.0 GUI |
 | `-h` / `--help` | Show usage and exit |
 
 Run `wara --help` for the complete list.
