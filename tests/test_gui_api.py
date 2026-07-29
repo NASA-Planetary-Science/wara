@@ -106,6 +106,23 @@ def _synthetic_events(n=4000, seed=0):
     })
 
 
+def _synthetic_flat_events(n=4000, seed=1, with_alpha=False):
+    """A flat-field (ch 9) event table: only the A/B/C/D quadrants for the X-Y
+    alpha map, with NO gamma energy/dt columns -- matching the on-disk flat
+    run. With *with_alpha*, add the "alpha" energy column that triggers the
+    split (alpha spectrum + X-Y) view."""
+    rng = np.random.default_rng(seed)
+    cols = {
+        "A": rng.uniform(1, 100, n),
+        "B": rng.uniform(1, 100, n),
+        "C": rng.uniform(1, 100, n),
+        "D": rng.uniform(1, 100, n),
+    }
+    if with_alpha:
+        cols["alpha"] = rng.uniform(0, 4000, n)
+    return pd.DataFrame(cols)
+
+
 @pytest.fixture
 def api(qapp, monkeypatch):
     df = _synthetic_events()
@@ -150,6 +167,118 @@ def test_load_builds_panels_and_info(api):
     # Values are wrapped in coloured spans; labels are bold.
     assert "<b>" in info and "color:" in info
     assert c.page.ax_xy.get_title() == ""
+
+
+def _flat_field_ctrl(qapp, monkeypatch, df):
+    """Build the app on the API tab, stub the loader to return *df*, and seed the
+    ch-9 flat-field run fields. Returns (window, controller)."""
+    monkeypatch.setattr(read_parquet_api, "read_parquet_file",
+                        lambda *a, **k: df.copy())
+    monkeypatch.setattr(apicalc, "get_total_time", lambda *a, **k: 14386.0)
+    monkeypatch.setattr(apicalc, "get_total_counts", lambda *a, **k: 2.5e9)
+    monkeypatch.setattr(apicalc, "calculate_neutron_yield", lambda *a, **k: 4.3e6)
+
+    w = WaraApp()
+    idx = [name for name, _ in NAV_SECTIONS].index("API")
+    w.nav_group.button(idx).setChecked(True)
+    w._on_nav(idx)
+    c = w.api
+    c.opts.ed_date.setText("2025-07-13")
+    c.opts.ed_run.setText("14")
+    c.opts.ed_ch.setText("9")
+    return w, c
+
+
+def test_flat_field_ch9_plots_only_xy(qapp, monkeypatch):
+    """Loading ch 9 (flat field) with no alpha column builds only the X-Y map
+    and never looks for a (missing) energy column. Regression: _configure_keys
+    used to fall through to df["energy"].max() for flat runs and raise
+    KeyError."""
+    w, c = _flat_field_ctrl(qapp, monkeypatch, _synthetic_flat_events())
+    try:
+        c._load()  # must not raise KeyError on the missing energy column
+        assert c.flat_field is True and c._flat_alpha is False
+        # Only the X-Y map exists; the energy/dt/alpha panels are absent.
+        assert c.page.ax_xy is not None
+        assert c.page.ax_spe is None and c.page.ax_dt is None
+        assert c.page.ax_alpha is None
+        # Energy keys are cleared; the X-Y map still reconstructs X2/Y2.
+        assert c.ekey is None and c._chan_base is None
+        assert c.xkey == "X2" and c.ykey == "Y2"
+        assert c.page.xy_offsets is not None and len(c.page.xy_offsets) > 0
+    finally:
+        w.close()
+
+
+def test_flat_field_ch9_alpha_splits_view(qapp, monkeypatch):
+    """A flat-field run carrying an "alpha" column splits the canvas: the alpha
+    energy spectrum (left) alongside the X-Y map (right). The alpha spectrum is
+    binned with the shared Energy-bins box; the alpha column drives the energy
+    axis (ekey) for interactive filtering."""
+    w, c = _flat_field_ctrl(qapp, monkeypatch,
+                            _synthetic_flat_events(with_alpha=True))
+    try:
+        c._load()
+        assert c.flat_field is True and c._flat_alpha is True
+        # Split view: alpha spectrum + X-Y map, no gamma energy/dt panels.
+        assert c.page.ax_alpha is not None and c.page.ax_xy is not None
+        assert c.page.ax_spe is None and c.page.ax_dt is None
+        # The alpha spectrum drew a curve; X-Y map still reconstructs X2/Y2.
+        assert len(c.page.ax_alpha.get_lines()) == 1
+        assert c.xkey == "X2" and c.ykey == "Y2"
+        assert c.page.xy_offsets is not None and len(c.page.xy_offsets) > 0
+        # The alpha column becomes the energy axis so span cuts filter on it.
+        assert c.ekey == "alpha" and c.erange[0] == 0.0
+        # The shared Energy-bins box re-bins the alpha spectrum.
+        c.opts.ed_ebins.setText("256")
+        c._apply_bins()
+        assert c.ebins == 256
+        assert len(c.page.ax_alpha.get_lines()) == 1
+    finally:
+        w.close()
+
+
+def test_flat_field_alpha_interactive_cross_filter(qapp, monkeypatch):
+    """With both alpha and X-Y present, interactive cuts cross-filter: an alpha
+    energy window updates the X-Y map, and an X-Y region updates the alpha
+    spectrum. Undo restores the prior state."""
+    w, c = _flat_field_ctrl(qapp, monkeypatch,
+                            _synthetic_flat_events(with_alpha=True))
+    try:
+        c._load()
+        n0 = c.df_current.shape[0]
+        # Interactive mode attaches an alpha span + an X-Y rectangle selector.
+        c.opts.btn_interactive.setChecked(True)
+        assert len(c._selectors) == 2
+        # Alpha energy window: fewer events, X-Y reflects the cut, markers drawn.
+        amax = c.erange[1]
+        c.apply_energy_filter(0.2 * amax, 0.6 * amax)
+        n_alpha = c.df_current.shape[0]
+        assert 0 < n_alpha < n0
+        assert c._cut_energy is not None
+        # X-Y region further narrows and refreshes the alpha spectrum.
+        c.apply_xy_filter(-0.3, 0.3, -0.3, 0.3)
+        assert c.df_current.shape[0] <= n_alpha
+        assert c._cut_xy is not None
+        assert len(c.page.ax_alpha.get_lines()) >= 1
+        # Undo rolls back the X-Y cut.
+        c._undo()
+        assert c.df_current.shape[0] == n_alpha
+    finally:
+        w.close()
+
+
+def test_flat_field_no_alpha_not_interactive(qapp, monkeypatch):
+    """A flat-field run without an alpha column has nothing to cross-filter, so
+    enabling interactive cuts attaches no selectors."""
+    w, c = _flat_field_ctrl(qapp, monkeypatch, _synthetic_flat_events())
+    try:
+        c._load()
+        assert c._flat_alpha is False
+        c.opts.btn_interactive.setChecked(True)
+        assert len(c._selectors) == 0
+    finally:
+        w.close()
 
 
 def test_bin_boxes_prepopulated_with_defaults(api):
@@ -1187,7 +1316,7 @@ def apply_env(api, monkeypatch):
     _w, c = api
     combined = _combined_events()
 
-    def fake_read(date, runnr, ch=None, flood_field=False, data_path_txt=None):
+    def fake_read(date, runnr, ch=None, flat_field=False, data_path_txt=None):
         if ch is None:
             return combined.copy()
         sub = combined[read_parquet_api.channel_mask(combined, ch)]
@@ -1333,7 +1462,7 @@ def test_apply_to_data_merges_channels_into_one_run(api, monkeypatch, tmp_path):
     combined = _combined_events()
     disk = {}                                  # runnr -> saved combined frame
 
-    def fake_read(date, runnr, ch=None, flood_field=False, data_path_txt=None):
+    def fake_read(date, runnr, ch=None, flat_field=False, data_path_txt=None):
         base = disk.get(runnr, combined)       # destination reads back; source = raw
         if ch is None:
             return base.copy()

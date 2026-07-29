@@ -136,6 +136,9 @@ class ApiPage(QWidget):
         lay.addWidget(self.readout, 0)
 
         self.ax_spe = self.ax_dt = self.ax_xy = None
+        # Alpha energy spectrum panel: only built for flat-field runs that carry
+        # an "alpha" column (the left half of the split flat-field view).
+        self.ax_alpha = None
         # Hexbin lookup data for the cursor readout (replaces the colorbar): the
         # per-hexagon centres/counts of the current X-Y map, the log-scale flag,
         # and the squared pick radius (≈ one hex spacing) used to ignore the
@@ -155,19 +158,33 @@ class ApiPage(QWidget):
         ax.text(0.5, 0.5, msg, transform=ax.transAxes, ha="center", va="center",
                 fontsize=14, color=T.BORDER, fontweight="bold", wrap=True)
         ax.set_xticks([]); ax.set_yticks([])
-        self.ax_spe = self.ax_dt = self.ax_xy = None
+        self.ax_spe = self.ax_dt = self.ax_xy = self.ax_alpha = None
         self._style(ax)
         self.canvas.draw_idle()
 
-    def build_axes(self, flood_field=False):
-        """(Re)build the panel layout. Flood-field runs show only the X-Y map."""
+    def build_axes(self, flat_field=False, alpha=False):
+        """(Re)build the panel layout.
+
+        Flat-field runs show only the X-Y map. When *alpha* is set (the run
+        carries an "alpha" energy column), the canvas splits side by side: the
+        alpha energy spectrum on the left, the X-Y map on the right. Otherwise
+        the standard three-panel gamma layout is drawn."""
         self.fig.clf()
         self._clear_xy_data()
-        if flood_field:
-            self.ax_xy = self.fig.add_subplot(111)
+        if flat_field:
             self.ax_spe = self.ax_dt = None
-            self._style(self.ax_xy, grid=False)
+            if alpha:
+                gs = self.fig.add_gridspec(1, 2, width_ratios=[0.5, 0.5])
+                self.ax_alpha = self.fig.add_subplot(gs[0, 0])
+                self.ax_xy = self.fig.add_subplot(gs[0, 1])
+                self._style(self.ax_alpha)
+                self._style(self.ax_xy, grid=False)
+            else:
+                self.ax_alpha = None
+                self.ax_xy = self.fig.add_subplot(111)
+                self._style(self.ax_xy, grid=False)
             return
+        self.ax_alpha = None
         gs = self.fig.add_gridspec(2, 2, width_ratios=[0.5, 0.5], height_ratios=[1, 1])
         self.ax_spe = self.fig.add_subplot(gs[0, 0])
         self.ax_dt = self.fig.add_subplot(gs[1, 0])
@@ -356,7 +373,8 @@ class ApiOptions(QScrollArea):
         self.ed_ebins = QLineEdit(str(DEFAULT_EBINS))
         self.ed_tbins = QLineEdit(str(DEFAULT_TBINS))
         self.ed_xybins = QLineEdit(str(DEFAULT_HEXBINS))
-        self.ed_ebins.setToolTip("Number of bins on the energy spectrum")
+        self.ed_ebins.setToolTip("Number of bins on the energy spectrum "
+                                 "(also the flat-field alpha spectrum)")
         self.ed_tbins.setToolTip("Number of bins on the dt (time) histogram")
         self.ed_xybins.setToolTip("Hexbin grid size on the X-Y map")
         for lbl, ed in [("Energy bins", self.ed_ebins),
@@ -498,7 +516,10 @@ class ApiController:
         self.tbins = DEFAULT_TBINS
         self.hexbins = DEFAULT_HEXBINS
         self.vmax = None
-        self.flood_field = False
+        self.flat_field = False
+        # A flat-field run that carries an "alpha" energy column: the flat-field
+        # view then splits into the alpha spectrum (left) and X-Y map (right).
+        self._flat_alpha = False
         # Static run-settings rows: list of (label, value, value_color).
         self._settings_rows = []
         self._settings_error = ""
@@ -650,6 +671,9 @@ class ApiController:
         if self.page.ax_dt is not None:
             self.page.ax_dt.clear()
             self._plot_time(self.df_current)
+        if self.page.ax_alpha is not None:
+            self.page.ax_alpha.clear()
+            self._plot_alpha(self.df_current)
         self._replot_xy()
         self.page.reset_nav()
         self.page.canvas.draw_idle()
@@ -705,8 +729,8 @@ class ApiController:
         self.ebins = 2 ** 14 if ch_txt in ("6", "7", "10", "11") else DEFAULT_EBINS
         self.opts.ed_ebins.setText(str(self.ebins))
 
-        self.flood_field = ch_txt == "9"
-        if self.flood_field:
+        self.flat_field = ch_txt == "9"
+        if self.flat_field:
             ch = 9
         else:
             try:
@@ -718,14 +742,14 @@ class ApiController:
         self._status(f"Loading run {date}-{runnr} ch {ch}...")
         df = read_parquet_api.read_parquet_file(
             date=date, runnr=runnr, ch=ch,
-            flood_field=self.flood_field, data_path_txt=data_path)
+            flat_field=self.flat_field, data_path_txt=data_path)
         if df is None:
             QMessageBox.critical(
                 self.app, "Error while opening parquet data",
                 f"No parquet file available for run {date}-{runnr}.")
             self._status("No parquet file for that run")
             return
-        if not self.flood_field:
+        if not self.flat_field:
             df = df.copy()
             # Time priority: dt_cal is already in ns; raw dt is in seconds and
             # needs converting. dt_cal (when present) becomes the time axis in
@@ -805,6 +829,37 @@ class ApiController:
         else:
             self.xkey, self.ykey = "X", "Y"
 
+        # Fit the X-Y extent to where the hits actually land instead of the
+        # detector's full physical plane. Most runs illuminate only a central
+        # patch, so the fixed plane left the map floating in empty space (and the
+        # cursor reporting coordinates out there). A generic plane is the
+        # fallback for empty/degenerate data.
+        self.xyplane = self._fit_xyplane(df, self.xkey, self.ykey,
+                                         fallback=(-0.9, 0.9, -0.9, 0.9))
+
+        # Flat-field runs (ch 9) carry only the X-Y alpha map (plus, when
+        # present, an "alpha" energy column) -- no gamma energy or dt columns --
+        # so only the position keys apply. Bail out before the
+        # energy/time detection below, which would look for a (missing)
+        # "energy" column and raise KeyError.
+        if self.flat_field:
+            self._chan_base = self._chan_key = None
+            self._native_units = self.e_units = None
+            self._dt_key = "dt"
+            # Split the view only when the run carries the alpha energy column.
+            self._flat_alpha = "alpha" in df.columns
+            if self._flat_alpha:
+                # The alpha column plays the role of the energy axis so the
+                # interactive energy-span filter (apply_energy_filter) filters
+                # events by alpha energy and updates the X-Y map.
+                self.ekey = "alpha"
+                self.erange = [0.0, float(df["alpha"].max())]
+            else:
+                self.ekey = None
+                self.erange = None
+            return
+        self._flat_alpha = False
+
         # Channel base: raw channels (energy_orig) take priority over an already
         # physical energy axis (energy). _native_units flags which it is.
         if "energy_orig" in df.columns:
@@ -821,13 +876,6 @@ class ApiController:
             self._chan_key = "energy_drift"
         else:
             self._chan_key = self._chan_base
-        # Fit the X-Y extent to where the hits actually land instead of the
-        # detector's full physical plane. Most runs illuminate only a central
-        # patch, so the fixed plane left the map floating in empty space (and the
-        # cursor reporting coordinates out there). A generic plane is the
-        # fallback for empty/degenerate data.
-        self.xyplane = self._fit_xyplane(df, self.xkey, self.ykey,
-                                         fallback=(-0.9, 0.9, -0.9, 0.9))
         # Energy axis: a calibration (energy_cal) wins over the raw channel axis.
         if self.e_units is not None and "energy_cal" in df.columns:
             self.ekey = "energy_cal"
@@ -871,10 +919,16 @@ class ApiController:
         # twinx references don't keep a stale handle to the old axes.
         self._sig_active = False
         self._ax_sig = None
-        self.page.build_axes(flood_field=self.flood_field)
+        self.page.build_axes(flat_field=self.flat_field, alpha=self._flat_alpha)
         self._detach_selectors()
-        if self.flood_field:
+        if self.flat_field:
+            if self._flat_alpha:
+                self._plot_alpha(self.df_current)
             self._replot_xy()
+            # The split alpha/X-Y view supports the same interactive cross-filter
+            # as the gamma view: attach selectors when interactive cuts are on.
+            if self._flat_alpha and self.opts.btn_interactive.isChecked():
+                self._attach_selectors()
         else:
             self._plot_energy(self.df_current)
             self._plot_time(self.df_current)
@@ -941,6 +995,27 @@ class ApiController:
         ax.plot(self.gam_x, self.gam, color=T.LOGO_GREEN, linewidth=0.9)
         ax.set_yscale("log" if self.opts.cb_spe_log.isChecked() else "linear")
         ax.set_xlabel(self._energy_xlabel())
+        ax.set_ylabel("Counts")
+        self.page._style(ax)
+        self._draw_cut_markers()
+
+    def _plot_alpha(self, df):
+        """Draw the alpha energy spectrum (left panel of the split flat-field
+        view): a histogram of the raw ``alpha`` column binned with the shared
+        ``self.ebins`` over the fixed ``self.erange`` so the x-axis stays put
+        across interactive cuts. No-op without an alpha panel/column."""
+        ax = self.page.ax_alpha
+        if ax is None or df is None or "alpha" not in df.columns:
+            return
+        a = df["alpha"].to_numpy(dtype=float)
+        a = a[np.isfinite(a)]
+        rng = self.erange if self.erange is not None else None
+        if a.size:
+            counts, edg = np.histogram(a, bins=self.ebins, range=rng)
+            centers = (edg[1:] + edg[:-1]) / 2
+            ax.plot(centers, counts, color=T.LOGO_GREEN, linewidth=0.9)
+        ax.set_yscale("log" if self.opts.cb_spe_log.isChecked() else "linear")
+        ax.set_xlabel("Alpha energy (channels)")
         ax.set_ylabel("Counts")
         self.page._style(ax)
         self._draw_cut_markers()
@@ -1036,9 +1111,21 @@ class ApiController:
     # -- selectors -------------------------------------------------------------
     def _attach_selectors(self):
         self._detach_selectors()
+        # Flat-field runs are only interactive when both the alpha spectrum and
+        # the X-Y map are present (the split view); a bare X-Y map has nothing to
+        # cross-filter against.
+        if self.flat_field and not self._flat_alpha:
+            return
         if self.page.ax_spe is not None:
             self._selectors.append(SpanSelector(
                 self.page.ax_spe, self._on_energy_span, "horizontal",
+                useblit=True, interactive=True,
+                props=dict(alpha=0.3, facecolor=T.ACCENT_AMBER)))
+        # Flat-field alpha spectrum: dragging a band filters events by alpha
+        # energy and refreshes the X-Y map (same handler as the energy span).
+        if self.page.ax_alpha is not None:
+            self._selectors.append(SpanSelector(
+                self.page.ax_alpha, self._on_energy_span, "horizontal",
                 useblit=True, interactive=True,
                 props=dict(alpha=0.3, facecolor=T.ACCENT_AMBER)))
         if self.page.ax_dt is not None:
@@ -1080,6 +1167,11 @@ class ApiController:
         if self._cut_energy is not None and self.page.ax_spe is not None:
             for x in self._cut_energy:
                 self._cut_artists.append(self.page.ax_spe.axvline(
+                    x, color=T.ACCENT_RED, linestyle=":", linewidth=1.3, zorder=6))
+        # Flat-field alpha spectrum: the same energy cut, drawn on the alpha panel.
+        if self._cut_energy is not None and self.page.ax_alpha is not None:
+            for x in self._cut_energy:
+                self._cut_artists.append(self.page.ax_alpha.axvline(
                     x, color=T.ACCENT_RED, linestyle=":", linewidth=1.3, zorder=6))
         if self._cut_time is not None and self.page.ax_dt is not None:
             for x in self._cut_time:
@@ -1182,6 +1274,10 @@ class ApiController:
         if self.page.ax_dt is not None:
             self.page.ax_dt.clear()
             self._plot_time(self.df_current)
+        # Flat-field split view: the alpha spectrum reflects the X-Y selection.
+        if self.page.ax_alpha is not None:
+            self.page.ax_alpha.clear()
+            self._plot_alpha(self.df_current)
         # Bug fix vs legacy: redraw the X-Y map from the *filtered* data so the
         # panel reflects the selection (legacy replotted df_previous, the full map).
         self._replot_xy()
@@ -2678,11 +2774,16 @@ class ApiController:
 
     # -- display toggles -------------------------------------------------------
     def _toggle_spe_log(self):
-        ax = self.page.ax_spe
-        if ax is None:
-            return
-        ax.set_yscale("log" if self.opts.cb_spe_log.isChecked() else "linear")
-        self.page.canvas.draw_idle()
+        # The "Energy Log Y" toggle drives whichever spectrum panel is showing:
+        # the gamma energy spectrum, or the flat-field alpha spectrum.
+        scale = "log" if self.opts.cb_spe_log.isChecked() else "linear"
+        drew = False
+        for ax in (self.page.ax_spe, self.page.ax_alpha):
+            if ax is not None:
+                ax.set_yscale(scale)
+                drew = True
+        if drew:
+            self.page.canvas.draw_idle()
 
     def _apply_vmax(self):
         txt = self.opts.ed_vmax.text().strip()
@@ -2701,9 +2802,9 @@ class ApiController:
         self._replot_xy()
 
     def _apply_bins(self):
-        """Re-bin the three panels from the Display bin boxes and redraw. Each
-        box must be a positive integer; an invalid one aborts without changing
-        anything."""
+        """Re-bin the panels from the Display bin boxes and redraw. Each box must
+        be a positive integer; an invalid one aborts without changing anything.
+        The Energy-bins box also drives the flat-field alpha spectrum."""
         o = self.opts
         parsed = {}
         for attr, ed, name in [("ebins", o.ed_ebins, "Energy bins"),
@@ -2731,6 +2832,9 @@ class ApiController:
         if self.page.ax_dt is not None:
             self.page.ax_dt.clear()
             self._plot_time(self.df_current)
+        if self.page.ax_alpha is not None:
+            self.page.ax_alpha.clear()
+            self._plot_alpha(self.df_current)
         self._replot_xy()
         self.page.reset_nav()
         self.page.canvas.draw_idle()
@@ -2795,8 +2899,8 @@ class ApiController:
         if self.df_api is None or self._src_date is None:
             self._status("Load an API file first")
             return
-        if self.flood_field:
-            self._status("Flood-field runs have no calibration to apply")
+        if self.flat_field:
+            self._status("Flat-field runs have no calibration to apply")
             return
         energy_changed = self.e_units is not None or self._egain_applied
         dt_changed = self._dt_corrected
@@ -3045,9 +3149,10 @@ class ApiController:
         if self.gam is None:
             # Normally populated when the energy panel draws; if no draw has
             # happened yet, bin it on demand so the first click sends instead of
-            # silently doing nothing (and needing a second press). Flood-field
-            # runs have no energy spectrum, so there is genuinely nothing to send.
-            if self.df_current is None or self.ekey is None or self.flood_field:
+            # silently doing nothing (and needing a second press). Flat-field
+            # runs have no gamma energy spectrum, so there is genuinely nothing
+            # to send.
+            if self.df_current is None or self.ekey is None or self.flat_field:
                 self._status("Nothing to send  -- load an API file first")
                 return
             self._compute_energy_hist(self.df_current)

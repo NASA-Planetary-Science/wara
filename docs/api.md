@@ -28,7 +28,7 @@ df = rpa.read_parquet_file("2024-03-15", 12, ch=4)   # date, run number, channel
 ```
 
 `ch` selects the detector channel (e.g. `4` = LaBr, `5` = non-LaBr in the legacy
-flag scheme); pass `flood_field=True` or `ch=None` to keep all events. Each row
+flag scheme); pass `flat_field=True` or `ch=None` to keep all events. Each row
 is one coincidence event with the columns the rest of the tools expect:
 
 | Column | Meaning |
@@ -118,6 +118,24 @@ applies **live filters** across the panels, and lets you:
 - pop out a **3D volume view** of the reconstructed hit cloud,
 - run **time-slice fits** across the `dt` distribution, and
 - pick **X–Y tile selections** to build energy-region-vs-position profiles.
+
+### Flat-field runs (channel 9)
+
+Entering channel **9** loads the run as a *flat field*: the alpha-detector
+events with no gamma coincidence, used to map the alpha beam profile. A flat
+field has no gamma energy or `dt` columns, so the three-panel layout collapses:
+
+- If the run carries an **`alpha`** energy column, the figure **splits side by
+  side** — the **alpha energy spectrum** on the left (binned with the shared
+  **Energy bins** box in DISPLAY) and the **X–Y alpha map** on the right.
+- Otherwise only the **X–Y map** is shown.
+
+When the split view is shown, **Interactive cuts** cross-filter the two panels:
+drag a band on the alpha spectrum to keep only that alpha-energy window and the
+X–Y map redraws from the selection; drag a rectangle on the X–Y map to keep only
+that region and the alpha spectrum redraws from it. **← Back** undoes the last
+cut and **Reset** restores the full run. (A flat field with no `alpha` column has
+nothing to cross-filter, so interactive cuts are inert there.)
 
 For the full API of these modules, see {py:mod}`wara.read_parquet_api` and
 {py:mod}`wara.apicalc` in the API reference.

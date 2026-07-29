@@ -58,7 +58,7 @@ DETECTOR_PRESETS = {
     "Plastic Scint.": ("5", "420", "20"),
 }
 
-# A "file role" → (default channel, is_flood) map used by the loaders.
+# A "file role" → (default channel, is_flat) map used by the loaders.
 ROLES = ["sample", "background", "profile", "flat"]
 ROLE_LABELS = {
     "sample": "Sample", "background": "Background",
@@ -139,9 +139,9 @@ class _FileRow(QWidget):
         except ValueError:
             self.lbl.setText("run number must be an integer")
             return
-        flood = (ch_txt == "9") or self.role == "flat"
+        flat = (ch_txt == "9") or self.role == "flat"
         try:
-            ch = 9 if flood else int(ch_txt)
+            ch = 9 if flat else int(ch_txt)
         except ValueError:
             self.lbl.setText("channel must be an integer")
             return
@@ -157,12 +157,12 @@ class _FileRow(QWidget):
         self.btn.repaint()
         try:
             df = read_parquet_api.read_parquet_file(
-                date=date, runnr=runnr, ch=ch, flood_field=flood)
+                date=date, runnr=runnr, ch=ch, flat_field=flat)
             if df is None:
                 self.lbl.setText(f"no parquet for {date}-{runnr} ch {ch}")
                 return
             df = df.copy()
-            if not flood:
+            if not flat:
                 df["dt"] = df["dt"] * 1e9       # s → ns
             if ("X2" not in df.columns
                     and {"A", "B", "C", "D"}.issubset(df.columns)):

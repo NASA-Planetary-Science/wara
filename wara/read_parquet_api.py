@@ -152,7 +152,7 @@ def save_combined_run(df, date, runnr, data_path=None, overwrite=False):
     return out
 
 
-def read_parquet_file(date, runnr, ch=None, flood_field=False, data_path_txt=None):
+def read_parquet_file(date, runnr, ch=None, flat_field=False, data_path_txt=None):
     files = load_parquet_data_files(date, runnr, data_path_txt)
     if not files:
         print(f"ERROR: No parquet file available for run {date}-{runnr}")
@@ -169,7 +169,7 @@ def read_parquet_file(date, runnr, ch=None, flood_field=False, data_path_txt=Non
               f"corrupt or truncated and the loaded data may be INCOMPLETE.")
         df = pd.concat([pd.read_parquet(f, engine="fastparquet") for f in files])
 
-    if flood_field or ch is None:
+    if flat_field or ch is None:
         df.reset_index(drop=True, inplace=True)
         return df
 
@@ -179,7 +179,7 @@ def read_parquet_file(date, runnr, ch=None, flood_field=False, data_path_txt=Non
     return df
 
 
-def read_parquet_file_time_aligned(date, runnr, ch=None, flood_field=False, data_path_txt=None,
+def read_parquet_file_time_aligned(date, runnr, ch=None, flat_field=False, data_path_txt=None,
                                    dt_bins=512, min_snr=5, ref_fwhm=3):
     from .peaksearch import PeakSearch
     from .spectrum import Spectrum
@@ -193,7 +193,7 @@ def read_parquet_file_time_aligned(date, runnr, ch=None, flood_field=False, data
     for f in files:
         df = pd.read_parquet(f)
 
-        if not flood_field and ch is not None:
+        if not flat_field and ch is not None:
             if "channel" in df.columns:
                 df = df[df["channel"] == ch]
             else:
