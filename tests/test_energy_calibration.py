@@ -370,14 +370,19 @@ class TestSmartCalibrationAuto:
 
     def test_large_input_uses_sampling(self):
         """Many channels vs few energies: exhaustive search would blow up, so the
-        random sampler kicks in and still finds the calibration."""
+        random sampler kicks in and still finds the calibration.
+
+        max_iters is deliberately modest: the sampler is seeded
+        (``random_state=0``), and this input is solved within ~400 draws, so
+        2000 leaves a wide margin without spending a second on redundant draws.
+        """
         rng = np.random.default_rng(0)
         true_ch = np.array([200, 600, 1100, 1700, 2400], dtype=float)
         en = _line(true_ch)
         noise = rng.uniform(0, 4000, size=40)        # 40 spurious peaks
         ch = np.concatenate([true_ch, noise])
         r = smart_calibration_auto(ch.tolist(), en.tolist(),
-                                   tol=3.0, max_exhaustive=1000, max_iters=8000)
+                                   tol=3.0, max_exhaustive=1000, max_iters=2000)
         assert r["n_matched"] == 5
         assert r["c1"] == pytest.approx(AUTO_SLOPE, rel=0.05)
 

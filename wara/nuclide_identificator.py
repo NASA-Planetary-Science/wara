@@ -510,7 +510,15 @@ def _mark_present(obs, ref, tol, max_strength):
     as if they were dead-on matches."""
     obs_energy = obs["obs_energy"].to_numpy()
     dist, nearest = _nearest_distance(obs_energy, ref)
-    tol_at = np.array([float(tol(e)) for e in nearest]) if callable(tol) else float(tol)
+    if not callable(tol):
+        tol_at = float(tol)
+    elif hasattr(tol, "at_many"):
+        # Vectorised fast path (see wara.gui.isotope_id.fwhm_tol): `nearest` has
+        # one entry per reference line -- hundreds of thousands across the
+        # shipped databases -- so a Python-level call per line dominated.
+        tol_at = tol.at_many(nearest)
+    else:
+        tol_at = np.array([float(tol(e)) for e in nearest])
     obs = obs.assign(present=dist <= tol_at, matched=nearest,
                      proximity=_proximity(dist, tol_at))
     present = obs[obs["present"]].copy()

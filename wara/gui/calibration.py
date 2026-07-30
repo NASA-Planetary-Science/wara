@@ -23,6 +23,7 @@ import json
 import operator
 import os
 import re
+from functools import lru_cache
 
 import numpy as np
 
@@ -112,6 +113,7 @@ def calibration_path(stem):
     return os.path.join(CAL_DIR, stem + CAL_EXT)
 
 
+@lru_cache(maxsize=8)
 def _mathtext_pixmap(mathtext, color=T.TEXT_PRIMARY, fontsize=11):
     """Render a matplotlib *mathtext* string (``$...$``) to a QPixmap.
 
@@ -119,6 +121,10 @@ def _mathtext_pixmap(mathtext, color=T.TEXT_PRIMARY, fontsize=11):
     engine draw the equation onto a transparent canvas and hand back the
     rasterised result. Rendered at 2x and tagged with a device-pixel-ratio so
     it stays crisp on HiDPI screens without looking oversized.
+
+    Cached: the equation label is a fixed string, so this otherwise re-rendered
+    the same PNG (~20 ms) on every Calibration tab construction. QPixmap is
+    implicitly shared and this one is never mutated, so sharing it is safe.
     """
     fig = Figure(figsize=(0.1, 0.1))
     fig.patch.set_alpha(0.0)

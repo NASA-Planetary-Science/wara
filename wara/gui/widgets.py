@@ -241,9 +241,12 @@ class SpectrumCanvas(FigureCanvas):
         self._active_visible = visible
         self._redraw()
 
-    def set_peaks(self, peaks):
+    def set_peaks(self, peaks, redraw=True):
+        """Replace the peak markers. Pass ``redraw=False`` when the caller is
+        about to redraw anyway (see :meth:`clear_snr`)."""
         self._peaks = list(peaks)
-        self._redraw()
+        if redraw:
+            self._redraw()
 
     def add_peak(self, x, y, label):
         self._peaks.append((x, y, label))
@@ -380,9 +383,13 @@ class SpectrumCanvas(FigureCanvas):
         self._snr = (x, snr, threshold)
         self._redraw()
 
-    def clear_snr(self):
+    def clear_snr(self, redraw=True):
+        """Drop the SNR overlay. Pass ``redraw=False`` when the caller is about
+        to redraw anyway -- ``_redraw`` renders the whole canvas from state, so
+        an intermediate render is thrown away."""
         self._snr = None
-        self._redraw()
+        if redraw:
+            self._redraw()
 
     def reset_view(self):
         self.ax.autoscale()

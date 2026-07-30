@@ -123,6 +123,18 @@ def _synthetic_flat_events(n=4000, seed=1, with_alpha=False):
     return pd.DataFrame(cols)
 
 
+def _fast_bins(c):
+    """Shrink the dt histogram for the test run.
+
+    ``ax.hist`` builds one matplotlib Rectangle patch per bin, so the 512-bin
+    production default dominates every ``_load`` (~110 ms of the ~145 ms).
+    32 bins is plenty for the synthetic 4000-event tables and keeps each test
+    well under a second. Only the attribute is touched, not ``ed_tbins`` -- the
+    Display-box tests assert the line edits still show the real defaults.
+    """
+    c.tbins = 32
+
+
 @pytest.fixture
 def api(qapp, monkeypatch):
     df = _synthetic_events()
@@ -141,6 +153,7 @@ def api(qapp, monkeypatch):
     c.opts.ed_date.setText("2023-07-02")
     c.opts.ed_run.setText("91")
     c.opts.ed_ch.setText("5")
+    _fast_bins(c)
     yield w, c
     w.close()
 
@@ -186,6 +199,7 @@ def _flat_field_ctrl(qapp, monkeypatch, df):
     c.opts.ed_date.setText("2025-07-13")
     c.opts.ed_run.setText("14")
     c.opts.ed_ch.setText("9")
+    _fast_bins(c)
     return w, c
 
 

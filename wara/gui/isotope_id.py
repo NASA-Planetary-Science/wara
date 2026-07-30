@@ -47,13 +47,34 @@ def fwhm_tol(search, floor=FALLBACK_FLOOR):
         return default_tol
     energies = np.asarray(energies, dtype=float)
     channels = np.asarray(channels, dtype=float)
+    if energies.size == 0 or channels.size != energies.size:
+        return default_tol
     disp = np.abs(np.gradient(energies, channels))   # keV per channel
 
-    def tol(energy):
-        i = int(np.argmin(np.abs(energies - energy)))
-        fwhm_kev = float(search.fwhm(channels[i])) * disp[i]
-        return max(floor, 2.0 * fwhm_kev)
+    # The identifier calls tol() once per reference line -- hundreds of
+    # thousands of times across the shipped databases -- so the whole curve is
+    # evaluated up front (search.fwhm is vectorised) and each call reduces to a
+    # binary search for the nearest channel. The previous per-call argmin over
+    # every channel made identifying a single peak take seconds.
+    tol_curve = np.maximum(floor, 2.0 * np.abs(search.fwhm(channels)) * disp)
+    order = np.argsort(energies)
+    e_sorted = energies[order]
 
+    def at_many(energies_in):
+        """Vectorised form of :func:`tol`, for whole arrays of line energies."""
+        e = np.asarray(energies_in, dtype=float)
+        j = np.searchsorted(e_sorted, e)
+        lo = np.clip(j - 1, 0, e_sorted.size - 1)
+        hi = np.clip(j, 0, e_sorted.size - 1)
+        i = np.where(np.abs(e_sorted[lo] - e) <= np.abs(e_sorted[hi] - e), lo, hi)
+        return tol_curve[order[i]]
+
+    def tol(energy):
+        return float(at_many(energy))
+
+    # nuclide_identificator._mark_present picks this up to tolerance a whole
+    # database in one call instead of once per reference line.
+    tol.at_many = at_many
     return tol
 
 

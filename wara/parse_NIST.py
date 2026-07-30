@@ -2,9 +2,58 @@
 Parse NIST data file
 """
 from collections import defaultdict
+from functools import lru_cache
 import re
 import pandas as pd
 from importlib.resources import files
+
+
+# The two shipped data files never change during a session, but
+# isotopic_abundance() is called once per element (~100 times) by the nuclide
+# identifier -- so re-reading and re-parsing them each time dominated the
+# lookup. Cache the parsed contents; the callers only read them.
+@lru_cache(maxsize=1)
+def _symbols():
+    data_dir = files("wara").joinpath("nuclear-data")
+    path = str(data_dir.joinpath("elements_symbols.csv"))
+    return frozenset(pd.read_csv(path)["Sym"])
+
+
+@lru_cache(maxsize=1)
+def _nist_lines():
+    data_dir = files("wara").joinpath("nuclear-data")
+    path = str(data_dir.joinpath("Isotopes-NIST.txt"))
+    with open(path, "r") as f:
+        return tuple(f.readlines())
+
+
+@lru_cache(maxsize=1)
+def _abundance_index():
+    """``{symbol: {'ZSym-A': fraction}}`` for every element, built in one pass.
+
+    The nuclide identifier asks for ~100 elements per lookup, and scanning the
+    ~27k-line NIST file per element made that the single most expensive part of
+    an identification. One pass fills the table for all elements at once; the
+    per-record parsing below mirrors the original per-element scan exactly.
+    """
+    lines = _nist_lines()
+    symbols = _symbols()
+    index = {}
+    for i, line in enumerate(lines):
+        for symbol in line.split():
+            if symbol not in symbols:
+                continue
+            Z = re.findall(r"\d+", lines[i - 1])[0]
+            isotope = re.findall(r"\d+", lines[i + 1])[0]
+            # account for isotopically pure elements
+            try:
+                tmp2 = lines[i + 3].split()
+                comp = [float(tmp2[-1])]
+            except ValueError:
+                comp = re.findall(r"\d.+(?=\()", lines[i + 3])
+            if len(comp) != 0:
+                index.setdefault(symbol, {})[Z + symbol + "-" + isotope] = float(comp[0])
+    return index
 
 
 def isotopic_abundance(element):
@@ -20,38 +69,12 @@ def isotopic_abundance(element):
         stable isotopes and their respective natural abundance.
 
     """
-    # Directory reference
-    data_dir = files("wara").joinpath("nuclear-data")
-    # Assign the isotope and symbol files
-    file      = str(data_dir.joinpath("Isotopes-NIST.txt"))
-    file_symb = str(data_dir.joinpath("elements_symbols.csv"))
-    # file = "../isotID_docs/Isotopes-NIST.txt"
-    # file_symb = "../isotID_docs/elements_symbols.csv"
-    symbols = list(pd.read_csv(file_symb)["Sym"])
     element = element.title()
-    if element not in symbols:
+    if element not in _symbols():
         warning_msg = "Element not found.\nMake sure to write the element symbol only"
         return warning_msg
-    # read all lines and store in memory
-    with open(file, "r") as f:
-        lines = f.readlines()
-
-    result = defaultdict()
-    for i, line in enumerate(lines):
-        tmp = line.split()
-        if element in tmp:
-            Z = re.findall("\d+", lines[i - 1])[0]
-            symbol = element
-            isotope = re.findall("\d+", lines[i + 1])[0]
-            # account for isotopically pure elements
-            try:
-                tmp2 = lines[i + 3].split()
-                comp = [float(tmp2[-1])]
-            except ValueError:
-                comp = re.findall("\d.+(?=\()", lines[i + 3])
-            if len(comp) != 0:
-                result[Z + symbol + "-" + isotope] = float(comp[0])
-    return result
+    # Copy so callers can't mutate the shared cached table.
+    return defaultdict(None, _abundance_index().get(element, {}))
 
 
 def isotopic_abundance_str(element):

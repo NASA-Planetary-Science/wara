@@ -449,12 +449,20 @@ class TestIsotopeIdColumn:
         btn = window.table.cellWidget(0, window.table.columnCount() - 1)
         assert btn is not None and btn.text() == "⚛"
 
-    def test_clicking_id_button_identifies_centroid(self, window):
+    def test_clicking_id_button_identifies_centroid(self, window, monkeypatch):
         window.show()
         window.set_roi(1106, 1214)
         col = window.table.columnCount() - 1
         btn = window.table.cellWidget(0, col)
         centroid = float(window.last_fit.peak_info[0]["mean"])
+        # _identify_centroid passes every found peak as corroborating context,
+        # and identify() costs ~13 database scans per context energy. This test
+        # asserts the button wiring (tooltip + cache), not escape-peak
+        # corroboration -- which test_nuclide_identificator covers -- so trim
+        # the context to keep the click well under a second. monkeypatch reverts
+        # it, since `search` is shared by the whole module.
+        monkeypatch.setattr(window._search, "peaks_idx",
+                            window._search.peaks_idx[:2], raising=False)
         window._identify_centroid(centroid, btn)
         assert "keV" in btn.toolTip()                      # colored HTML popup text
         assert round(centroid, 3) in window._iso_cache     # cached for re-hover

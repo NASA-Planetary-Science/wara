@@ -110,7 +110,9 @@ class NeutronsPage(QWidget):
         self.canvas.mpl_connect("motion_notify_event", self._on_motion)
         self.canvas.mpl_connect("button_release_event", self._on_release)
 
-        self._build_axes()
+        # show_empty() calls _build_axes() itself, and _build_axes() starts with
+        # fig.clf() -- so building the axes here too just created three subplots
+        # to immediately throw away.
         self.show_empty()
 
     # -- axes / styling --------------------------------------------------------

@@ -45,6 +45,24 @@ at import time in `matplotlib_theme.py` and `apicalc.py`).
 - **A feature is not "done" until it has all four:** implementation, a test in
   `tests/`, a minimal runnable example in `examples/`, and Read the Docs
   documentation in `docs/`. See the `add-feature` skill.
+- **Every new test must run in under 1 second.** Do not add a slower test
+  without explicit permission from the user — ask first, don't just add it and
+  flag it afterwards. Check with
+  `pytest tests -q --durations=15` (which reports `setup`/`call` separately;
+  both count). Common causes and the fixes that worked:
+  - `ax.hist` builds one matplotlib patch per bin, so production bin defaults
+    (512 dt bins) dominate. Shrink the bin count on the controller in the
+    fixture, not in the option line-edits that other tests assert on.
+  - Iteration/sampling budgets: seeded solvers (`random_state=0`) converge in
+    far fewer iterations than the production cap. Use a modest budget with a
+    documented margin.
+  - Process-wide one-time costs (nuclide databases, the NIST abundance table,
+    `dateparser`'s locale data) are warmed in `tests/conftest.py` during
+    collection. Add new ones there rather than letting them land on whichever
+    test touches them first — and never hide a genuinely slow test behind a
+    fixture, since `setup` time counts too.
+  - If a test is slow because production code is slow, fix the production
+    code — that is where most of the wins in this suite came from.
 - **When editing anything under `wara/gui/`, follow the `gui-conventions`
   skill.** Two recurring bugs: (1) the options panel is a fixed 270px
   (`OPT_W`) — wrap labels and give full-width buttons

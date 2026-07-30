@@ -832,8 +832,11 @@ class WaraApp(QMainWindow):
         if self.spect is None:
             return
         self.search = None
-        self.spectrum_page.canvas.clear_snr()
-        self.spectrum_page.canvas.set_peaks([])
+        # Both of these only reset canvas state; _replot() below re-renders the
+        # whole canvas from that state, so let them skip their own draw rather
+        # than rendering three times per refresh.
+        self.spectrum_page.canvas.clear_snr(redraw=False)
+        self.spectrum_page.canvas.set_peaks([], redraw=False)
         self._replot(keep_zoom=keep_zoom)
         self._update_cursor_units()
         c = self.spect.counts
