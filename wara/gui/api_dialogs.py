@@ -28,14 +28,18 @@ class ApiFilterDialog(QDialog):
         self.setMinimumWidth(320)
         lay = QVBoxLayout(self)
         lay.addWidget(header("MANUAL FILTERS"))
-        lay.addWidget(QLabel("Leave a pair blank to skip that filter."))
+        lbl = QLabel("Leave a pair blank to skip that filter. Alpha energy "
+                     "applies only to runs that carry an alpha column.")
+        lbl.setWordWrap(True)
+        lay.addWidget(lbl)
 
         grid = QGridLayout()
         grid.addWidget(QLabel("min"), 0, 1)
         grid.addWidget(QLabel("max"), 0, 2)
         self.fields = {}
         for r, (key, label) in enumerate(
-                [("x", "X"), ("y", "Y"), ("t", "dt"), ("e", "Energy")], start=1):
+                [("x", "X"), ("y", "Y"), ("t", "dt"), ("e", "Energy"),
+                 ("a", "Alpha energy")], start=1):
             grid.addWidget(QLabel(label), r, 0)
             lo, hi = QLineEdit(), QLineEdit()
             for e in (lo, hi):

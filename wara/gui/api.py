@@ -12,9 +12,13 @@ Workflow:
   reconstructed X-Y positions through :func:`wara.apicalc.calc_own_pos`.
 * The figure shows three linked panels: the energy spectrum (top-left), the dt
   time histogram (bottom-left), and the X-Y hit map as a hexbin (right).
-* Dragging a span on the energy or time panel, or a rectangle on the X-Y map,
-  filters the event list live; the other panels redraw from the filtered data.
-  The same filters can be entered by hand from the Filters dialog.
+* Runs whose parquet file carries the ch-9 alpha energy (column ``energy_ch9``
+  or ``alpha``) can show it as a fourth panel: tick "Add alpha energy" and the
+  alpha spectrum (2048 bins by default, its own "Alpha bins" box) is drawn
+  bottom-right under the X-Y map, fully cross-linked with the other three.
+* Dragging a span on the energy, time or alpha-energy panel, or a rectangle on
+  the X-Y map, filters the event list live; the other panels redraw from the
+  filtered data. The same filters can be entered by hand from the Filters dialog.
 * "Send energy spectrum → Spectrum tab" hands the current energy histogram to the
   Spectrum tab for the full analysis workflow. An uncalibrated spectrum is sent
   with its *real* channel values (the bin centres) as the channel axis  -- not
@@ -93,6 +97,7 @@ from . import xyprofile as xyp
 # this module) keep working.
 from .api_common import (  # noqa: F401  -- re-exported
     API_PLOT_BG, COLORMAP, DEFAULT_EBINS, DEFAULT_TBINS, DEFAULT_HEXBINS,
+    DEFAULT_ABINS,
     GRAY_CMAP, SEND_DEFAULT_TEXT, _combo_row, _clear_axis,
     _draw_axes_placeholder,
 )
@@ -139,6 +144,11 @@ class ApiPage(QWidget):
         # Alpha energy spectrum panel: only built for flat-field runs that carry
         # an "alpha" column (the left half of the split flat-field view).
         self.ax_alpha = None
+        # Alpha energy spectrum panel of a *normal* (gamma) run that carries an
+        # alpha energy column: the optional fourth panel, bottom-right under the
+        # X-Y map. Distinct from ax_alpha above, which is the flat-field panel
+        # bound to the (shared) energy axis.
+        self.ax_aspe = None
         # Hexbin lookup data for the cursor readout (replaces the colorbar): the
         # per-hexagon centres/counts of the current X-Y map, the log-scale flag,
         # and the squared pick radius (≈ one hex spacing) used to ignore the
@@ -159,18 +169,23 @@ class ApiPage(QWidget):
                 fontsize=14, color=T.BORDER, fontweight="bold", wrap=True)
         ax.set_xticks([]); ax.set_yticks([])
         self.ax_spe = self.ax_dt = self.ax_xy = self.ax_alpha = None
+        self.ax_aspe = None
         self._style(ax)
         self.canvas.draw_idle()
 
-    def build_axes(self, flat_field=False, alpha=False):
+    def build_axes(self, flat_field=False, alpha=False, alpha_panel=False):
         """(Re)build the panel layout.
 
         Flat-field runs show only the X-Y map. When *alpha* is set (the run
         carries an "alpha" energy column), the canvas splits side by side: the
         alpha energy spectrum on the left, the X-Y map on the right. Otherwise
-        the standard three-panel gamma layout is drawn."""
+        the standard three-panel gamma layout is drawn -- and with *alpha_panel*
+        set (a normal run whose file carries an alpha energy column and the "Add
+        alpha energy" box ticked) a fourth panel is added bottom-right, under the
+        X-Y map, for the alpha energy spectrum."""
         self.fig.clf()
         self._clear_xy_data()
+        self.ax_aspe = None
         if flat_field:
             self.ax_spe = self.ax_dt = None
             if alpha:
@@ -188,7 +203,14 @@ class ApiPage(QWidget):
         gs = self.fig.add_gridspec(2, 2, width_ratios=[0.5, 0.5], height_ratios=[1, 1])
         self.ax_spe = self.fig.add_subplot(gs[0, 0])
         self.ax_dt = self.fig.add_subplot(gs[1, 0])
-        self.ax_xy = self.fig.add_subplot(gs[:, 1])
+        if alpha_panel:
+            # Four panels: the X-Y map keeps the top-right cell and the alpha
+            # spectrum takes the cell below it.
+            self.ax_xy = self.fig.add_subplot(gs[0, 1])
+            self.ax_aspe = self.fig.add_subplot(gs[1, 1])
+            self._style(self.ax_aspe)
+        else:
+            self.ax_xy = self.fig.add_subplot(gs[:, 1])
         self._style(self.ax_spe)
         self._style(self.ax_dt)
         self._style(self.ax_xy, grid=False)
@@ -344,6 +366,19 @@ class ApiOptions(QScrollArea):
         lay.addWidget(self.btn_interactive)
         lay.addWidget(qrw)
 
+        # Alpha energy panel toggle: only meaningful when the loaded run carries
+        # an alpha energy column (energy_ch9 / alpha), so it stays hidden until
+        # the controller finds one (see ApiController._configure_keys).
+        self.cb_alpha = QCheckBox("Add alpha energy")
+        self.cb_alpha.setToolTip(
+            "Show the alpha (ch 9) energy spectrum as a fourth panel, below the "
+            "X-Y map.\nDragging a band on it cuts events by alpha energy, and it "
+            "refreshes\nwith every dt / X-Y / gamma-energy cut.\n"
+            "Only available when the run's parquet file carries an alpha energy "
+            "column (energy_ch9 or alpha).")
+        self.cb_alpha.setVisible(False)
+        lay.addWidget(self.cb_alpha)
+
         # ── Run info readout ─────────────────────────────────────────
         lay.addWidget(hsep()); lay.addWidget(header("RUN INFO"))
         self.lbl_info = QLabel(" --")
@@ -377,13 +412,21 @@ class ApiOptions(QScrollArea):
                                  "(also the flat-field alpha spectrum)")
         self.ed_tbins.setToolTip("Number of bins on the dt (time) histogram")
         self.ed_xybins.setToolTip("Hexbin grid size on the X-Y map")
+        # Alpha bins: paired with the "Add alpha energy" panel, so it is shown
+        # only while that panel is available (same rule as the checkbox).
+        self.ed_abins = QLineEdit(str(DEFAULT_ABINS))
+        self.ed_abins.setToolTip("Number of bins on the alpha energy spectrum")
         for lbl, ed in [("Energy bins", self.ed_ebins),
                         ("dt bins", self.ed_tbins),
-                        ("X-Y bins", self.ed_xybins)]:
+                        ("X-Y bins", self.ed_xybins),
+                        ("Alpha bins", self.ed_abins)]:
             ed.setFixedWidth(70)
             ed.setToolTip(f"{ed.toolTip()}  -- press Enter to apply")
             row, _ = labeled_row(lbl, ed)
             lay.addWidget(row)
+            if ed is self.ed_abins:
+                self.row_abins = row
+                row.setVisible(False)
 
         self.btn_filters = QPushButton("Filters..."); self.btn_filters.setObjectName("action_btn")
         self.btn_filters.setCursor(Qt.PointingHandCursor)
@@ -508,8 +551,15 @@ class ApiController:
         self._src_date = self._src_runnr = self._src_ch = None
         self._src_data_path = None
         # Filter "used before" flags, mirroring the legacy previous/current scheme.
-        self.en_flag = self.dt_flag = self.xy_flag = 0
+        self.en_flag = self.dt_flag = self.xy_flag = self.al_flag = 0
         self.xkey = self.ykey = self.ekey = None
+        # Alpha energy axis of a normal (gamma) run: the column name when the
+        # file carries one ("energy_ch9"/"alpha"), else None. The optional fourth
+        # panel bins it, and dragging a band on that panel cuts on it.
+        self.akey = None
+        self.arange = [0, 1]
+        self.abins = DEFAULT_ABINS
+        self.alp = self.alp_x = None    # alpha histogram (counts, bin centres)
         self.xyplane = (-0.9, 0.9, -0.9, 0.9)
         self.erange = [0, 1]
         self.ebins = DEFAULT_EBINS
@@ -536,6 +586,7 @@ class ApiController:
         self._cut_energy = None
         self._cut_time = None
         self._cut_xy = None
+        self._cut_alpha = None      # (amin, amax) on the alpha energy panel
         self._cut_artists = []      # matplotlib artists for the markers above
         # Energy selections: list of dict(label, color, emin, emax, df). Each
         # snapshots the energy-cut dataframe at creation time.
@@ -638,8 +689,9 @@ class ApiController:
         o.btn_sigma.clicked.connect(self._open_sigma)
         o.cb_spe_log.toggled.connect(self._toggle_spe_log)
         o.cb_xy_log.toggled.connect(lambda *_: self._replot_xy())
+        o.cb_alpha.toggled.connect(self._toggle_alpha_panel)
         o.ed_vmax.returnPressed.connect(self._apply_vmax)
-        for ed in (o.ed_ebins, o.ed_tbins, o.ed_xybins):
+        for ed in (o.ed_ebins, o.ed_tbins, o.ed_xybins, o.ed_abins):
             ed.returnPressed.connect(self._apply_bins)
 
     def _save_undo_snapshot(self):
@@ -647,8 +699,8 @@ class ApiController:
         self._undo_state = (
             self.df_current.copy(),
             self.df_previous.copy(),
-            self.en_flag, self.dt_flag, self.xy_flag,
-            self._cut_energy, self._cut_time, self._cut_xy,
+            self.en_flag, self.dt_flag, self.xy_flag, self.al_flag,
+            self._cut_energy, self._cut_time, self._cut_xy, self._cut_alpha,
         )
         self.opts.btn_undo.setEnabled(True)
 
@@ -657,12 +709,14 @@ class ApiController:
         if self._undo_state is None:
             return
         self._clear_significance()
-        (df_cur, df_prev, en_flag, dt_flag, xy_flag,
-         cut_e, cut_t, cut_xy) = self._undo_state
+        (df_cur, df_prev, en_flag, dt_flag, xy_flag, al_flag,
+         cut_e, cut_t, cut_xy, cut_a) = self._undo_state
         self.df_current = df_cur
         self.df_previous = df_prev
-        self.en_flag, self.dt_flag, self.xy_flag = en_flag, dt_flag, xy_flag
-        self._cut_energy, self._cut_time, self._cut_xy = cut_e, cut_t, cut_xy
+        self.en_flag, self.dt_flag, self.xy_flag, self.al_flag = (
+            en_flag, dt_flag, xy_flag, al_flag)
+        self._cut_energy, self._cut_time = cut_e, cut_t
+        self._cut_xy, self._cut_alpha = cut_xy, cut_a
         self._undo_state = None
         self.opts.btn_undo.setEnabled(False)
         if self.page.ax_spe is not None:
@@ -674,6 +728,9 @@ class ApiController:
         if self.page.ax_alpha is not None:
             self.page.ax_alpha.clear()
             self._plot_alpha(self.df_current)
+        if self.page.ax_aspe is not None:
+            self.page.ax_aspe.clear()
+            self._plot_alpha_energy(self.df_current)
         self._replot_xy()
         self.page.reset_nav()
         self.page.canvas.draw_idle()
@@ -765,8 +822,9 @@ class ApiController:
         self._src_runnr = runnr
         self._src_ch = ch
         self._src_data_path = data_path
-        self.en_flag = self.dt_flag = self.xy_flag = 0
+        self.en_flag = self.dt_flag = self.xy_flag = self.al_flag = 0
         self._cut_energy = self._cut_time = self._cut_xy = None
+        self._cut_alpha = None
         self._cut_artists = []
         self._undo_state = None
         self.opts.btn_undo.setEnabled(False)
@@ -845,6 +903,10 @@ class ApiController:
         if self.flat_field:
             self._native_units = None
             self._dt_key = "dt"
+            # The optional fourth (alpha) panel belongs to the gamma layout only:
+            # a flat run's alpha energy is the split view's own left panel.
+            self.akey = None
+            self._sync_alpha_controls()
             # Split the view only when the run carries the alpha energy column.
             self._flat_alpha = "alpha" in df.columns
             if self._flat_alpha:
@@ -865,6 +927,15 @@ class ApiController:
                 self.erange = None
             return
         self._flat_alpha = False
+
+        # Alpha energy of a normal (gamma) run: many API files carry the ch-9
+        # alpha energy alongside the gamma event, under either name. When present
+        # the "Add alpha energy" box appears and can add it as a fourth panel.
+        self.akey = next((c for c in ("energy_ch9", "alpha") if c in df.columns),
+                         None)
+        if self.akey is not None:
+            self.arange = [0.0, float(df[self.akey].max())]
+        self._sync_alpha_controls()
 
         # Channel base: raw channels (energy_orig) take priority over an already
         # physical energy axis (energy). _native_units flags which it is.
@@ -925,7 +996,8 @@ class ApiController:
         # twinx references don't keep a stale handle to the old axes.
         self._sig_active = False
         self._ax_sig = None
-        self.page.build_axes(flat_field=self.flat_field, alpha=self._flat_alpha)
+        self.page.build_axes(flat_field=self.flat_field, alpha=self._flat_alpha,
+                             alpha_panel=self._alpha_active)
         self._detach_selectors()
         if self.flat_field:
             if self._flat_alpha:
@@ -938,6 +1010,7 @@ class ApiController:
         else:
             self._plot_energy(self.df_current)
             self._plot_time(self.df_current)
+            self._plot_alpha_energy(self.df_current)
             self._replot_xy()
             if self.opts.btn_interactive.isChecked():
                 self._attach_selectors()
@@ -1019,6 +1092,61 @@ class ApiController:
         ax.plot(self.gam_x, self.gam, color=T.LOGO_GREEN, linewidth=0.9)
         ax.set_yscale("log" if self.opts.cb_spe_log.isChecked() else "linear")
         ax.set_xlabel(self._alpha_xlabel())
+        ax.set_ylabel("Counts")
+        self.page._style(ax)
+        self._draw_cut_markers()
+
+    # -- alpha energy panel (normal runs) --------------------------------------
+    @property
+    def _alpha_active(self):
+        """True when the fourth (alpha energy) panel should be drawn: a normal
+        gamma run whose file carries an alpha energy column, with the "Add alpha
+        energy" box ticked."""
+        return (not self.flat_field and self.akey is not None
+                and self.opts.cb_alpha.isChecked())
+
+    def _sync_alpha_controls(self):
+        """Show the "Add alpha energy" box and its bin count only for runs that
+        carry an alpha energy column; hide (and untick) them otherwise so a stale
+        tick from a previous run can't ask for a panel there is no data for."""
+        avail = not self.flat_field and self.akey is not None
+        o = self.opts
+        o.cb_alpha.setVisible(avail)
+        if not avail and o.cb_alpha.isChecked():
+            o.cb_alpha.blockSignals(True)
+            o.cb_alpha.setChecked(False)
+            o.cb_alpha.blockSignals(False)
+        o.row_abins.setVisible(avail and o.cb_alpha.isChecked())
+
+    def _toggle_alpha_panel(self, checked):
+        """Add/remove the alpha energy panel: the layout changes, so rebuild the
+        axes and redraw every panel from the current (filtered) data."""
+        self.opts.row_abins.setVisible(bool(checked) and self.akey is not None)
+        if self.df_current is None:
+            return
+        # A panel that is going away takes its cut marker with it; the cut itself
+        # stays applied to the data (← Back still undoes it).
+        self._initialize_plots()
+        self._status("Alpha energy panel shown" if checked
+                     else "Alpha energy panel hidden")
+
+    def _compute_alpha_hist(self, df):
+        """Bin *df* into the alpha energy histogram (self.alp / self.alp_x)."""
+        self.alp, edg = np.histogram(df[self.akey], bins=self.abins,
+                                     range=self.arange)
+        self.alp_x = (edg[1:] + edg[:-1]) / 2
+
+    def _plot_alpha_energy(self, df):
+        """Draw the fourth panel: the alpha (ch 9) energy spectrum of a normal
+        run. Binned on its own axis (``akey``/``arange``/``abins``), so it is
+        independent of the gamma energy histogram that feeds send-to-Spectrum."""
+        ax = self.page.ax_aspe
+        if ax is None or df is None or self.akey is None or self.akey not in df:
+            return
+        self._compute_alpha_hist(df)
+        ax.plot(self.alp_x, self.alp, color=T.ACCENT_AMBER, linewidth=0.9)
+        ax.set_yscale("log" if self.opts.cb_spe_log.isChecked() else "linear")
+        ax.set_xlabel("Alpha energy (channels)")
         ax.set_ylabel("Counts")
         self.page._style(ax)
         self._draw_cut_markers()
@@ -1136,6 +1264,13 @@ class ApiController:
                 self.page.ax_alpha, self._on_energy_span, "horizontal",
                 useblit=True, interactive=True,
                 props=dict(alpha=0.3, facecolor=T.ACCENT_AMBER)))
+        # Fourth panel: dragging a band cuts events by alpha (ch 9) energy, which
+        # then refreshes the gamma energy, dt and X-Y panels.
+        if self.page.ax_aspe is not None:
+            self._selectors.append(SpanSelector(
+                self.page.ax_aspe, self._on_alpha_span, "horizontal",
+                useblit=True, interactive=True,
+                props=dict(alpha=0.3, facecolor=T.ACCENT_AMBER)))
         if self.page.ax_dt is not None:
             self._selectors.append(SpanSelector(
                 self.page.ax_dt, self._on_time_span, "horizontal",
@@ -1181,6 +1316,11 @@ class ApiController:
             for x in self._cut_energy:
                 self._cut_artists.append(self.page.ax_alpha.axvline(
                     x, color=T.ACCENT_RED, linestyle=":", linewidth=1.3, zorder=6))
+        # Fourth panel: the alpha energy cut, on its own axis.
+        if self._cut_alpha is not None and self.page.ax_aspe is not None:
+            for x in self._cut_alpha:
+                self._cut_artists.append(self.page.ax_aspe.axvline(
+                    x, color=T.ACCENT_RED, linestyle=":", linewidth=1.3, zorder=6))
         if self._cut_time is not None and self.page.ax_dt is not None:
             for x in self._cut_time:
                 self._cut_artists.append(self.page.ax_dt.axvline(
@@ -1204,6 +1344,10 @@ class ApiController:
     def _on_time_span(self, tmin, tmax):
         if tmax > tmin:
             self.apply_t_filter(tmin, tmax)
+
+    def _on_alpha_span(self, amin, amax):
+        if amax > amin and self.opts.btn_interactive.isChecked():
+            self.apply_alpha_filter(round(amin, 4), round(amax, 4))
 
     def _on_xy_select(self, eclick, erelease):
         x1, y1 = eclick.xdata, eclick.ydata
@@ -1231,10 +1375,46 @@ class ApiController:
         if self.page.ax_dt is not None:
             self.page.ax_dt.clear()
             self._plot_time(self.df_current)
+        if self.page.ax_aspe is not None:
+            self.page.ax_aspe.clear()
+            self._plot_alpha_energy(self.df_current)
         self._replot_xy()
         self.page.reset_nav()
         self.page.canvas.draw_idle()
         self._status(f"Energy filter [{xmin:g}, {xmax:g}]  ·  {self.df_current.shape[0]:,} events")
+
+    def apply_alpha_filter(self, amin, amax):
+        """Cut events by alpha (ch 9) energy -- the fourth panel's span. Mirrors
+        the gamma energy filter: the other three panels redraw from the cut data
+        while the alpha panel itself keeps showing the full spectrum with the cut
+        marked, so the band can be dragged again."""
+        if self.df_current is None or self.akey is None:
+            return
+        self._clear_significance()
+        self._save_undo_snapshot()
+        self._cut_alpha = (amin, amax)
+        if self.al_flag == 0:
+            mask = ((self.df_current[self.akey] > amin)
+                    & (self.df_current[self.akey] < amax))
+            self.df_previous = self.df_current.copy()
+            self.df_current = self.df_current[mask]
+            self.al_flag = 1
+        else:
+            mask = ((self.df_previous[self.akey] > amin)
+                    & (self.df_previous[self.akey] < amax))
+            self.df_current = self.df_previous[mask]
+        self.df_current = self.df_current.reset_index(drop=True)
+        if self.page.ax_spe is not None:
+            self.page.ax_spe.clear()
+            self._plot_energy(self.df_current)
+        if self.page.ax_dt is not None:
+            self.page.ax_dt.clear()
+            self._plot_time(self.df_current)
+        self._replot_xy()
+        self.page.reset_nav()
+        self.page.canvas.draw_idle()
+        self._status(f"Alpha energy filter [{amin:g}, {amax:g}]  ·  "
+                     f"{self.df_current.shape[0]:,} events")
 
     def apply_t_filter(self, tmin, tmax):
         if self.df_current is None:
@@ -1254,6 +1434,9 @@ class ApiController:
         if self.page.ax_spe is not None:
             self.page.ax_spe.clear()
             self._plot_energy(self.df_current)
+        if self.page.ax_aspe is not None:
+            self.page.ax_aspe.clear()
+            self._plot_alpha_energy(self.df_current)
         self._replot_xy()
         self.page.reset_nav()
         self.page.canvas.draw_idle()
@@ -1286,6 +1469,10 @@ class ApiController:
         if self.page.ax_alpha is not None:
             self.page.ax_alpha.clear()
             self._plot_alpha(self.df_current)
+        # ...and so does the fourth (alpha energy) panel of a normal run.
+        if self.page.ax_aspe is not None:
+            self.page.ax_aspe.clear()
+            self._plot_alpha_energy(self.df_current)
         # Bug fix vs legacy: redraw the X-Y map from the *filtered* data so the
         # panel reflects the selection (legacy replotted df_previous, the full map).
         self._replot_xy()
@@ -1315,6 +1502,12 @@ class ApiController:
         e = dlg.pair("e")
         if e is not None:
             self.apply_energy_filter(e[0], e[1])
+        a = dlg.pair("a")
+        if a is not None:
+            if self.akey is None:
+                self._status("This run carries no alpha energy column")
+            else:
+                self.apply_alpha_filter(a[0], a[1])
 
     # -- energy selections -----------------------------------------------------
     def _arm_selection(self):
@@ -2220,7 +2413,7 @@ class ApiController:
         self.e_units = units
         self.df_current = self.df_api.copy()
         self.df_previous = self.df_api.copy()
-        self.en_flag = self.dt_flag = self.xy_flag = 0
+        self.en_flag = self.dt_flag = self.xy_flag = self.al_flag = 0
         self.vmax = None
         self.opts.ed_vmax.clear()
         # Existing selections were cut in the old (channel) axis  -- drop them.
@@ -2246,7 +2439,7 @@ class ApiController:
         self.e_units = None
         self.df_current = self.df_api.copy()
         self.df_previous = self.df_api.copy()
-        self.en_flag = self.dt_flag = self.xy_flag = 0
+        self.en_flag = self.dt_flag = self.xy_flag = self.al_flag = 0
         self.vmax = None
         self.opts.ed_vmax.clear()
         self._reset_selections()
@@ -2261,7 +2454,7 @@ class ApiController:
         """Re-derive the working frames from df_api and redraw (reset-style)."""
         self.df_current = self.df_api.copy()
         self.df_previous = self.df_api.copy()
-        self.en_flag = self.dt_flag = self.xy_flag = 0
+        self.en_flag = self.dt_flag = self.xy_flag = self.al_flag = 0
         self.vmax = None
         self.opts.ed_vmax.clear()
         self._reset_selections()
@@ -2784,11 +2977,12 @@ class ApiController:
 
     # -- display toggles -------------------------------------------------------
     def _toggle_spe_log(self):
-        # The "Energy Log Y" toggle drives whichever spectrum panel is showing:
-        # the gamma energy spectrum, or the flat-field alpha spectrum.
+        # The "Energy Log Y" toggle drives every spectrum panel showing: the gamma
+        # energy spectrum, the flat-field alpha spectrum, and the fourth (alpha
+        # energy) panel of a normal run.
         scale = "log" if self.opts.cb_spe_log.isChecked() else "linear"
         drew = False
-        for ax in (self.page.ax_spe, self.page.ax_alpha):
+        for ax in (self.page.ax_spe, self.page.ax_alpha, self.page.ax_aspe):
             if ax is not None:
                 ax.set_yscale(scale)
                 drew = True
@@ -2814,12 +3008,14 @@ class ApiController:
     def _apply_bins(self):
         """Re-bin the panels from the Display bin boxes and redraw. Each box must
         be a positive integer; an invalid one aborts without changing anything.
-        The Energy-bins box also drives the flat-field alpha spectrum."""
+        The Energy-bins box also drives the flat-field alpha spectrum; the
+        Alpha-bins box drives the fourth (alpha energy) panel."""
         o = self.opts
         parsed = {}
         for attr, ed, name in [("ebins", o.ed_ebins, "Energy bins"),
                                ("tbins", o.ed_tbins, "dt bins"),
-                               ("hexbins", o.ed_xybins, "X-Y bins")]:
+                               ("hexbins", o.ed_xybins, "X-Y bins"),
+                               ("abins", o.ed_abins, "Alpha bins")]:
             try:
                 val = int(ed.text().strip())
             except ValueError:
@@ -2829,8 +3025,8 @@ class ApiController:
                 self._status(f"{name} must be at least 1")
                 return
             parsed[attr] = val
-        self.ebins, self.tbins, self.hexbins = (
-            parsed["ebins"], parsed["tbins"], parsed["hexbins"])
+        self.ebins, self.tbins, self.hexbins, self.abins = (
+            parsed["ebins"], parsed["tbins"], parsed["hexbins"], parsed["abins"])
         if self.df_current is None:
             self._status("Bin counts set  -- load an API file to apply them")
             return
@@ -2845,11 +3041,17 @@ class ApiController:
         if self.page.ax_alpha is not None:
             self.page.ax_alpha.clear()
             self._plot_alpha(self.df_current)
+        if self.page.ax_aspe is not None:
+            self.page.ax_aspe.clear()
+            self._plot_alpha_energy(self.df_current)
         self._replot_xy()
         self.page.reset_nav()
         self.page.canvas.draw_idle()
-        self._status(
-            f"Bins → energy {self.ebins:,} · dt {self.tbins:,} · X-Y {self.hexbins:,}")
+        msg = (f"Bins → energy {self.ebins:,} · dt {self.tbins:,} · "
+               f"X-Y {self.hexbins:,}")
+        if self.page.ax_aspe is not None:
+            msg += f" · alpha {self.abins:,}"
+        self._status(msg)
 
     def _confirm_uncalibrated_energy(self):
         """Warn that the energy is being saved into ``energy_cal`` without a
@@ -3117,8 +3319,9 @@ class ApiController:
         # position columns are re-derived from it below.
         self.df_current = self.df_api.copy()
         self.df_previous = self.df_api.copy()
-        self.en_flag = self.dt_flag = self.xy_flag = 0
+        self.en_flag = self.dt_flag = self.xy_flag = self.al_flag = 0
         self._cut_energy = self._cut_time = self._cut_xy = None
+        self._cut_alpha = None
         self._undo_state = None
         self.opts.btn_undo.setEnabled(False)
         self.vmax = None

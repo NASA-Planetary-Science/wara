@@ -144,5 +144,48 @@ calibration** applies a channel→energy polynomial built there back onto the al
 axis (adding an `energy_cal` column); **Clear calibration** reverts to raw
 channels.
 
+### Alpha energy in a normal run ("Add alpha energy")
+
+Many gamma-coincidence runs also record the ch-9 **alpha energy** of each event,
+in a column named either **`energy_ch9`** or **`alpha`** (the two names mean the
+same thing). When the loaded run carries one of them, an **Add alpha energy**
+checkbox appears under **← Back** in the options panel — it stays hidden for runs
+without such a column.
+
+Tick it and the canvas goes from three panels to **four**: the gamma energy
+spectrum (top-left), the `dt` histogram (bottom-left), the X–Y map (top-right)
+and the **alpha energy spectrum** (bottom-right, under the X–Y map). It is binned
+independently of the gamma spectrum from its own **Alpha bins** box in DISPLAY,
+which defaults to **2048** and appears alongside the checkbox. **Energy Log Y**
+switches this panel to a log y-axis too. Unticking the box restores the
+three-panel layout; the fourth panel is a *view*, so any cut already applied
+stays applied.
+
+The alpha panel is fully integrated with the other three:
+
+- With **Interactive cuts** on, dragging a band on the alpha spectrum keeps only
+  that alpha-energy window — the gamma, `dt` and X–Y panels redraw from the cut
+  events, and the band is marked on the alpha panel with dotted red lines so it
+  can be dragged again.
+- Conversely, a gamma-energy, `dt` or X–Y cut redraws the alpha spectrum from the
+  filtered events, so it always shows the alpha energy of exactly the events the
+  other panels show.
+- **← Back** undoes the last cut (alpha cuts included) and **Reset** restores the
+  full run.
+
+The same cut can be typed by hand in **Filters...** via the **Alpha energy**
+min/max pair (ignored for runs with no alpha column).
+
+```{note}
+This is distinct from the flat-field split view above. There, the run *is* the
+alpha detector and its alpha energy is the whole left panel, sharing the
+**Energy bins** box and the send-to-Spectrum/calibration machinery. Here the
+gamma energy keeps that role and the alpha spectrum is an extra, independently
+binned panel used for cutting on alpha energy.
+```
+
+A runnable, GUI-free version of this four-panel view (including the cut both
+ways) is in `examples/other/example_api_alpha_energy.py`.
+
 For the full API of these modules, see {py:mod}`wara.read_parquet_api` and
 {py:mod}`wara.apicalc` in the API reference.

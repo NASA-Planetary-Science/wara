@@ -320,11 +320,153 @@ def test_flat_field_no_alpha_not_interactive(qapp, monkeypatch):
         w.close()
 
 
+def _alpha_ctrl(qapp, monkeypatch, alpha_col="energy_ch9", n=4000):
+    """Build the app on the API tab for a *normal* (gamma) run whose parquet also
+    carries the ch-9 alpha energy under *alpha_col* (None ⇒ no alpha column).
+    Returns (window, controller)."""
+    df = _synthetic_events(n=n)
+    if alpha_col is not None:
+        rng = np.random.default_rng(7)
+        df = df.assign(**{alpha_col: rng.uniform(0, 4000, n)})
+    monkeypatch.setattr(read_parquet_api, "read_parquet_file",
+                        lambda *a, **k: df.copy().assign(dt=df["dt"] / 1e9))
+    monkeypatch.setattr(apicalc, "get_total_time", lambda *a, **k: 14386.0)
+    monkeypatch.setattr(apicalc, "get_total_counts", lambda *a, **k: 2.5e9)
+    monkeypatch.setattr(apicalc, "calculate_neutron_yield", lambda *a, **k: 4.3e6)
+
+    w = WaraApp()
+    idx = [name for name, _ in NAV_SECTIONS].index("API")
+    w.nav_group.button(idx).setChecked(True)
+    w._on_nav(idx)
+    c = w.api
+    c.opts.ed_date.setText("2025-07-14")
+    c.opts.ed_run.setText("10")
+    c.opts.ed_ch.setText("4")
+    _fast_bins(c)
+    return w, c
+
+
+@pytest.mark.parametrize("col", ["energy_ch9", "alpha"])
+def test_alpha_column_adds_optional_fourth_panel(qapp, monkeypatch, col):
+    """A normal run carrying the alpha energy (under either column name) offers
+    the "Add alpha energy" box; ticking it adds a fourth panel, bottom-right
+    under the X-Y map, binned from its own Alpha-bins box (2048 by default)."""
+    w, c = _alpha_ctrl(qapp, monkeypatch, col)
+    try:
+        c._load()
+        assert c.akey == col
+        # The box (and its bin count) appear only once a run with alpha loads.
+        assert not c.opts.cb_alpha.isHidden()
+        assert c.opts.row_abins.isHidden()
+        # Off by default: the standard three-panel layout, no alpha axis.
+        assert c.page.ax_aspe is None and len(c.page.fig.axes) == 3
+        c.opts.cb_alpha.setChecked(True)
+        assert not c.opts.row_abins.isHidden()
+        assert c.page.ax_aspe is not None and len(c.page.fig.axes) == 4
+        # The alpha panel sits below the X-Y map (lower y0, same x span).
+        xy_box = c.page.ax_xy.get_position()
+        a_box = c.page.ax_aspe.get_position()
+        assert a_box.y0 < xy_box.y0
+        assert a_box.x0 == pytest.approx(xy_box.x0, abs=1e-9)
+        assert len(c.page.ax_aspe.get_lines()) == 1
+        assert "Alpha energy" in c.page.ax_aspe.get_xlabel()
+        # Its own histogram, independent of the gamma one behind Send-to-Spectrum.
+        assert c.abins == api_mod.DEFAULT_ABINS == 2048
+        assert len(c.alp) == 2048 and len(c.gam) == c.ebins
+        # The Alpha-bins box re-bins only that panel.
+        c.opts.ed_abins.setText("256")
+        c._apply_bins()
+        assert c.abins == 256 and len(c.alp) == 256
+        assert len(c.gam) == c.ebins
+        # Unticking restores the three-panel layout.
+        c.opts.cb_alpha.setChecked(False)
+        assert c.page.ax_aspe is None and len(c.page.fig.axes) == 3
+    finally:
+        w.close()
+
+
+def test_no_alpha_column_hides_the_checkbox(qapp, monkeypatch):
+    """A run without an alpha energy column never offers the fourth panel."""
+    w, c = _alpha_ctrl(qapp, monkeypatch, alpha_col=None)
+    try:
+        c._load()
+        assert c.akey is None
+        assert c.opts.cb_alpha.isHidden() and c.opts.row_abins.isHidden()
+        assert c.page.ax_aspe is None
+        # Even if the box is ticked programmatically there is nothing to plot.
+        c.opts.cb_alpha.setChecked(True)
+        assert c._alpha_active is False and c.page.ax_aspe is None
+    finally:
+        w.close()
+
+
+def test_alpha_panel_cross_filters_with_dt_xy_and_gamma(qapp, monkeypatch):
+    """The alpha panel is fully integrated with the other three: an alpha band
+    cuts the events (redrawing gamma/dt/X-Y), a dt or X-Y cut refreshes the alpha
+    spectrum, and ← Back undoes an alpha cut."""
+    w, c = _alpha_ctrl(qapp, monkeypatch)
+    try:
+        c._load()
+        c.opts.cb_alpha.setChecked(True)
+        # Interactive mode adds the alpha span on top of the usual three.
+        c.opts.btn_interactive.setChecked(True)
+        assert len(c._selectors) == 4
+        n0 = c.df_current.shape[0]
+
+        # Alpha band → fewer events, and the alpha cut is marked on its panel.
+        c._on_alpha_span(500.0, 2500.0)
+        n_alpha = c.df_current.shape[0]
+        assert 0 < n_alpha < n0
+        assert c.al_flag == 1 and c._cut_alpha == (500.0, 2500.0)
+        # Two dotted cut markers bound the band on the alpha panel. (The panel
+        # also carries the interactive span's own handle lines.)
+        markers = [ln for ln in c.page.ax_aspe.get_lines()
+                   if ln.get_linestyle() == ":"]
+        assert len(markers) == 2
+        # The gamma/dt/X-Y panels reflect the alpha cut.
+        assert c.gam.sum() == n_alpha
+        assert c.page.xy_offsets is not None
+
+        # dt and X-Y cuts refresh the alpha spectrum from the cut data.
+        c.apply_t_filter(-10, 10)
+        assert c.alp.sum() == c.df_current.shape[0]
+        n_t = c.df_current.shape[0]
+        c.apply_xy_filter(-0.2, 0.2, -0.2, 0.2)
+        assert c.df_current.shape[0] <= n_t
+        assert c.alp.sum() == c.df_current.shape[0]
+
+        # ← Back undoes the last (X-Y) cut and redraws the alpha panel.
+        c._undo()
+        assert c.df_current.shape[0] == n_t
+        assert c.alp.sum() == n_t
+    finally:
+        w.close()
+
+
+def test_manual_alpha_filter_from_dialog(qapp, monkeypatch):
+    """The Filters dialog's Alpha-energy pair applies the same cut as dragging a
+    band on the alpha panel."""
+    w, c = _alpha_ctrl(qapp, monkeypatch)
+    try:
+        c._load()
+        c.opts.cb_alpha.setChecked(True)
+        c._open_filters()
+        lo, hi = c._filter_dlg.fields["a"]
+        lo.setText("1000"); hi.setText("2000")
+        n0 = c.df_current.shape[0]
+        c._apply_manual_filters()
+        assert 0 < c.df_current.shape[0] < n0
+        assert c._cut_alpha == (1000.0, 2000.0)
+    finally:
+        w.close()
+
+
 def test_bin_boxes_prepopulated_with_defaults(api):
     _w, c = api
     assert c.opts.ed_ebins.text() == str(api_mod.DEFAULT_EBINS)
     assert c.opts.ed_tbins.text() == str(api_mod.DEFAULT_TBINS)
     assert c.opts.ed_xybins.text() == str(api_mod.DEFAULT_HEXBINS)
+    assert c.opts.ed_abins.text() == str(api_mod.DEFAULT_ABINS)
 
 
 def test_apply_bins_rebins_panels(api):

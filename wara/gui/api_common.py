@@ -18,6 +18,9 @@ COLORMAP = "plasma"
 DEFAULT_EBINS = 2 ** 12
 DEFAULT_TBINS = 512
 DEFAULT_HEXBINS = 80
+# Alpha (ch 9) energy spectrum shown as a fourth panel when a normal API run
+# carries an alpha energy column (``energy_ch9``/``alpha``).
+DEFAULT_ABINS = 2048
 # Faint gray density map for the *base* X-Y hexbin when colored energy
 # selections are overlaid on top: low counts fade into the plot background, high
 # counts brighten to a dim gray so the selections stay the focus.

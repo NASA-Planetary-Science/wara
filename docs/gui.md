@@ -171,6 +171,12 @@ send a selected spectrum back to the Spectrum tab, and explore the reconstructed
 
 ![API tab](../figs/GUI-API.png)
 
+When the loaded run's parquet also carries the ch-9 alpha energy (an
+`energy_ch9` or `alpha` column), an **Add alpha energy** checkbox appears under
+**← Back**: it adds the alpha spectrum as a fourth panel below the X–Y map, with
+its own **Alpha bins** count (2048 by default), cross-filtering with the gamma
+energy, `dt` and X–Y panels.
+
 See [Associated Particle Imaging](api.md).
 
 ## The Neutrons tab
