@@ -37,12 +37,12 @@ X1_RANGE = [1060, 1105]
 X2_RANGE = [1214, 1260]
 
 
-@pytest.fixture
+@pytest.fixture(scope="module")
 def spec_cal():
     return file_reader.read_csv(CSV_WITH_CAL)
 
 
-@pytest.fixture
+@pytest.fixture(scope="module")
 def spec_chan():
     return file_reader.read_csv(CSV_NO_CAL)
 
@@ -322,7 +322,7 @@ class TestContinuumFit:
 STEP_XRANGE = [1070, 1260]
 
 
-@pytest.fixture
+@pytest.fixture(scope="module")
 def cebr_search(spec_cal):
     return ps.PeakSearch(spec_cal, ref_x=1220, ref_fwhm=31,
                          fwhm_at_0=1.0, min_snr=5)
@@ -374,7 +374,7 @@ class TestSmoothStepBackgroundFunction:
 class TestGaussStepFit:
     """Default (sharp) step background."""
 
-    @pytest.fixture
+    @pytest.fixture(scope="class")
     def fit(self, cebr_search):
         return adv.GaussStepFit(cebr_search, STEP_XRANGE)
 
@@ -471,7 +471,7 @@ class TestGaussStepFit:
 class TestGaussStepFitSmooth:
     """Optional smoothed (erfc) step background."""
 
-    @pytest.fixture
+    @pytest.fixture(scope="class")
     def fit(self, cebr_search):
         return adv.GaussStepFit(cebr_search, STEP_XRANGE, step="smooth")
 
@@ -549,7 +549,7 @@ class TestPeakShapeMetricsFunction:
 
 
 class TestShapeMetricsOnFits:
-    @pytest.fixture
+    @pytest.fixture(scope="class")
     def gauss_fit(self, cebr_search):
         from wara import peakfit as pf
         return pf.PeakFit(cebr_search, STEP_XRANGE, bkg="linear")
@@ -693,11 +693,11 @@ class TestHypermetFunction:
 
 
 class TestHypermetFit:
-    @pytest.fixture
+    @pytest.fixture(scope="class")
     def fit(self, hpge_search):
         return adv.HypermetFit(hpge_search, HYPERMET_XRANGE, bkg="linear")
 
-    @pytest.fixture
+    @pytest.fixture(scope="class")
     def gauss(self, hpge_search):
         return adv.MultiProfilePeakFit(
             hpge_search, HYPERMET_XRANGE, bkg="linear", profile="gauss"
@@ -755,11 +755,11 @@ FULL_XRANGE = [196, 204]
 
 
 class TestFullHPGePeakFit:
-    @pytest.fixture
+    @pytest.fixture(scope="class")
     def fit(self, hpge_search):
         return adv.FullHPGePeakFit(hpge_search, FULL_XRANGE)
 
-    @pytest.fixture
+    @pytest.fixture(scope="class")
     def gauss(self, hpge_search):
         return adv.MultiProfilePeakFit(
             hpge_search, FULL_XRANGE, bkg="linear", profile="gauss"
@@ -1163,9 +1163,12 @@ REAL_RES = 2.49        # detector FWHM at ~935 keV (from clean lines)
 
 @pytest.fixture(scope="module")
 def real_doublet_search():
+    # These tests pass explicit peaks=REAL_PEAKS, so the finder's auto-detected
+    # peaks are unused -- the fast method keeps the (module-scoped) setup quick
+    # instead of running the O(n^2) km matrix on a full-resolution HPGe spectrum.
     spect = file_reader.read_txt(TXT_HPGE)
     return ps.PeakSearch(spect, ref_x=935, ref_fwhm=2.5, fwhm_at_0=0.5,
-                         min_snr=6, method="km")
+                         min_snr=6, method="fast")
 
 
 class TestPeakConstraintsRealData:

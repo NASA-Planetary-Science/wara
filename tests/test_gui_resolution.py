@@ -48,7 +48,8 @@ def app(qapp):
     w._spect_orig = spect.copy()
     w._active_name = "syn"
     w._refresh()
-    w.search = ps.PeakSearch(spect, ref_x=1000, ref_fwhm=8, fwhm_at_0=1.0, min_snr=4)
+    w.search = ps.PeakSearch(spect, ref_x=1000, ref_fwhm=8, fwhm_at_0=1.0,
+                             min_snr=4, method="fast")
     yield w
     w.close()
 

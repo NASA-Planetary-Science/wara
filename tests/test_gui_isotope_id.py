@@ -81,7 +81,8 @@ def test_inactive_without_calibration(qapp):
     counts += 4000.0 * np.exp(-0.5 * ((ch - 2000) / 3.0) ** 2)
     w.spect = sp.Spectrum(counts=counts)          # uncalibrated (channel axis)
     w._spect_orig = w.spect.copy(); w._active_name = "u"; w._refresh()
-    w.search = ps.PeakSearch(w.spect, ref_x=2000, ref_fwhm=3, fwhm_at_0=1.0, min_snr=4)
+    w.search = ps.PeakSearch(w.spect, ref_x=2000, ref_fwhm=3, fwhm_at_0=1.0,
+                             min_snr=4, method="fast")
     w.spectrum_page.canvas.set_peaks([(2000.0, 4000.0, "2000")])
     w.spectrum_opts.cb_isotope_id.setChecked(True)
     assert not w.spectrum_page.canvas._iso_on        # calibration is required

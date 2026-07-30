@@ -44,7 +44,7 @@ def qapp():
 def search():
     spect = file_reader.read_csv(CSV_WITH_CAL)
     return PeakSearch(spectrum=spect, ref_x=1150, ref_fwhm=30.0,
-                      fwhm_at_0=1.0, min_snr=3, method="km")
+                      fwhm_at_0=1.0, min_snr=3, method="fast")
 
 
 @pytest.fixture
@@ -468,7 +468,7 @@ class TestIsotopeIdColumn:
         counts += 6000.0 * np.exp(-0.5 * ((ch - 2000) / 3.0) ** 2)
         spect = sp.Spectrum(counts=counts)                 # channel axis, no energy
         w = FitWindow(None, PeakSearch(spect, ref_x=2000, ref_fwhm=3,
-                                       fwhm_at_0=1.0, min_snr=4))
+                                       fwhm_at_0=1.0, min_snr=4, method="fast"))
         w.set_roi(1960, 2040)
         headers = [w.table.horizontalHeaderItem(i).text()
                    for i in range(w.table.columnCount())]

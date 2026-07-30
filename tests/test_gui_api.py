@@ -268,6 +268,31 @@ def test_flat_field_alpha_interactive_cross_filter(qapp, monkeypatch):
         w.close()
 
 
+def test_flat_field_alpha_send_and_calibrate(qapp, monkeypatch):
+    """The alpha spectrum can be sent to the Spectrum tab and calibrated like the
+    gamma spectrum: send builds an active Spectrum; a retrieved polynomial adds
+    energy_cal, switches the axis to energy, and relabels the alpha panel."""
+    w, c = _flat_field_ctrl(qapp, monkeypatch,
+                            _synthetic_flat_events(with_alpha=True))
+    try:
+        c._load()
+        assert c.ekey == "alpha" and c._chan_key == "alpha"
+        # Send the (raw-channel) alpha spectrum to the Spectrum tab.
+        c._send_to_spectrum()
+        assert w.spect is not None and len(w.spect.counts) == c.ebins
+        assert "Alpha energy (channels)" in c.page.ax_alpha.get_xlabel()
+        # Retrieve/apply a linear channel→keV calibration onto the alpha axis.
+        c.apply_calibration([0.0, 0.1], units="keV")
+        assert c.ekey == "energy_cal" and c.e_units == "keV"
+        assert "energy_cal" in c.df_current.columns
+        assert "keV" in c.page.ax_alpha.get_xlabel()
+        # Clearing reverts to raw alpha channels.
+        c._clear_calibration()
+        assert c.ekey == "alpha" and c.e_units is None
+    finally:
+        w.close()
+
+
 def test_flat_field_no_alpha_not_interactive(qapp, monkeypatch):
     """A flat-field run without an alpha column has nothing to cross-filter, so
     enabling interactive cuts attaches no selectors."""
@@ -711,12 +736,12 @@ def test_selections_dialog_remove_clears_significance(api, monkeypatch):
 def test_build_slices_returns_spectra(api):
     _w, c = api
     c._load()
-    slices = c._build_slices(dt_slice_w=None)
+    slices = c._build_slices(dt_slice_w=None, method="fast")
     assert len(slices) >= 1
     s = slices[0]
     assert {"idx", "t0", "t1", "tc", "spe", "search"} <= set(s)
     # Each slice carries an energy Spectrum binned to the tab's ebins, and the
-    # PeakSearch has run (km method populates .snr).
+    # PeakSearch has run (populates .snr).
     assert len(s["spe"].counts) == c.ebins
     assert s["search"].snr is not None
     # Energy units propagate from _axis_units: only an applied calibration
@@ -730,7 +755,7 @@ def test_build_slices_caps_count(api):
     c._load()
     from wara.gui.slicefit import MAX_SLICES
     # An absurdly small width would ask for a huge slice count; it must cap.
-    slices = c._build_slices(dt_slice_w=1e-12)
+    slices = c._build_slices(dt_slice_w=1e-12, method="fast")
     assert 1 <= len(slices) <= MAX_SLICES
 
 
@@ -738,7 +763,7 @@ def test_band_snr_reads_search_snr(api):
     _w, c = api
     c._load()
     from wara.gui.slicefit import band_snr
-    slices = c._build_slices(dt_slice_w=None)
+    slices = c._build_slices(dt_slice_w=None, method="fast")
     val = band_snr(slices[0]["search"], (500.0, 2000.0))
     # A finite, non-negative SNR (snr is clipped at 0 by PeakSearch).
     assert val >= 0.0 or val != val  # >=0 or NaN if band off-axis
@@ -748,7 +773,7 @@ def test_slice_fit_window_area_mode_emits(api):
     _w, c = api
     c._load()
     from wara.gui.slicefit import SliceFitWindow, TECH_FIT
-    slices = c._build_slices(dt_slice_w=None)
+    slices = c._build_slices(dt_slice_w=None, method="fast")
     win = SliceFitWindow(c.app, slices, (500.0, 2000.0), "Fe", "#ff0000")
     # Switch the per-slice Method to Net area − linear bkg.
     win.method.setCurrentIndex(1)
@@ -772,18 +797,38 @@ def test_slice_fit_window_area_mode_emits(api):
 def test_build_slices_respects_min_snr(api):
     _w, c = api
     c._load()
-    s_lo = c._build_slices(dt_slice_w=None, min_snr=1.0)
-    s_hi = c._build_slices(dt_slice_w=None, min_snr=42.0)
+    s_lo = c._build_slices(dt_slice_w=None, min_snr=1.0, method="fast")
+    s_hi = c._build_slices(dt_slice_w=None, min_snr=42.0, method="fast")
     assert s_lo[0]["search"].min_snr == 1.0
     assert s_hi[0]["search"].min_snr == 42.0
 
 
-def test_slice_fit_window_peak_selection(api):
-    _w, c = api
-    c._load()
+def _clean_peak_slices(n=3):
+    """Build *n* dt slices, each a clean single-Gaussian spectrum at 780 keV.
+
+    Real peaks (not the fixture's uniform noise) keep the per-slice
+    MultiProfilePeakFit fast and deterministic: one peak found, one peak fit.
+    Fitting hundreds of noise peaks per slice is what makes the noise-based
+    path pathologically slow, so tests that exercise the fit window use this.
+    """
+    from wara import spectrum as sp, peaksearch as ps
+    x = np.linspace(700, 900, 2048)
+    peak = 50 + 4000 * np.exp(-0.5 * ((x - 780) / 3) ** 2)
+    slices = []
+    for i in range(n):
+        cts = (peak * (1 + 0.1 * i)).astype(int)
+        spe = sp.Spectrum(counts=cts, energies=x, e_units="keV", label="t")
+        se = ps.PeakSearch(spe, 420 * 2048 / 2 ** 11, 12 * 2048 / 2 ** 11,
+                           fwhm_at_0=1.0, min_snr=3, method="fast")
+        slices.append(dict(idx=i, t0=i * 2.0, t1=(i + 1) * 2.0,
+                           tc=i * 2.0 + 1.0, spe=spe, search=se))
+    return slices
+
+
+def test_slice_fit_window_peak_selection(qapp):
     from wara.gui.slicefit import SliceFitWindow
-    slices = c._build_slices(dt_slice_w=None, min_snr=1.0)
-    win = SliceFitWindow(c.app, slices, (500.0, 2000.0), "Fe", "#ff0000")
+    slices = _clean_peak_slices()
+    win = SliceFitWindow(None, slices, (760.0, 800.0), "Fe", "#ff0000")
     assert not win._is_area_method()   # opens in Peak-fit mode
     # Selecting no peaks must yield exactly 0 for the slice (none → 0).
     win._selected_by_slice[win._cur] = set()
@@ -808,18 +853,8 @@ def test_slice_fit_window_peak_selection(api):
 def test_slice_fit_table_keeps_data_columns(qapp):
     """Regression: the inserted 'Use' checkbox column must not clobber the
     Centroid/Area/FWHM cells across repeated refits, and units stay keV."""
-    from wara import spectrum as sp, peaksearch as ps
     from wara.gui.slicefit import SliceFitWindow
-    x = np.linspace(700, 900, 2048)
-    peak = 50 + 4000 * np.exp(-0.5 * ((x - 780) / 3) ** 2)
-    slices = []
-    for i in range(3):
-        cts = (peak * (1 + 0.1 * i)).astype(int)
-        spe = sp.Spectrum(counts=cts, energies=x, e_units="keV", label="t")
-        se = ps.PeakSearch(spe, 420 * 2048 / 2 ** 11, 12 * 2048 / 2 ** 11,
-                           fwhm_at_0=1.0, min_snr=3)
-        slices.append(dict(idx=i, t0=i * 2.0, t1=(i + 1) * 2.0,
-                           tc=i * 2.0 + 1.0, spe=spe, search=se))
+    slices = _clean_peak_slices()
     win = SliceFitWindow(None, slices, (760.0, 800.0), "Fe", "#f00")
     # Step around to force the multi-refit path that exposed the bug.
     win._step(+1); win._step(-1)
@@ -841,7 +876,7 @@ def test_spectra_view_toggle(api, monkeypatch):
     monkeypatch.setattr(api_mod, "EnergySelectionDialog", _StubSelDialog)
     c._open_selections()
     d = c._sel_dlg
-    slices = c._build_slices(dt_slice_w=None)
+    slices = c._build_slices(dt_slice_w=None, method="fast")
     d.show_slice_spectra(slices, (500.0, 2000.0), c._energy_xlabel())
     # Overlay: a single log-y axis.
     assert len(d.spectra_fig.axes) == 1

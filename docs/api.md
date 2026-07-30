@@ -137,5 +137,12 @@ that region and the alpha spectrum redraws from it. **← Back** undoes the last
 cut and **Reset** restores the full run. (A flat field with no `alpha` column has
 nothing to cross-filter, so interactive cuts are inert there.)
 
+The alpha spectrum behaves like the gamma energy spectrum for analysis:
+**Send energy spectrum → Spectrum tab** hands the alpha histogram (with its real
+channel values) to the Spectrum tab for peak fitting, and **Retrieve
+calibration** applies a channel→energy polynomial built there back onto the alpha
+axis (adding an `energy_cal` column); **Clear calibration** reverts to raw
+channels.
+
 For the full API of these modules, see {py:mod}`wara.read_parquet_api` and
 {py:mod}`wara.apicalc` in the API reference.

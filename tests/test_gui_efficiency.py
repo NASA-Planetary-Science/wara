@@ -54,7 +54,8 @@ def app(qapp):
     w._spect_orig = spect.copy()
     w._active_name = "synthetic"
     w._refresh()
-    w.search = ps.PeakSearch(spect, ref_x=420, ref_fwhm=3, fwhm_at_0=1.0, min_snr=5)
+    w.search = ps.PeakSearch(spect, ref_x=420, ref_fwhm=3, fwhm_at_0=1.0,
+                             min_snr=5, method="fast")
     yield w
     w.close()
 

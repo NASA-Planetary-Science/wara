@@ -843,18 +843,24 @@ class ApiController:
         # energy/time detection below, which would look for a (missing)
         # "energy" column and raise KeyError.
         if self.flat_field:
-            self._chan_base = self._chan_key = None
-            self._native_units = self.e_units = None
+            self._native_units = None
             self._dt_key = "dt"
             # Split the view only when the run carries the alpha energy column.
             self._flat_alpha = "alpha" in df.columns
             if self._flat_alpha:
-                # The alpha column plays the role of the energy axis so the
-                # interactive energy-span filter (apply_energy_filter) filters
-                # events by alpha energy and updates the X-Y map.
-                self.ekey = "alpha"
-                self.erange = [0.0, float(df["alpha"].max())]
+                # The alpha column is the (raw channel) energy axis: it drives the
+                # interactive energy-span filter, and -- exactly like the gamma
+                # spectrum -- can be sent to the Spectrum tab and calibrated.
+                # A retrieved calibration (energy_cal) then wins over raw alpha.
+                self._chan_base = self._chan_key = "alpha"
+                if self.e_units is not None and "energy_cal" in df.columns:
+                    self.ekey = "energy_cal"
+                    self.erange = [0.0, float(df["energy_cal"].max())]
+                else:
+                    self.ekey = "alpha"
+                    self.erange = [0.0, float(df["alpha"].max())]
             else:
+                self._chan_base = self._chan_key = None
                 self.ekey = None
                 self.erange = None
             return
@@ -1001,24 +1007,26 @@ class ApiController:
 
     def _plot_alpha(self, df):
         """Draw the alpha energy spectrum (left panel of the split flat-field
-        view): a histogram of the raw ``alpha`` column binned with the shared
-        ``self.ebins`` over the fixed ``self.erange`` so the x-axis stays put
-        across interactive cuts. No-op without an alpha panel/column."""
+        view). The alpha column is the energy axis (``self.ekey``), so this bins
+        it through :meth:`_compute_energy_hist` into ``self.gam`` / ``self.gam_x``
+        -- the same histogram the gamma panel builds -- so "Send to Spectrum" and
+        calibration work on exactly what's shown. No-op without an alpha
+        panel/column."""
         ax = self.page.ax_alpha
-        if ax is None or df is None or "alpha" not in df.columns:
+        if ax is None or df is None or self.ekey is None or "alpha" not in df.columns:
             return
-        a = df["alpha"].to_numpy(dtype=float)
-        a = a[np.isfinite(a)]
-        rng = self.erange if self.erange is not None else None
-        if a.size:
-            counts, edg = np.histogram(a, bins=self.ebins, range=rng)
-            centers = (edg[1:] + edg[:-1]) / 2
-            ax.plot(centers, counts, color=T.LOGO_GREEN, linewidth=0.9)
+        self._compute_energy_hist(df)
+        ax.plot(self.gam_x, self.gam, color=T.LOGO_GREEN, linewidth=0.9)
         ax.set_yscale("log" if self.opts.cb_spe_log.isChecked() else "linear")
-        ax.set_xlabel("Alpha energy (channels)")
+        ax.set_xlabel(self._alpha_xlabel())
         ax.set_ylabel("Counts")
         self.page._style(ax)
         self._draw_cut_markers()
+
+    def _alpha_xlabel(self):
+        """Alpha-panel x-label: raw channels until a calibration is applied."""
+        units = self._axis_units()
+        return f"Alpha energy ({units})" if units else "Alpha energy (channels)"
 
     def _axis_units(self):
         """Units of the energy axis *as currently shown*, or None for a channel
@@ -1769,13 +1777,15 @@ class ApiController:
         dlg.refresh_xy_area_list()
 
     # -- time-slice fits vs dt -----------------------------------------------------
-    def _build_slices(self, dt_slice_w, min_snr=3.0):
+    def _build_slices(self, dt_slice_w, min_snr=3.0, method="km"):
         """Split the current dt range into slices and build one energy
         Spectrum + PeakSearch per slice (shared energy binning/range).
 
         Returns a list of dicts ``{idx, t0, t1, tc, spe, search}``; an empty
         list if the data isn't ready.  ``dt_slice_w`` of None gives ~10 slices.
-        ``min_snr`` sets the per-slice peak-search threshold.
+        ``min_snr`` sets the per-slice peak-search threshold.  ``method`` picks
+        the PeakSearch algorithm ('km' matched filter by default; 'fast' is the
+        FFT approximation, used by the tests to keep the suite quick).
         """
         if self.df_current is None or self.ekey is None:
             return []
@@ -1811,7 +1821,7 @@ class ApiController:
             spe = sp.Spectrum(counts=cts, energies=centers, e_units=e_units,
                               label=f"t=[{edges[i]:.1f},{edges[i + 1]:.1f}]")
             search = ps.PeakSearch(spe, ref_x, ref_fwhm, fwhm_at_0=1.0,
-                                   min_snr=min_snr)
+                                   min_snr=min_snr, method=method)
             slices.append(dict(idx=i, t0=float(edges[i]), t1=float(edges[i + 1]),
                                tc=0.5 * (edges[i] + edges[i + 1]),
                                spe=spe, search=search))
@@ -3147,12 +3157,12 @@ class ApiController:
 
     def _send_to_spectrum(self):
         if self.gam is None:
-            # Normally populated when the energy panel draws; if no draw has
-            # happened yet, bin it on demand so the first click sends instead of
-            # silently doing nothing (and needing a second press). Flat-field
-            # runs have no gamma energy spectrum, so there is genuinely nothing
-            # to send.
-            if self.df_current is None or self.ekey is None or self.flat_field:
+            # Normally populated when the spectrum panel draws (gamma energy or
+            # the flat-field alpha spectrum); if no draw has happened yet, bin it
+            # on demand so the first click sends instead of silently doing
+            # nothing. ekey is None only when there is no energy axis at all
+            # (e.g. a flat field with no alpha column) -- nothing to send.
+            if self.df_current is None or self.ekey is None:
                 self._status("Nothing to send  -- load an API file first")
                 return
             self._compute_energy_hist(self.df_current)
@@ -3177,6 +3187,8 @@ class ApiController:
             return
         # Load it as the active spectrum but stay on the API tab; a brief green
         # blink confirms the send instead of yanking the user away.
-        self.app.load_external_spectrum(spect, "API spectrum", switch_tab=False)
+        name = "API alpha spectrum" if self._flat_alpha else "API spectrum"
+        self.app.load_external_spectrum(spect, name, switch_tab=False)
         self._flash_button(self.opts.btn_send)
-        self._status("Sent energy spectrum to the Spectrum tab")
+        kind = "alpha" if self._flat_alpha else "energy"
+        self._status(f"Sent {kind} spectrum to the Spectrum tab")
