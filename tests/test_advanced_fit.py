@@ -991,6 +991,22 @@ def h_search():
 
 
 class TestDopplerMechanics:
+    # These tests only check structural properties (peak count, free-sigma
+    # indices, parameter names, rough width ratios) — not fit precision — so
+    # capping leastsq's iteration budget is safe and avoids paying for full
+    # convergence (~2000*nvarys evaluations) on every MultiProfilePeakFit call.
+    @pytest.fixture(autouse=True)
+    def _cap_fit_iterations(self, monkeypatch):
+        import lmfit
+
+        orig_fit = lmfit.model.Model.fit
+
+        def capped_fit(self, data, params=None, **kwargs):
+            kwargs["max_nfev"] = 300
+            return orig_fit(self, data, params, **kwargs)
+
+        monkeypatch.setattr(lmfit.model.Model, "fit", capped_fit)
+
     def test_none_matches_no_doppler(self, h_search):
         base = adv.MultiProfilePeakFit(h_search, MECH_XRANGE, **MECH_KW)
         explicit = adv.MultiProfilePeakFit(h_search, MECH_XRANGE, doppler=None,

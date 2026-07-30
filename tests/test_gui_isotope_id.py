@@ -20,7 +20,7 @@ from wara.gui.app import WaraApp
 
 # Synthetic 16O-rich spectrum, linearly calibrated (E = 1.5·ch).
 PEAK_ENERGIES = (846.8, 3684.5, 6129.9, 6917.1)
-SLOPE = 1.5
+SLOPE = 3.5   # keeps every peak channel well inside the 2048-channel spectrum
 
 
 @pytest.fixture(scope="module")
@@ -29,7 +29,7 @@ def qapp():
 
 
 def _calibrated_spectrum():
-    ch = np.arange(8192)
+    ch = np.arange(2048)
     counts = np.full_like(ch, 5.0, dtype=float)
     for e in PEAK_ENERGIES:
         counts += 4000.0 * np.exp(-0.5 * ((ch - e / SLOPE) / 3.0) ** 2)
@@ -50,8 +50,21 @@ def app(qapp):
 
 def _find_peaks(w):
     pf = w.spectrum_opts.pf_panel
-    pf.snr.setText("4"); pf.ref_ch.setText("4000"); pf.ref_fwhm.setText("3")
+    pf.snr.setText("4"); pf.ref_ch.setText("1751"); pf.ref_fwhm.setText("3")
     w._find_peaks()
+
+
+def _restrict_databases(w, names=("TALYS 14 MeV", "Common lab sources")):
+    """Limit the Isotope ID search to a couple of databases (not all 13) so
+    tests don't pay for a full-library identify() they don't need."""
+    iso = w.spectrum_opts.iso_panel
+    iso._bulk = True
+    try:
+        for name, cb in iso.db_checks.items():
+            cb.setChecked(name in names)
+    finally:
+        iso._bulk = False
+    iso._update_db_summary()
 
 
 def _fake_motion(canvas, px, py):
@@ -96,6 +109,7 @@ def test_inactive_without_peaks(app):
 
 def test_active_when_calibrated_with_peaks_and_identifies(app):
     _find_peaks(app)
+    _restrict_databases(app)
     app.spectrum_opts.cb_isotope_id.setChecked(True)
     canvas = app.spectrum_page.canvas
     assert canvas._iso_on
@@ -109,6 +123,7 @@ def test_active_when_calibrated_with_peaks_and_identifies(app):
 
 def test_clearing_peaks_disables(app):
     _find_peaks(app)
+    _restrict_databases(app)
     app.spectrum_opts.cb_isotope_id.setChecked(True)
     assert app.spectrum_page.canvas._iso_on
     app._clear_peaks()
@@ -195,6 +210,7 @@ def test_checkbox_alias_still_toggles_activation(app):
     # The on/off checkbox now lives inside iso_panel but keeps the old alias.
     assert app.spectrum_opts.cb_isotope_id is app.spectrum_opts.iso_panel.cb_enable
     _find_peaks(app)
+    _restrict_databases(app)
     app.spectrum_opts.cb_isotope_id.setChecked(True)
     assert app.spectrum_page.canvas._iso_on
 
@@ -207,6 +223,7 @@ def test_panel_defaults(app):
 
 def test_deselecting_database_changes_hover_result(app):
     _find_peaks(app)
+    _restrict_databases(app)
     iso = app.spectrum_opts.iso_panel
     app.spectrum_opts.cb_isotope_id.setChecked(True)
     canvas = app.spectrum_page.canvas
@@ -219,6 +236,7 @@ def test_deselecting_database_changes_hover_result(app):
 
 def test_z_range_excludes_element_in_hover(app):
     _find_peaks(app)
+    _restrict_databases(app)
     iso = app.spectrum_opts.iso_panel
     app.spectrum_opts.cb_isotope_id.setChecked(True)
     canvas = app.spectrum_page.canvas
@@ -233,7 +251,7 @@ def test_export_table_builder_columns_and_rows(app):
     from wara.gui import isotope_id
     _find_peaks(app)
     energies = [float(x) for x in app.spectrum_page.canvas.peak_xs()]
-    df = isotope_id.best_per_database_table(energies)
+    df = isotope_id.best_per_database_table(energies, databases=["TALYS 14 MeV"])
     assert list(df.columns) == [
         "Energy (keV)", "Database", "Isotope (parent)", "Element", "Daughter",
         "Decay", "Line strength", "Strength type", "Probability (%)",
@@ -260,6 +278,7 @@ def test_export_table_includes_decay_daughter():
 def test_export_writes_csv(app, tmp_path, monkeypatch):
     from PyQt5.QtWidgets import QFileDialog
     _find_peaks(app)
+    _restrict_databases(app)
     out = tmp_path / "iso.csv"
     monkeypatch.setattr(QFileDialog, "getSaveFileName",
                         staticmethod(lambda *a, **k: (str(out), "CSV (*.csv)")))
