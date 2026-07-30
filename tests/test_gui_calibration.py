@@ -341,6 +341,33 @@ class TestApply:
         assert cal.opts.btn_apply.objectName() == "primary_btn"
         assert cal.opts.btn_apply.text() == "Apply to spectrum"
 
+    def test_new_spectrum_reverts_apply_button(self, app_with_peaks):
+        """Loading a different spectrum after applying a calibration must not
+        keep showing the stale "Applied" state — it hasn't been calibrated."""
+        w = app_with_peaks
+        cal = w.calibration
+        _set_origin(w, False)
+        _add_peak_channels(w)
+        _label_energies(w)
+        cal._apply()
+        assert cal.opts.btn_apply.objectName() == "applied_btn"
+        w._set_active_spectrum(_synthetic_spectrum(), "other")
+        assert cal.opts.btn_apply.objectName() == "primary_btn"
+        assert cal.opts.btn_apply.text() == "Apply to spectrum"
+
+    def test_reset_spectrum_reverts_apply_button(self, app_with_peaks):
+        """Resetting the Spectrum tab restores the uncalibrated original, so
+        the calibration is no longer actually applied."""
+        w = app_with_peaks
+        cal = w.calibration
+        _set_origin(w, False)
+        _add_peak_channels(w)
+        _label_energies(w)
+        cal._apply()
+        assert cal.opts.btn_apply.objectName() == "applied_btn"
+        w._reset_spectrum()
+        assert cal.opts.btn_apply.objectName() == "primary_btn"
+
 
 # ---------------------------------------------------------------------------
 # Set from equation

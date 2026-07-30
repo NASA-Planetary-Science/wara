@@ -458,6 +458,7 @@ class CalibrationController:
         self.page = page
         self.predicted = None      # energy predicted for every channel
         self.ecal_eqn = ""         # textual equation, stored on the spectrum
+        self._applied_spect = None  # the exact Spectrum instance last applied to
         self._loading = False      # suppress auto-refit during bulk table edits
         self._units = options.units.currentText()   # units the table values are in
         self._wire()
@@ -571,6 +572,7 @@ class CalibrationController:
         self.ecal_eqn = eqn
         self.opts.btn_apply.setEnabled(self.predicted is not None)
         # A fresh calibration is not yet applied — clear any "Applied" state.
+        self._applied_spect = None
         self._mark_applied(False)
 
     def _mark_applied(self, applied):
@@ -1022,8 +1024,17 @@ class CalibrationController:
         app._reset_customize_checks()
         app._refresh()
         app._rebuild_spectra_list()
+        self._applied_spect = app.spect   # remember exactly which spectrum this was applied to
         self._mark_applied(True)        # recolour the button to show it took effect
         self._status("Calibration applied to the active spectrum")
+
+    def check_still_applied(self):
+        """Revert the Apply button to "pending" if the active spectrum is no
+        longer the exact instance this calibration was pushed onto (e.g. the
+        Spectrum tab loaded a new file, reset, or otherwise replaced it)."""
+        if self._applied_spect is not None and self.app.spect is not self._applied_spect:
+            self._applied_spect = None
+            self._mark_applied(False)
 
     # -- save / load / delete --------------------------------------------------
     def refresh_saved(self):

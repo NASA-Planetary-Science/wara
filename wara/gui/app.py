@@ -843,6 +843,11 @@ class WaraApp(QMainWindow):
         self.spectrum_opts.set_stats(len(c), c.max(), c.sum())
         # Peaks were just cleared; drop the isotope-ID overlay until they return.
         self._refresh_isotope_id()
+        # The active spectrum may have just been replaced (new load, reset,
+        # customize edit, overlay swap, ...) — revert the Calibration tab's
+        # Apply button if it no longer refers to the spectrum it was applied to.
+        if getattr(self, "calibration", None) is not None:
+            self.calibration.check_still_applied()
 
     def _update_cursor_units(self):
         """Remember the active spectrum's x-axis label for the cursor readout."""
@@ -871,6 +876,8 @@ class WaraApp(QMainWindow):
         self.spectrum_opts.clear_stats()
         self._cursor_xlabel = "X"
         self.spectrum_page.readout.setText("")
+        if getattr(self, "calibration", None) is not None:
+            self.calibration.check_still_applied()
         self._rebuild_spectra_list()
         self._set_file_label("")
         self.statusBar().showMessage("  Cleared")
@@ -1338,10 +1345,6 @@ class WaraApp(QMainWindow):
             return
         self._remove_cal = True
         self._recompute()
-        # The calibration is no longer on the spectrum — revert the Calibration
-        # tab's Apply button from its green "applied" state back to cyan.
-        if getattr(self, "calibration", None) is not None:
-            self.calibration._mark_applied(False)
         self.statusBar().showMessage("  Calibration removed  ·  Reset Spectrum to restore")
 
     def _reset_spectrum(self):
