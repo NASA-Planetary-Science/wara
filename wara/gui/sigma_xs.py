@@ -4,11 +4,16 @@ Opens from the API tab's "Sigma…" button (see :meth:`ApiController._open_sigma
 Walks the user through the seven steps of an API neutron-source cross-section
 measurement, recomputing the cross section *live* as any parameter changes:
 
-  1. **Files**            – load sample / background / profile / flat-field runs.
-  2. **Corrections**      – X-stretch (1.27), alpha-energy threshold, dt offset, non-α.
+  1. **Files**            – load sample / background / profile / flat-field runs,
+     and set each one's dt / energy offset against the overlaid spectra.
+  2. **Corrections**      – X-stretch (1.27), alpha-energy threshold, non-α.
   3. **Cuts**             – x / y / t / energy cuts on sample + background.
   4. **Background & Net** – scale the background (fit C or override) → net spectrum.
-  5. **Fluence / Nt**     – beam-profile fit → alpha fraction → neutron fluence; Nt.
+  5. **Fluence / Nt**     – geometry-free beam-profile fit → alpha fraction →
+     neutron fluence; Nt.  The profile is flattened by solving jointly for the
+     square target and a smooth gain field (:mod:`sigma.flux_profile_uniform`),
+     so no detector distances / 1-over-r-squared term are needed and any run or
+     channel can be used.
   6. **Cross section**    – σ (mb) with a Monte-Carlo uncertainty band.
 
 The heavy lifting lives in the closed-source :mod:`sigma` package
@@ -46,6 +51,10 @@ from .widgets import hsep, header, labeled_row, stat_row, fmt_count
 # *after* the controller has confirmed ``sigma`` is importable, so this is safe.
 from sigma import cross_section as cs
 from sigma import bkg_scale
+# Geometry-free alpha fraction: the beam profile is flattened by a joint
+# square+gain fit instead of a hand-measured 1/r² term, so tab 5 works on any
+# run / channel without detector-position input.
+from sigma import flux_profile_uniform as fpu
 
 PLOT_BG = T.BG_PLOT
 
@@ -66,6 +75,28 @@ ROLE_LABELS = {
 }
 
 
+# Preference order when an energy column is chosen automatically.  ``energy_cal``
+# first: when a run has been calibrated that is the keV axis the photopeak fit
+# and the profile cut both want.
+EKEY_PREFERENCE = ("energy_cal", "energy", "energy_orig")
+
+
+def auto_ekey(df, preferred=None):
+    """The energy column to use for *df*.
+
+    Returns *preferred* when the file actually has it, otherwise the first of
+    :data:`EKEY_PREFERENCE` present.  ``None`` if the file has no energy column.
+    """
+    if df is None:
+        return None
+    if preferred and preferred in df.columns:
+        return preferred
+    for k in EKEY_PREFERENCE:
+        if k in df.columns:
+            return k
+    return None
+
+
 def _num(text, default=None):
     """Parse a float from a line edit, returning *default* on blank/garbage."""
     try:
@@ -78,14 +109,20 @@ def _num(text, default=None):
 # Per-file loader row
 # ─────────────────────────────────────────────────────────────────────────────
 class _FileRow(QWidget):
-    """A 'date / run / channel  [Load]' row for one of the four datasets, plus a
-    status line.  The loaded (raw) dataframe and its alpha-trigger count / live
-    time are kept on the row for the engine to read."""
+    """A 'date / run / channel  [Load]' row for one of the four datasets, plus
+    its dt / energy offsets and a status line.  The loaded (raw) dataframe and
+    its alpha-trigger count / live time are kept on the row for the engine.
 
-    def __init__(self, role, on_loaded):
+    The offsets live here, next to the Files-tab overlay plots, because that is
+    where you can see what they do: nudge one and the two spectra slide over
+    each other until the peaks line up.
+    """
+
+    def __init__(self, role, on_loaded, on_offset_changed=None):
         super().__init__()
         self.role = role
         self._on_loaded = on_loaded
+        self._on_offset_changed = on_offset_changed
         self.df = None            # raw dataframe (X2/Y2 reconstructed, dt in ns)
         self.alphas = None        # total alpha triggers (ch 9)
         self.t_total = None       # live time (s)
@@ -111,11 +148,64 @@ class _FileRow(QWidget):
         row.addWidget(self.btn, 0)
         lay.addLayout(row)
 
+        # ── offsets: added to this dataset's dt / energy axes ─────────────
+        # The flat field has neither a time nor an energy axis in play (it is
+        # only ever histogrammed in X-Y), so it gets no offset row.
+        self.ed_dt_off = self.ed_e_off = None
+        if role != "flat":
+            orow = QHBoxLayout()
+            orow.setContentsMargins(0, 0, 0, 0); orow.setSpacing(6)
+            self.ed_dt_off = QLineEdit("0"); self.ed_dt_off.setFixedWidth(56)
+            self.ed_dt_off.setToolTip(
+                f"Constant offset added to the {ROLE_LABELS[role].lower()} dt "
+                f"axis (ns).  Watch the time spectra below to line the prompt "
+                f"peaks up.")
+            self.ed_e_off = QLineEdit("0"); self.ed_e_off.setFixedWidth(56)
+            self.ed_e_off.setToolTip(
+                f"Constant offset added to the {ROLE_LABELS[role].lower()} "
+                f"energy axis (keV).  Watch the energy spectra below to line "
+                f"known lines up.")
+            for lbl, ed in (("dt +", self.ed_dt_off), ("E +", self.ed_e_off)):
+                cap = QLabel(lbl); cap.setObjectName("stat_key")
+                orow.addWidget(cap, 0)
+                orow.addWidget(ed, 0)
+                ed.editingFinished.connect(self._offset_edited)
+            orow.addWidget(QLabel("ns / keV", objectName="stat_key"), 0)
+            orow.addStretch(1)
+            lay.addLayout(orow)
+
         self.lbl = QLabel("not loaded"); self.lbl.setObjectName("stat_key")
         self.lbl.setWordWrap(True)
         lay.addWidget(self.lbl)
 
         self.btn.clicked.connect(self._load)
+
+    # ── offsets ───────────────────────────────────────────────────────────
+    @property
+    def dt_offset(self):
+        return _num(self.ed_dt_off.text(), 0.0) if self.ed_dt_off else 0.0
+
+    @property
+    def e_offset(self):
+        return _num(self.ed_e_off.text(), 0.0) if self.ed_e_off else 0.0
+
+    def _offset_edited(self):
+        if self._on_offset_changed is not None:
+            self._on_offset_changed(self.role)
+
+    def apply_offsets(self, df):
+        """Add this row's dt / energy offsets to a copy-safe dataframe."""
+        dt_off, e_off = self.dt_offset, self.e_offset
+        if dt_off and "dt" in df.columns:
+            df["dt"] = df["dt"] + dt_off
+        if e_off:
+            # Shift every calibrated-energy axis the file carries, so the offset
+            # means the same thing whichever column is selected downstream.
+            # alpha_energy / energy_ch9 are the alpha detector's — left alone.
+            for col in EKEY_PREFERENCE:
+                if col in df.columns:
+                    df[col] = df[col] + e_off
+        return df
 
     def seed(self, date, runnr, ch):
         # Fill only empty fields, so pre-populated / user-edited values are never
@@ -373,18 +463,14 @@ class SigmaDialog(QDialog):
         self.rows = {}
         grid = QGridLayout(); grid.setHorizontalSpacing(24); grid.setVerticalSpacing(10)
         for i, role in enumerate(ROLES):
-            r = _FileRow(role, self._on_file_loaded)
+            r = _FileRow(role, self._on_file_loaded, self._on_offset_changed)
             self.rows[role] = r
             grid.addWidget(r, i // 2, i % 2)
         gw = QWidget(); gw.setLayout(grid)
         lay.addWidget(gw)
 
-        # ── Session convenience: pre-populate the loaders with the FLARE 8 mm Fe
-        # reference runs.  Remove this block to start with blank loaders.
-        self.rows["sample"].seed("2023-07-02", 93, 5)
-        self.rows["background"].seed("2023-07-02", 90, 5)
-        self.rows["profile"].seed("2023-07-02", 93, 5)
-        self.rows["flat"].seed("2023-07-14", 0, 9)
+        # The loaders start blank; only the sample is pre-filled, from the run
+        # open on the API tab (see seed_sample).
 
         # Raw (uncut) sample vs background: energy spectra overlaid on the left,
         # time (dt) spectra overlaid on the right.
@@ -402,34 +488,49 @@ class SigmaDialog(QDialog):
         self._draw_files()
         self._schedule()
 
+    def _on_offset_changed(self, role):
+        """A dt / energy offset was edited on the Files tab: redraw the overlay
+        immediately (that is the point of putting them there) and schedule the
+        downstream recompute."""
+        self._draw_files()
+        self._schedule()
+
     def _draw_files(self):
-        """Overlay the raw (uncut) sample and background energy spectra (left) and
-        their dt time spectra (right)."""
+        """Overlay the sample and background energy spectra (left) and their dt
+        time spectra (right), with each dataset's offsets applied — this is the
+        view you tune those offsets against."""
         ax_e, ax_t = self.ax_files_e, self.ax_files_t
         ax_e.clear(); ax_t.clear()
         styles = {"sample": (T.ACCENT_CYAN, "Sample"),
                   "background": (T.ACCENT_AMBER, "Background")}
         any_e = any_t = False
+        shifted = []
         for role, (color, label) in styles.items():
-            df = self.rows[role].df
+            row = self.rows[role]
+            df = row.df
             if df is None:
                 continue
-            ekey = ("energy" if "energy" in df.columns
-                    else "energy_orig" if "energy_orig" in df.columns else None)
+            dt_off, e_off = row.dt_offset, row.e_offset
+            if dt_off or e_off:
+                shifted.append(f"{label} dt{dt_off:+g} ns E{e_off:+g} keV")
+            ekey = auto_ekey(df)
             if ekey is not None:
-                cts, edg = np.histogram(df[ekey], bins=2048, range=[0, 10000])
+                cts, edg = np.histogram(df[ekey] + e_off, bins=2048,
+                                        range=[0, 10000])
                 ec = (edg[1:] + edg[:-1]) / 2
                 ax_e.step(ec, cts, where="mid", color=color, lw=0.9, label=label)
                 any_e = True
             if "dt" in df.columns:
-                ctt, edt = np.histogram(df["dt"], bins=512, range=[-20, 50])
+                ctt, edt = np.histogram(df["dt"] + dt_off, bins=512,
+                                        range=[-20, 50])
                 tc = (edt[1:] + edt[:-1]) / 2
                 ax_t.step(tc, ctt, where="mid", color=color, lw=0.9, label=label)
                 any_t = True
         self._style_ax(ax_e, "Energy", "Counts", yscale="log")
         self._style_ax(ax_t, "dt (ns)", "Counts")
-        ax_e.set_title("Raw energy spectra", color=T.TEXT_DIM, fontsize=10)
-        ax_t.set_title("Time spectra", color=T.TEXT_DIM, fontsize=10)
+        sub = ("  [" + ";  ".join(shifted) + "]") if shifted else ""
+        ax_e.set_title("Energy spectra" + sub, color=T.TEXT_DIM, fontsize=10)
+        ax_t.set_title("Time spectra" + sub, color=T.TEXT_DIM, fontsize=10)
         for ax, has in ((ax_e, any_e), (ax_t, any_t)):
             if has:
                 leg = ax.legend(fontsize=9, loc="upper right")
@@ -487,10 +588,13 @@ class SigmaDialog(QDialog):
         row, _ = labeled_row("Threshold", self.ed_thresh); lay.addWidget(row)
 
         lay.addWidget(hsep())
-        lay.addWidget(header("TIMING"))
-        self.ed_dt_offset = self._field(0.0, tip="Constant dt offset added to the "
-                                        "sample time axis (ns)")
-        row, _ = labeled_row("dt offset (ns)", self.ed_dt_offset); lay.addWidget(row)
+        lay.addWidget(header("TIMING / ENERGY OFFSETS"))
+        tnote = QLabel(
+            "The per-dataset dt and energy offsets live on the Files tab, next "
+            "to the overlaid time and energy spectra — nudge one there and "
+            "watch the peaks line up.")
+        tnote.setObjectName("stat_key"); tnote.setWordWrap(True)
+        lay.addWidget(tnote)
 
         lay.addWidget(hsep())
         lay.addWidget(header("NON-ALPHA FRACTION"))
@@ -605,8 +709,11 @@ class SigmaDialog(QDialog):
 
         lay.addWidget(hsep())
         self.ekey = QComboBox()
-        self.ekey.addItems(["energy", "energy_orig", "energy_cal"])
-        self.ekey.setToolTip("Energy column to histogram for the photopeak")
+        self.ekey.addItems(["auto", "energy_cal", "energy", "energy_orig"])
+        self.ekey.setToolTip(
+            "Energy column to histogram for the photopeak.  'auto' prefers "
+            "energy_cal when the run has it (the calibrated keV axis), then "
+            "energy, then energy_orig.")
         self.ekey.currentIndexChanged.connect(self._schedule)
         row, _ = labeled_row("Energy col", self.ekey); lay.addWidget(row)
 
@@ -863,26 +970,65 @@ class SigmaDialog(QDialog):
         self.ed_fa_override = self._field(0.1864, tip="Manual alpha fraction fa")
         row, _ = labeled_row("fa value", self.ed_fa_override); lay.addWidget(row)
         lay.addWidget(hsep())
+        lay.addWidget(header("BEAM-PROFILE FIT"))
+        note = QLabel(
+            "The target is a flat square, so any smooth tilt across it must be "
+            "instrumental.  The fit solves for the target shape and that gain "
+            "together — no detector distances, so it works on any run/channel.")
+        note.setObjectName("stat_key"); note.setWordWrap(True)
+        lay.addWidget(note)
+
         self.ed_xybins = self._field(25, tip="X-Y grid size for the profile fit")
         row, _ = labeled_row("Profile bins", self.ed_xybins); lay.addWidget(row)
-        self.cb_rcorr = QCheckBox("Apply 1/r² correction")
-        self.cb_rcorr.setChecked(True)
-        self.cb_rcorr.setToolTip("Flatten the profile by 1/r² across the active area.")
-        self.cb_rcorr.toggled.connect(self._schedule)
-        lay.addWidget(self.cb_rcorr)
-        self.ed_rnear = self._field(9.19, tip="Near source-to-pixel distance (cm)")
-        self.ed_rfar = self._field(19.19, tip="Far source-to-pixel distance (cm)")
-        lay.addWidget(self._range_row("r near→far (cm)", self.ed_rnear, self.ed_rfar))
+
+        self.cmb_gain_order = QComboBox()
+        self.cmb_gain_order.addItems(["0 — none (flat)", "1 — tilt (recommended)",
+                                      "2 — tilt + curvature"])
+        self.cmb_gain_order.setCurrentIndex(1)
+        self.cmb_gain_order.setToolTip(
+            "Order of the recovered gain field.\n"
+            "1 is a pure exponential ramp — what a 1/r² falloff looks like "
+            "across a small target, and the validated default.\n"
+            "2 adds curvature that is partly degenerate with the target's own "
+            "edge sharpness; use it only as a systematic check.")
+        self.cmb_gain_order.currentIndexChanged.connect(self._schedule)
+        row, _ = labeled_row("Gain order", self.cmb_gain_order); lay.addWidget(row)
+
+        self.cb_center = QCheckBox("Auto-centre the target")
+        self.cb_center.setChecked(True)
+        self.cb_center.setToolTip(
+            "Fit once to locate the target, roll it to the middle of the frame "
+            "(integer pixels, lossless) and re-fit.  Removes the centre / width "
+            "/ tilt degeneracy when the target is off-centre.")
+        self.cb_center.toggled.connect(self._schedule)
+        lay.addWidget(self.cb_center)
+
+        self.cb_use_flat = QCheckBox("Use flat-field run for fa")
+        self.cb_use_flat.setChecked(True)
+        self.cb_use_flat.setToolTip(
+            "fa = flat-field counts inside the fitted mask / total.  Untick to "
+            "use the mask's plain area fraction instead (no flat-field run "
+            "needed, but less accurate).")
+        self.cb_use_flat.toggled.connect(self._schedule)
+        lay.addWidget(self.cb_use_flat)
+
         # The profile/flat-field windows are usually a touch wider than the
         # sample cuts (the reference uses ±0.75), so give them their own X-Y range.
         self.ed_pxlo = self._field(-0.75); self.ed_pxhi = self._field(0.75)
         lay.addWidget(self._range_row("Profile X", self.ed_pxlo, self.ed_pxhi))
         self.ed_pylo = self._field(-0.75); self.ed_pyhi = self._field(0.75)
         lay.addWidget(self._range_row("Profile Y", self.ed_pylo, self.ed_pyhi))
-        self.ed_pelo = self._field(4000.0)
-        self.ed_pehi = self._field(9000.0)
+        self.cmb_pekey = QComboBox()
+        self.cmb_pekey.addItems(["auto", "energy_cal", "energy", "energy_orig"])
+        self.cmb_pekey.setToolTip(
+            "Energy column for the profile cut.  'auto' prefers energy_cal when "
+            "the run has it, then energy, then energy_orig.")
+        self.cmb_pekey.currentIndexChanged.connect(self._schedule)
+        row, _ = labeled_row("Profile E col", self.cmb_pekey); lay.addWidget(row)
+        self.ed_pelo = self._field(800.0)
+        self.ed_pehi = self._field(1300.0)
         lay.addWidget(self._range_row("Profile E", self.ed_pelo, self.ed_pehi))
-        self.ed_ptlo = self._field(2.7); self.ed_pthi = self._field(8.7)
+        self.ed_ptlo = self._field(4.1); self.ed_pthi = self._field(8.1)
         lay.addWidget(self._range_row("Profile t (ns)", self.ed_ptlo, self.ed_pthi))
         self.ed_namc = self._field(500, tip="MC samples for the fa uncertainty")
         row, _ = labeled_row("fa MC", self.ed_namc); lay.addWidget(row)
@@ -899,19 +1045,23 @@ class SigmaDialog(QDialog):
         self.btn_fit_profile.setCursor(Qt.PointingHandCursor)
         self.btn_fit_profile.setToolTip(
             "Fit the beam profile and compute the alpha fraction.  Run after "
-            "loading the profile + flat-field + background files.")
+            "loading the profile + background (+ flat-field) files.")
         self.btn_fit_profile.clicked.connect(self._fit_profile)
         lay.addWidget(self.btn_fit_profile)
 
         lay.addWidget(hsep())
         r, self.val_fa = stat_row("fa", T.ACCENT_AMBER); lay.addWidget(r)
+        # Fit-quality readout: how flat the target got, against the Poisson floor
+        # (the irreducible scatter — reaching it means the flattening is done).
+        r, self.val_flatness = stat_row("Non-uniformity", T.ACCENT_CYAN); lay.addWidget(r)
+        r, self.val_floor = stat_row("Poisson floor", T.TEXT_DIM); lay.addWidget(r)
         r, self.val_fluence = stat_row("Fluence (n/cm²)", T.ACCENT_GREEN); lay.addWidget(r)
         r, self.val_flux = stat_row("Flux (n/cm²/s)", T.ACCENT_GREEN); lay.addWidget(r)
         r, self.val_flux_geo = stat_row("Flux (geometry)", T.TEXT_DIM); lay.addWidget(r)
         lay.addStretch(1)
 
-        # Right: the full ProfileFitter 6-panel diagnostic (raw, fit, residuals,
-        # X/Y projections, residual histogram) — rendered via ProfileFitter.plot_on.
+        # Right: the geometry-free 6-panel diagnostic (raw image, recovered gain,
+        # flattened image, fitted mask, X/Y profiles) — via fpu.plot_result(fig=…).
         right = QWidget()
         rlay = QVBoxLayout(right); rlay.setContentsMargins(0, 0, 0, 0); rlay.setSpacing(4)
         self.prof_fig, self.prof_canvas, prof_tb = self._make_canvas(420)
@@ -1001,8 +1151,8 @@ class SigmaDialog(QDialog):
 
     def _corrected_df(self, role):
         """Return (df, kept_fraction, alphas_corrected) for a role with the
-        X-stretch, alpha threshold and (sample) dt offset applied.  None if the
-        file is not loaded."""
+        X-stretch, the row's dt / energy offsets and the alpha threshold
+        applied.  None if the file is not loaded."""
         r = self.rows[role]
         if r.df is None:
             return None, 1.0, None
@@ -1015,10 +1165,8 @@ class SigmaDialog(QDialog):
             sy = _num(self.ed_ystretch.text(), 1.0)
             if "Y2" in df.columns:
                 df["Y2"] = df["Y2"] * sy
-        if role == "sample":
-            off = _num(self.ed_dt_offset.text(), 0.0)
-            if off and "dt" in df.columns:
-                df["dt"] = df["dt"] + off
+        # Per-dataset dt / energy offsets, set on the Files tab.
+        df = r.apply_offsets(df)
         kept = 1.0
         if self.cb_thresh.isChecked():
             df, kept = cs.threshold_correction(
@@ -1055,9 +1203,12 @@ class SigmaDialog(QDialog):
 
         xrange, yrange, trange = self._cut_ranges()
         erange = [_num(self.ed_elo.text(), 810.0), _num(self.ed_ehi.text(), 900.0)]
-        ekey = self.ekey.currentText()
-        if ekey not in dfs.columns:
-            ekey = "energy" if "energy" in dfs.columns else "energy_orig"
+        choice = self.ekey.currentText()
+        ekey = auto_ekey(dfs, None if choice == "auto" else choice)
+        if ekey is None:
+            self._status("The sample file has no energy column "
+                         "(energy_cal / energy / energy_orig).")
+            return
         ebins = int(_num(self.ed_ebins.text(), 4096))
         tbins = int(_num(self.ed_tbins.text(), 2048))
 
@@ -1092,11 +1243,7 @@ class SigmaDialog(QDialog):
                            _num(self.ed_fm.text(), 0.91754))
         self.val_nt.setText(f"{Nt:.4g}")
 
-        fa, fa_dist = self._current_fa()
-        if self.cb_fa_override.isChecked():
-            self.val_fa.setText(f"{fa:.4g}  (manual)")
-        else:
-            self.val_fa.setText(f"{fa:.4g}" if fa else "—  (fit profile)")
+        fa, fa_dist = self._update_fa_readouts()
 
         t_sample = self.rows["sample"].t_total or 1.0
         non_a = _num(self.ed_non_a.text(), 0.0486)
@@ -1512,6 +1659,28 @@ class SigmaDialog(QDialog):
             return self._fa_result.fa, self._fa_result.fa_dist
         return 0.0, None
 
+    def _update_fa_readouts(self):
+        """Refresh the tab-5 fa / fit-quality readouts.  Returns (fa, fa_dist)."""
+        fa, fa_dist = self._current_fa()
+        if self.cb_fa_override.isChecked():
+            self.val_fa.setText(f"{fa:.4g}  (manual)")
+        elif fa and fa_dist is not None and fa_dist.size > 1:
+            self.val_fa.setText(f"{fa:.4g} ± {fa_dist.std():.3g}")
+        else:
+            self.val_fa.setText(f"{fa:.4g}" if fa else "—  (fit profile)")
+
+        # Fit quality: the flattening is as good as it can get once the residual
+        # non-uniformity reaches the Poisson floor.
+        if self._fa_result is not None:
+            fr = self._fa_result.flat
+            self.val_flatness.setText(
+                f"{100*fr.rms_raw:.1f}% → {100*fr.rms_flat:.1f}%")
+            self.val_floor.setText(f"{100*fr.poisson_floor:.1f}%")
+        else:
+            self.val_flatness.setText("—")
+            self.val_floor.setText("—")
+        return fa, fa_dist
+
     def _update_xs_from_cache(self):
         """Re-run only the Nt/fluence/σ stages from cached fa + peak, so adjusting
         the photopeak fit updates σ without re-cutting the data."""
@@ -1552,50 +1721,70 @@ class SigmaDialog(QDialog):
             traceback.print_exc()
             self._status(f"Profile fit error: {exc}")
 
+    def _profile_ekey(self, df):
+        """Energy column for the profile cut: the user's pick, or the first one
+        the file actually has (``energy_cal`` preferred)."""
+        choice = self.cmb_pekey.currentText()
+        ekey = auto_ekey(df, None if choice == "auto" else choice)
+        if ekey is None:
+            raise ValueError("The profile file has no energy column "
+                             "(energy_cal / energy / energy_orig).")
+        return ekey
+
     def _fit_profile_inner(self):
-        prof_r = self.rows["profile"]; flat_r = self.rows["flat"]; bkg_r = self.rows["background"]
-        if prof_r.df is None or flat_r.df is None or bkg_r.df is None:
+        prof_r = self.rows["profile"]; flat_r = self.rows["flat"]
+        bkg_r = self.rows["background"]
+        if prof_r.df is None or bkg_r.df is None:
             QMessageBox.information(
-                self, "Need profile + flat + background",
-                "Load the profile, flat-field and background datasets first.")
+                self, "Need profile + background",
+                "Load the profile and background datasets first.")
             return
+        use_flat = self.cb_use_flat.isChecked()
+        if use_flat and flat_r.df is None:
+            QMessageBox.information(
+                self, "Need a flat-field run",
+                "Load the flat-field dataset, or untick 'Use flat-field run for "
+                "fa' to fall back on the mask's area fraction.")
+            return
+
         df_profile, _, alphas_p = self._corrected_df("profile")
-        df_flat, _, _ = self._corrected_df("flat")
         df_bkg, _, alphas_b = self._corrected_df("background")
-        if not alphas_p or not alphas_b:
-            # Fall back to raw counts if settings files are missing.
-            alphas_p = alphas_p or df_profile.shape[0]
-            alphas_b = alphas_b or df_bkg.shape[0]
+        df_flat = self._corrected_df("flat")[0] if use_flat else None
 
         xrange = [_num(self.ed_pxlo.text(), -0.75), _num(self.ed_pxhi.text(), 0.75)]
         yrange = [_num(self.ed_pylo.text(), -0.75), _num(self.ed_pyhi.text(), 0.75)]
-        trange = [_num(self.ed_ptlo.text(), 2.7), _num(self.ed_pthi.text(), 8.7)]
-        erange = [_num(self.ed_pelo.text(), 4000.0), _num(self.ed_pehi.text(), 9000.0)]
+        trange = [_num(self.ed_ptlo.text(), 4.1), _num(self.ed_pthi.text(), 8.1)]
+        erange = [_num(self.ed_pelo.text(), 800.0), _num(self.ed_pehi.text(), 1300.0)]
         xybins = int(_num(self.ed_xybins.text(), 25))
-        rcorr = None
-        if self.cb_rcorr.isChecked():
-            rcorr = cs.r_correction_1d(xybins, _num(self.ed_rnear.text(), 9.19),
-                                       _num(self.ed_rfar.text(), 19.19))
-        # The profile energy window is on the raw-channel axis; fall back to
-        # "energy" if a file lacks the raw "energy_orig" column.
-        pkey = ("energy_orig" if "energy_orig" in df_profile.columns
-                else "energy" if "energy" in df_profile.columns else "energy_orig")
+
         self._status("Fitting beam profile…")
-        res = cs.alpha_fraction_from_data(
+        res = fpu.alpha_fraction_from_data(
             df_profile, df_bkg, df_flat,
             xrange=xrange, yrange=yrange, trange=trange, erange=erange,
             xybins=xybins, alphas_profile=alphas_p, alphas_bkg=alphas_b,
-            r_correction=rcorr, ekey=pkey,
+            ekey=self._profile_ekey(df_profile),
+            order=self.cmb_gain_order.currentIndex(),
+            center=self.cb_center.isChecked(),
             n_MC=int(_num(self.ed_namc.text(), 500)))
         self._fa_result = res
         self._draw_profile(res)
-        self._status(f"Alpha fraction fa = {res.fa:.4g}")
+        # Fill the fa readouts here rather than leaving it to _recompute, which
+        # bails out early until the sample run is loaded.
+        self._update_fa_readouts()
+
+        fr = res.flat
+        msg = (f"Alpha fraction fa = {res.fa:.4g}   "
+               f"(non-uniformity {100*fr.rms_raw:.1f}% → {100*fr.rms_flat:.1f}%, "
+               f"Poisson floor {100*fr.poisson_floor:.1f}%")
+        if fr.was_centered:
+            msg += f", re-centred by {fr.shift} px"
+        self._status(msg + ")")
         self._recompute()
 
     def _draw_profile(self, res):
-        # Render the full ProfileFitter diagnostic (all six panels) onto the
-        # embedded canvas via the engine's plot_on (so it matches fitter.plot()).
-        res.fitter.plot_on(self.prof_fig)
+        # Render the geometry-free diagnostic (raw / gain / flattened / mask /
+        # projections) onto the embedded canvas.
+        fpu.plot_result(res, fig=self.prof_fig)
         self.prof_canvas.draw_idle()
 
     # ── cross-section readouts ─────────────────────────────────────────────
