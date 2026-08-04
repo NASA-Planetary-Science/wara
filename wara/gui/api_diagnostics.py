@@ -526,9 +526,10 @@ class DiagnosticsDialog(QDialog):
         side.addWidget(self._cmb_bin_cfd_row)
         self.cb_bin_align = QCheckBox("Align on LGL sums")
         self.cb_bin_align.setToolTip(
-            "Time-align traces on their energy-filter (leading/gap/leading) sum "
-            "windows and overlay those windows on the Energy-traces and Random-"
-            "traces plots. Applied on the fly -- no reload needed.")
+            "Locate each trace's energy-filter (leading/gap/leading) sum "
+            "windows and overlay them on the Energy-traces and Random-traces "
+            "plots. Traces are left untouched -- the sum windows are moved to "
+            "match each trace. Applied on the fly -- no reload needed.")
         self.cb_bin_align.toggled.connect(self._toggle_bin_align)
         self._cb_bin_align_row = self.cb_bin_align
         side.addWidget(self._cb_bin_align_row)
@@ -906,17 +907,15 @@ class DiagnosticsDialog(QDialog):
         return (f"i:{i}; E:{rowobj.energy}; pu:{rowobj.pileup}, "
                 f"flag:{rowobj.trace_flag}, CFDerr:{rowobj.CFD_error}")
 
-    # Common trailing-window start (in samples) that every aligned trace's LGL
-    # window is shifted to, so all pulses line up and share one window overlay.
-    ALIGN_REF_START = 40
-
     def _aligned_trace(self, rowobj):
         """Return ``(trace, bounds)`` for one event.
 
-        When "Align on LGL sums" is on, the trace is shifted so its
-        energy-filter (trailing/gap/leading) sum window lands at a common
-        reference and ``bounds`` are the four window edges (in samples). When off
-        or unavailable, the raw trace is returned with ``bounds=None``.
+        When "Align on LGL sums" is on, the trace is left untouched and
+        ``bounds`` are the four energy-filter (trailing/gap/leading) window
+        edges (in samples) located on *that trace* by :func:`find_LGL_sums` --
+        i.e. the sum windows are moved to match the trace, not the other way
+        around. When off or unavailable, the raw trace is returned with
+        ``bounds=None``.
         """
         trace = rowobj.trace
         if trace is None or len(trace) == 0 or not self._bin_align:
@@ -931,15 +930,7 @@ class DiagnosticsDialog(QDialog):
                 rowobj.Esum_leading, L, G, relative=True)
         except Exception:  # noqa: BLE001
             return trace, None
-        tr = np.asarray(trace, dtype=float)
-        shift = self.ALIGN_REF_START - res["start"]  # multiple of the filter step
-        aligned = np.roll(tr, shift)
-        if shift > 0:
-            aligned[:shift] = tr[0]
-        elif shift < 0:
-            aligned[shift:] = tr[-1]
-        r = self.ALIGN_REF_START
-        return aligned, (r, r + L, r + L + G, r + 2 * L + G)
+        return trace, res["bounds"]
 
     def _draw_lgl_windows(self, ax, bounds_set):
         """Overlay the trailing | gap | leading (L | G | L) window regions."""
@@ -969,8 +960,8 @@ class DiagnosticsDialog(QDialog):
         for i in df.index:
             rowobj = df.loc[i]
             # Traces can vary in length (and some events have none) -- give each
-            # its own time axis and skip empty ones. When alignment is on the
-            # trace is shifted onto the common LGL-sum grid.
+            # its own time axis and skip empty ones. When alignment is on, the
+            # LGL-sum windows are located per-trace instead of shifting traces.
             trace, bounds = self._aligned_trace(rowobj)
             if trace is None or len(trace) == 0:
                 continue
@@ -1012,7 +1003,7 @@ class DiagnosticsDialog(QDialog):
         bounds_set = []
         for i in self.df_bin_tr.index:
             # Per-trace baseline subtraction so variable-length / empty traces
-            # don't force a ragged vstack; alignment applied when enabled.
+            # don't force a ragged vstack; LGL windows located when enabled.
             trace, bounds = self._aligned_trace(self.df_bin_tr.loc[i])
             if trace is None or len(trace) == 0:
                 continue
