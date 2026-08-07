@@ -184,7 +184,11 @@ and an energy spectrum from integrating the traces). On the **Random traces**
 view, the **Fast Filter** and **CFD** checkboxes overlay the Pixie-16's
 internal trigger and timing filters, reconstructed offline for every sampled
 trace along with the channel's `FastThresh` / `CFDThresh` — see
-[Pixie-16 fast trigger / CFD reconstruction](pixie_trace_analysis.md).
+[Pixie-16 fast trigger / CFD reconstruction](pixie_trace_analysis.md). The
+**Custom firmware (w=0.3125)** checkbox controls the CFD weight: stock 500 MHz
+firmware fixes the CFD weight at `w=1`, but our custom firmware build runs it at
+`w=0.3125`. It is checked by default (the firmware in use here); uncheck it for
+a standard Pixie-16, where `w=1` is correct.
 
 See [Associated Particle Imaging](api.md).
 

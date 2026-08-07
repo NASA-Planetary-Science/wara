@@ -31,6 +31,15 @@ in hardware at `w=1, B=5, D=5, L=1` -- they are *not* the `CFDScale` /
 instead.
 ```
 
+```{note}
+Custom firmware builds may run the CFD at a fractional weight instead of the
+stock `w=1`. Pass `cfd_trace(..., w=...)` to reconstruct that variant; the
+weight our local custom firmware uses is exposed as
+{py:data}`wara.pixie_trace_analysis.CFD_W_CUSTOM` (`0.3125`). In the GUI, the
+Diagnostics → Binary → Random traces view exposes this as the **Custom firmware
+(w=0.3125)** checkbox.
+```
+
 ## Reading the DSP geometry
 
 `FastLength` and `FastGap` are stored in `fast_filter_cycles` units and need

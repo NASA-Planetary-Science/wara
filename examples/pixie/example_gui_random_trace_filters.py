@@ -16,6 +16,7 @@ import sys
 
 from PyQt5.QtWidgets import QApplication
 
+from wara import pixie_trace_analysis as pta
 from wara.gui.app import WaraApp
 from wara.gui.api_diagnostics import DiagnosticsDialog
 
@@ -49,6 +50,13 @@ dlg._update_bin_ch_df()
 dlg.ed_bin_ntraces.setText("5")
 dlg.cb_bin_ff.setChecked(True)    # "Fast Filter"
 dlg.cb_bin_cfd.setChecked(True)   # "CFD"
+
+# Stock 500 MHz firmware fixes the CFD weight at w=1; our custom firmware runs
+# it at w=0.3125. The "Custom firmware (w=0.3125)" checkbox picks between them
+# and is on by default -- uncheck it for a standard Pixie-16 where w=1 holds.
+dlg.cb_bin_cfd_custom_w.setChecked(True)
+print(f"CFD weight: w={pta.CFD_W_CUSTOM if dlg.cb_bin_cfd_custom_w.isChecked() else pta.CFD_W:g}")
+
 dlg._sample_bin_traces()
 print(dlg.lbl_bin_state.text())
 

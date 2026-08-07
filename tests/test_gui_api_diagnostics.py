@@ -178,6 +178,36 @@ def test_threshold_lines_use_the_dsp_register_values(dlg):
     assert any(lb.startswith("CFDThresh") for lb in labels)
 
 
+def test_cfd_custom_firmware_weight_on_by_default(dlg):
+    """The custom-firmware (w=0.3125) box defaults to checked, and the plotted
+    CFD is reconstructed with that weight, not the stock w=1."""
+    assert dlg.cb_bin_cfd_custom_w.isChecked()
+    dlg._load_bin()
+    dlg._sample_bin_traces()
+    dlg.cb_bin_cfd.setChecked(True)
+    ax_cfd = dlg._bin_rand_twins[0]
+    row = dlg.df_bin_rand.iloc[0]
+    expected = pta.cfd_trace(row.trace, w=pta.CFD_W_CUSTOM)[0]
+    plotted = ax_cfd.lines[0].get_ydata()
+    assert np.allclose(plotted, expected, equal_nan=True)
+    # and NOT the stock w=1 reconstruction (the two differ where the CFD rises)
+    stock = pta.cfd_trace(row.trace, w=pta.CFD_W)[0]
+    assert not np.allclose(plotted, stock, equal_nan=True)
+
+
+def test_cfd_stock_weight_when_custom_unchecked(dlg):
+    """Unchecking the custom-firmware box reconstructs the CFD at stock w=1."""
+    dlg._load_bin()
+    dlg._sample_bin_traces()
+    dlg.cb_bin_cfd_custom_w.setChecked(False)
+    dlg.cb_bin_cfd.setChecked(True)
+    ax_cfd = dlg._bin_rand_twins[0]
+    row = dlg.df_bin_rand.iloc[0]
+    expected = pta.cfd_trace(row.trace, w=pta.CFD_W)[0]
+    plotted = ax_cfd.lines[0].get_ydata()
+    assert np.allclose(plotted, expected, equal_nan=True)
+
+
 def test_both_overlays_use_separate_twin_axes(dlg):
     dlg._load_bin()
     dlg._sample_bin_traces()

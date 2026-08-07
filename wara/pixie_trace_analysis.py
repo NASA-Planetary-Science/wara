@@ -30,6 +30,10 @@ from wara import helper_api
 
 # 500 MHz Pixie-16 CFD parameters are fixed in hardware (manual Table 3-4).
 CFD_W = 1
+# Some custom Pixie-16 firmware builds run the CFD with a fractional weight
+# instead of the stock ``w=1``. This is the value used by our local custom
+# firmware; expose it so callers/GUI can reconstruct that variant's CFD.
+CFD_W_CUSTOM = 0.3125
 CFD_B = 5
 CFD_D = 5
 CFD_L = 1

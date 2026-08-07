@@ -683,6 +683,21 @@ class DiagnosticsDialog(QDialog):
             cb.toggled.connect(self._toggle_bin_filters)
             rand_lay.addWidget(cb)
 
+        # Custom-firmware CFD weight. Stock 500 MHz firmware fixes the CFD
+        # weight at w=1 (correct for our standard Pixie-16); our custom
+        # firmware build runs it at w=0.3125. Checked by default because that
+        # is the firmware in use here.
+        self.cb_bin_cfd_custom_w = QCheckBox(
+            f"Custom firmware (w={pta.CFD_W_CUSTOM:g})")
+        self.cb_bin_cfd_custom_w.setChecked(True)
+        self.cb_bin_cfd_custom_w.setToolTip(
+            f"Reconstruct the CFD with the custom-firmware weight "
+            f"w={pta.CFD_W_CUSTOM:g} instead of the stock w={pta.CFD_W:g} "
+            "(manual Eq 3-5). Leave this on for our custom firmware; uncheck "
+            "it for a standard Pixie-16, where w=1 is correct.")
+        self.cb_bin_cfd_custom_w.toggled.connect(self._toggle_bin_filters)
+        rand_lay.addWidget(self.cb_bin_cfd_custom_w)
+
         self.cb_bin_leg_rand = QCheckBox("Legend")
         self.cb_bin_leg_rand.toggled.connect(self._toggle_bin_legend_rand)
         rand_lay.addWidget(self.cb_bin_leg_rand)
@@ -1050,6 +1065,11 @@ class DiagnosticsDialog(QDialog):
         if not (want_ff or want_cfd) or not self._bin_fast:
             return [], []
 
+        # Custom firmware runs the CFD at a fractional weight (w=0.3125);
+        # stock firmware fixes it at w=1.
+        cfd_w = (pta.CFD_W_CUSTOM if self.cb_bin_cfd_custom_w.isChecked()
+                 else pta.CFD_W)
+
         # With both on, the CFD axis moves outward so the spines don't overlap,
         # and the (now inner) fast-filter axis drops its label -- it would land
         # on top of the CFD tick labels. Its amber ticks and the legend below
@@ -1079,7 +1099,7 @@ class DiagnosticsDialog(QDialog):
                 ax_ff.plot(t, ff, lw=0.7, color=self.FF_COLOR, alpha=0.55)
                 ff_thresh.add(fth)
             if ax_cfd is not None:
-                cfd = pta.cfd_trace(trace)[0]
+                cfd = pta.cfd_trace(trace, w=cfd_w)[0]
                 ax_cfd.plot(t, cfd, lw=0.7, color=self.CFD_COLOR, alpha=0.55)
                 cfd_thresh.add(cth)
             n += 1
@@ -1100,7 +1120,7 @@ class DiagnosticsDialog(QDialog):
                               + ", ".join(str(v) for v in sorted(ff_thresh)))
         if ax_cfd is not None:
             handles.append(Line2D([], [], color=self.CFD_COLOR, lw=1.2))
-            labels.append("CFD")
+            labels.append(f"CFD (w={cfd_w:g})")
             for v in sorted(cfd_thresh):
                 ax_cfd.axhline(v, color=self.CFD_COLOR, ls="--", lw=0.9, alpha=0.9)
             if cfd_thresh:
