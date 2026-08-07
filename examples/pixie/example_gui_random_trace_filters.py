@@ -1,0 +1,56 @@
+"""Fast Filter / CFD overlays on the GUI's random-trace sampler.
+
+The API diagnostics dialog (API tab -> "Diagnostics...", **Binary** tab,
+**Random traces** view) can overlay the two filters the Pixie-16 computes
+internally but never stores -- the trapezoidal fast filter and the 500 MHz CFD
+trace -- reconstructed offline by :mod:`wara.pixie_trace_analysis` from each
+sampled trace and the run's DSP settings. Each gets its own y-axis, with a
+dashed line at the channel's ``FastThresh`` / ``CFDThresh`` register.
+
+Normally you tick the two checkboxes by hand; this script does it in code so
+the whole path -- load, sample, overlay -- runs unattended. The run below needs
+its folder reachable through ``data-path.txt``; swap DATE/RUN/CHANNEL for one
+of your own.
+"""
+import sys
+
+from PyQt5.QtWidgets import QApplication
+
+from wara.gui.app import WaraApp
+from wara.gui.api_diagnostics import DiagnosticsDialog
+
+DATE, RUN, CHANNEL = "2025-04-18", 8, 7
+SOURCE = "Trace data"   # or "Binary data" for a run whose traces landed there
+
+app = QApplication.instance() or QApplication(sys.argv)
+win = WaraApp()
+dlg = DiagnosticsDialog(win.api)
+
+# ── load the run's list-mode data ────────────────────────────────────────────
+dlg.ed_bin_date.setText(DATE)
+dlg.ed_bin_run.setText(str(RUN))
+dlg.cmb_bin_type.setCurrentText(SOURCE)
+dlg._load_bin()
+print(dlg.lbl_bin_state.text())
+
+# The overlays need FastLength / FastGap / FastThresh / CFDThresh from the run's
+# settings file; without it the two checkboxes stay disabled.
+if not dlg._bin_fast:
+    raise SystemExit("No DSP settings for this run -- overlays unavailable")
+for ch, (FL, FG, fast_thresh, cfd_thresh) in sorted(dlg._bin_fast.items()):
+    print(f"  ch{ch}: FL={FL} FG={FG} FastThresh={fast_thresh} "
+          f"CFDThresh={cfd_thresh}")
+
+# ── show one channel, sample a few traces, overlay both filters ──────────────
+for ch in dlg._bin_chans:
+    dlg._bin_ch_visible[ch] = (ch == CHANNEL)
+dlg._update_bin_ch_df()
+
+dlg.ed_bin_ntraces.setText("5")
+dlg.cb_bin_ff.setChecked(True)    # "Fast Filter"
+dlg.cb_bin_cfd.setChecked(True)   # "CFD"
+dlg._sample_bin_traces()
+print(dlg.lbl_bin_state.text())
+
+dlg.show()
+sys.exit(app.exec_())

@@ -177,6 +177,15 @@ When the loaded run's parquet also carries the ch-9 alpha energy (an
 its own **Alpha bins** count (2048 by default), cross-filtering with the gamma
 energy, `dt` and X–Y panels.
 
+**Diagnostics…** pops out a per-run explorer with an **MCA** tab (the run's
+`.npy` spectra) and a **Binary** tab (its list-mode data across four linked
+views: energy histogram, the traces of an energy span, a random-trace sampler
+and an energy spectrum from integrating the traces). On the **Random traces**
+view, the **Fast Filter** and **CFD** checkboxes overlay the Pixie-16's
+internal trigger and timing filters, reconstructed offline for every sampled
+trace along with the channel's `FastThresh` / `CFDThresh` — see
+[Pixie-16 fast trigger / CFD reconstruction](pixie_trace_analysis.md).
+
 See [Associated Particle Imaging](api.md).
 
 ## The Neutrons tab

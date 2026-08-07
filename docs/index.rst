@@ -28,6 +28,7 @@ with an emphasis on neutron-induced gamma ray emission.
    efficiency
    resolution
    api
+   pixie_trace_analysis
    gui
 
 .. toctree::

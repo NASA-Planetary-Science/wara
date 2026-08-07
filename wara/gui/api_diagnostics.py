@@ -7,6 +7,7 @@ import numpy as np
 from matplotlib.figure import Figure
 from matplotlib import cm
 from matplotlib.colors import to_hex
+from matplotlib.lines import Line2D
 from matplotlib.widgets import SpanSelector
 from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
 from matplotlib.backends.backend_qt5agg import NavigationToolbar2QT as NavToolbar
@@ -19,6 +20,7 @@ from PyQt5.QtWidgets import (
 from PyQt5.QtCore import Qt, QSize
 
 from wara import read_parquet_api, apicalc, helper_api
+from wara import pixie_trace_analysis as pta
 from wara import spectrum as sp
 
 from . import theme as T
@@ -40,8 +42,11 @@ class DiagnosticsDialog(QDialog):
     * **Binary** -- read the run's list-mode data (trace / binary / parquet) and
       explore it across four linked views: the per-channel energy histogram
       (drag a span to pick events), the traces of the selected events, a random
-      trace sampler (with pileup / CFD-error / flagged filters and an FFT
-      toggle), and an energy spectrum reconstructed by integrating the traces.
+      trace sampler (with pileup / CFD-error / flagged filters, an FFT toggle
+      and "Fast Filter" / "CFD" overlays that reconstruct the Pixie-16's
+      internal trigger and timing filters offline, see
+      :mod:`wara.pixie_trace_analysis`), and an energy spectrum reconstructed
+      by integrating the traces.
       Both the energy histogram and the trace-integral spectrum can be sent to
       the Spectrum tab.
 
@@ -89,6 +94,10 @@ class DiagnosticsDialog(QDialog):
         self._bin_date = self._bin_run = None  # run that produced df_bin
         self._bin_align = False     # LGL-sum time alignment on/off
         self._bin_lgl = {}          # {channel: (L, G)} slow-filter windows
+        # {channel: (FL, FG, FastThresh, CFDThresh)} fast-trigger / CFD geometry
+        # for the offline reconstruction overlaid on the Random-traces tab.
+        self._bin_fast = {}
+        self._bin_rand_twins = []  # twin y-axes created for those overlays
         self._bin_span = None      # SpanSelector on the energy plot
         self._bin_yscale = "log"
         self._bin_gam = self._bin_gam_x = None    # energy hist (send to spectrum)
@@ -650,6 +659,30 @@ class DiagnosticsDialog(QDialog):
         self.btn_bin_fft.clicked.connect(self._toggle_bin_fft)
         rbtns.addWidget(self.btn_bin_sample, 1); rbtns.addWidget(self.btn_bin_fft, 0)
         rbw = QWidget(); rbw.setLayout(rbtns); rand_lay.addWidget(rbw)
+
+        # ── offline fast-trigger / CFD reconstruction overlays ───────────────
+        ovl_note = QLabel("Overlay the fast filter / CFD the Pixie-16 computes "
+                          "internally, reconstructed offline from each trace "
+                          "and the run's DSP settings.")
+        ovl_note.setObjectName("stat_key"); ovl_note.setWordWrap(True)
+        rand_lay.addWidget(ovl_note)
+        self.cb_bin_ff = QCheckBox("Fast Filter")
+        self.cb_bin_ff.setToolTip(
+            "Plot the trapezoidal fast filter (manual Eq 3-1) of every sampled "
+            "trace on a second y-axis, together with the channel's FastThresh "
+            "register -- the fast trigger fires where the filter crosses it. "
+            "Needs the run's settings file.")
+        self.cb_bin_cfd = QCheckBox("CFD")
+        self.cb_bin_cfd.setToolTip(
+            "Plot the 500 MHz CFD trace (manual Eq 3-5) of every sampled trace "
+            "on a second y-axis, together with the channel's CFDThresh "
+            "register -- the timestamp comes from the zero crossing after the "
+            "trace rises above it. Needs the run's settings file.")
+        for cb in (self.cb_bin_ff, self.cb_bin_cfd):
+            cb.setEnabled(False)
+            cb.toggled.connect(self._toggle_bin_filters)
+            rand_lay.addWidget(cb)
+
         self.cb_bin_leg_rand = QCheckBox("Legend")
         self.cb_bin_leg_rand.toggled.connect(self._toggle_bin_legend_rand)
         rand_lay.addWidget(self.cb_bin_leg_rand)
@@ -775,6 +808,21 @@ class DiagnosticsDialog(QDialog):
             self.cb_bin_align.setChecked(False)
             self.cb_bin_align.blockSignals(False)
             self._bin_align = False
+        # Per-channel fast-filter geometry / thresholds for the offline fast
+        # trigger + CFD reconstruction overlaid on the Random-traces tab. Comes
+        # from the run's settings JSON, so it works for trace *and* binary data
+        # -- but only matters where traces were actually stored.
+        self._bin_fast = {}
+        if "trace" in df.columns:
+            for c in self._bin_chans:
+                try:
+                    FL, FG, fast_thresh = pta.read_fast_trigger_geometry(
+                        date, runnr, c)
+                    cfd_thresh = pta.read_cfd_threshold(date, runnr, c)
+                except Exception:  # noqa: BLE001
+                    continue
+                self._bin_fast[c] = (FL, FG, fast_thresh, cfd_thresh)
+        self._set_bin_filter_boxes_enabled(bool(self._bin_fast))
         palette = self._palette(len(self._bin_chans))
         self._bin_ch_visible = {c: True for c in self._bin_chans}
         self._bin_ch_colors = {c: palette[i] for i, c in enumerate(self._bin_chans)}
@@ -947,7 +995,146 @@ class DiagnosticsDialog(QDialog):
     # when zooming), which freezes/blanks the canvas -- so the legend is skipped.
     MAX_TRACE_LEGEND = 25
 
-    def _plot_bin_traces(self, df, ax, canvas, fig, legend_on, toolbar=None):
+    # ── offline fast filter / CFD overlays (Random traces) ───────────────────
+    def _set_bin_filter_boxes_enabled(self, enabled):
+        """Enable the Fast Filter / CFD boxes, unchecking them when they go away."""
+        for cb in (self.cb_bin_ff, self.cb_bin_cfd):
+            cb.setEnabled(enabled)
+            if not enabled and cb.isChecked():
+                cb.blockSignals(True); cb.setChecked(False); cb.blockSignals(False)
+
+    def _clear_bin_rand_twins(self):
+        """Drop the twin y-axes from the previous Random-traces draw.
+
+        ``ax.clear()`` empties an axes but leaves any ``twinx()`` siblings on
+        the figure, so they have to be removed explicitly or every redraw
+        stacks another pair of right-hand spines.
+        """
+        for tw in self._bin_rand_twins:
+            try:
+                tw.remove()
+            except Exception:  # noqa: BLE001
+                pass
+        self._bin_rand_twins = []
+
+    def _make_bin_twin(self, ax, label, color, offset=0):
+        """A styled twin y-axis on *ax*, offset outward by *offset* points."""
+        tw = ax.twinx()
+        if offset:
+            tw.spines["right"].set_position(("outward", offset))
+        tw.set_ylabel(label, color=color, fontsize=11)
+        # Sit the label right on the spine: the default padding pushes it into
+        # the tick labels of whichever twin is offset further out.
+        tw.yaxis.labelpad = 2
+        tw.tick_params(axis="y", colors=color, labelsize=10, length=3)
+        tw.spines["right"].set_color(color)
+        tw.set_facecolor("none")
+        self._bin_rand_twins.append(tw)
+        return tw
+
+    FF_COLOR = T.ACCENT_AMBER
+    CFD_COLOR = T.ACCENT_RED
+
+    def _draw_bin_filters(self, ax, df):
+        """Overlay the offline fast filter / CFD of every trace in *df*.
+
+        Reconstructs, per trace, the two quantities the Pixie-16 firmware
+        computes in hardware but never stores (:mod:`wara.pixie_trace_analysis`)
+        and draws each on its own twin y-axis together with the channel's
+        ``FastThresh`` / ``CFDThresh`` register value.
+
+        Returns ``(handles, labels)`` for the caller's legend.
+        """
+        want_ff = self.cb_bin_ff.isChecked()
+        want_cfd = self.cb_bin_cfd.isChecked()
+        if not (want_ff or want_cfd) or not self._bin_fast:
+            return [], []
+
+        # With both on, the CFD axis moves outward so the spines don't overlap,
+        # and the (now inner) fast-filter axis drops its label -- it would land
+        # on top of the CFD tick labels. Its amber ticks and the legend below
+        # still identify it.
+        both = want_ff and want_cfd
+        ax_ff = (self._make_bin_twin(ax, "" if both else "Fast filter",
+                                     self.FF_COLOR)
+                 if want_ff else None)
+        ax_cfd = (self._make_bin_twin(ax, "CFD", self.CFD_COLOR,
+                                      offset=52 if want_ff else 0)
+                  if want_cfd else None)
+
+        ff_thresh, cfd_thresh = set(), set()
+        n = 0
+        for i in df.index:
+            rowobj = df.loc[i]
+            trace = rowobj.trace
+            if trace is None or len(trace) == 0:
+                continue
+            geo = self._bin_fast.get(int(getattr(rowobj, "channel", -1)))
+            if geo is None:
+                continue
+            FL, FG, fth, cth = geo
+            t = self._trace_time_axis(trace)
+            if ax_ff is not None:
+                ff = pta.fast_filter(trace, FL, FG)[0]
+                ax_ff.plot(t, ff, lw=0.7, color=self.FF_COLOR, alpha=0.55)
+                ff_thresh.add(fth)
+            if ax_cfd is not None:
+                cfd = pta.cfd_trace(trace)[0]
+                ax_cfd.plot(t, cfd, lw=0.7, color=self.CFD_COLOR, alpha=0.55)
+                cfd_thresh.add(cth)
+            n += 1
+        if n == 0:
+            # No sampled channel had settings -- drop the empty twin axes again.
+            self._clear_bin_rand_twins()
+            return [], []
+
+        handles, labels = [], []
+        if ax_ff is not None:
+            handles.append(Line2D([], [], color=self.FF_COLOR, lw=1.2))
+            labels.append("fast filter")
+            for v in sorted(ff_thresh):
+                ax_ff.axhline(v, color=self.FF_COLOR, ls="--", lw=0.9, alpha=0.9)
+            if ff_thresh:
+                handles.append(Line2D([], [], color=self.FF_COLOR, ls="--", lw=0.9))
+                labels.append("FastThresh "
+                              + ", ".join(str(v) for v in sorted(ff_thresh)))
+        if ax_cfd is not None:
+            handles.append(Line2D([], [], color=self.CFD_COLOR, lw=1.2))
+            labels.append("CFD")
+            for v in sorted(cfd_thresh):
+                ax_cfd.axhline(v, color=self.CFD_COLOR, ls="--", lw=0.9, alpha=0.9)
+            if cfd_thresh:
+                handles.append(Line2D([], [], color=self.CFD_COLOR, ls="--", lw=0.9))
+                labels.append("CFDThresh "
+                              + ", ".join(str(v) for v in sorted(cfd_thresh)))
+            ax_cfd.axhline(0, color=T.TEXT_DIM, lw=0.6, alpha=0.5)
+        return handles, labels
+
+    def _toggle_bin_filters(self, _checked=False):
+        """Redraw the Random-traces view when a filter overlay is toggled."""
+        if self.df_bin_rand is None or self.df_bin_rand.shape[0] == 0:
+            self._bin_state("Sample some traces first")
+            return
+        if self.btn_bin_fft.isChecked():
+            self._bin_state("Turn the FFT off to see the filter overlays")
+            return
+        self._plot_bin_rand()
+        on = [n for n, cb in (("fast filter", self.cb_bin_ff), ("CFD", self.cb_bin_cfd))
+              if cb.isChecked()]
+        self._bin_state(f"Overlaying {' + '.join(on)}" if on
+                        else "Filter overlays off")
+
+    def _plot_bin_rand(self):
+        """Draw the sampled random traces (with any filter overlays)."""
+        self._plot_bin_traces(self.df_bin_rand, self._bin_ax["rand"],
+                              self._bin_canvas["rand"], self._bin_fig["rand"],
+                              self.cb_bin_leg_rand.isChecked(),
+                              toolbar=self._bin_toolbar["rand"], overlays=True)
+
+    def _plot_bin_traces(self, df, ax, canvas, fig, legend_on, toolbar=None,
+                         overlays=False):
+        if overlays:
+            self._clear_bin_rand_twins()
         ax.clear()
         if df is None or df.shape[0] == 0:
             self._draw_placeholder(ax, "No traces to show", "Time (ns)", "linear")
@@ -984,6 +1171,18 @@ class DiagnosticsDialog(QDialog):
             leg = ax.legend(loc="upper right", fontsize=8, facecolor=API_PLOT_BG,
                             edgecolor=T.BORDER, labelcolor=T.TEXT_DIM, framealpha=0.7)
             leg.set_visible(legend_on)
+        if overlays:
+            # Drawn after _style_axis so the twin axes sit on top of the traces,
+            # and legended separately -- these lines are always worth naming,
+            # unlike the (optional, per-event) trace legend.
+            handles, labels = self._draw_bin_filters(ax, df)
+            if handles:
+                # On the twin, not on `ax` -- an axes holds only one legend and
+                # `ax`'s may already be the per-event trace legend above.
+                self._bin_rand_twins[0].legend(
+                    handles, labels, loc="upper left", fontsize=8,
+                    facecolor=API_PLOT_BG, edgecolor=T.BORDER,
+                    labelcolor=T.TEXT_DIM, framealpha=0.7)
         fig.tight_layout()
         canvas.draw_idle()
         # Reset the toolbar's view stack so Home/zoom act on the new data extent.
@@ -1045,10 +1244,7 @@ class DiagnosticsDialog(QDialog):
                                   toolbar=self._bin_toolbar["ergtr"])
         if (self.df_bin_rand is not None and self.df_bin_rand.shape[0] > 0
                 and not self.btn_bin_fft.isChecked()):
-            self._plot_bin_traces(self.df_bin_rand, self._bin_ax["rand"],
-                                  self._bin_canvas["rand"], self._bin_fig["rand"],
-                                  self.cb_bin_leg_rand.isChecked(),
-                                  toolbar=self._bin_toolbar["rand"])
+            self._plot_bin_rand()
         self._bin_state(f"LGL-sum alignment {'on' if checked else 'off'}")
 
     # ── random traces / FFT ──────────────────────────────────────────────────
@@ -1075,21 +1271,15 @@ class DiagnosticsDialog(QDialog):
             return
         n = min(n, df.shape[0])
         self.df_bin_rand = df.sample(n).sort_index()
-        self._plot_bin_traces(self.df_bin_rand, self._bin_ax["rand"],
-                              self._bin_canvas["rand"], self._bin_fig["rand"],
-                              self.cb_bin_leg_rand.isChecked(),
-                              toolbar=self._bin_toolbar["rand"])
+        self._plot_bin_rand()
         self.bin_plot_tabs.setCurrentIndex(2)
         self._bin_state(f"Sampled {n} random traces")
 
     def _toggle_bin_fft(self):
         if not self.btn_bin_fft.isChecked():
-            # Back to traces.
+            # Back to traces (and their filter overlays).
             if self.df_bin_rand is not None:
-                self._plot_bin_traces(self.df_bin_rand, self._bin_ax["rand"],
-                                      self._bin_canvas["rand"], self._bin_fig["rand"],
-                                      self.cb_bin_leg_rand.isChecked(),
-                                      toolbar=self._bin_toolbar["rand"])
+                self._plot_bin_rand()
             return
         if self.df_bin_rand is None or self.df_bin_rand.shape[0] == 0:
             self._bin_state("Sample some traces first")
@@ -1107,6 +1297,8 @@ class DiagnosticsDialog(QDialog):
             return
         self._bin_fft = ffts
         ax = self._bin_ax["rand"]
+        # The filter overlays' twin axes are meaningless in the frequency domain.
+        self._clear_bin_rand_twins()
         ax.clear()
         # Each trace gets its own frequency axis (lengths can differ).
         for freqs, mag in ffts:
