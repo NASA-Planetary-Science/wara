@@ -177,18 +177,29 @@ When the loaded run's parquet also carries the ch-9 alpha energy (an
 its own **Alpha bins** count (2048 by default), cross-filtering with the gamma
 energy, `dt` and X–Y panels.
 
-**Diagnostics…** pops out a per-run explorer with an **MCA** tab (the run's
-`.npy` spectra) and a **Binary** tab (its list-mode data across four linked
-views: energy histogram, the traces of an energy span, a random-trace sampler
-and an energy spectrum from integrating the traces). On the **Random traces**
-view, the **Fast Filter** and **CFD** checkboxes overlay the Pixie-16's
+**Diagnostics…** pops out a per-run explorer with a **Binary** tab (its
+list-mode data) and an **MCA** tab (the run's `.npy` spectra), in that order.
+The **Binary** tab holds five linked views: the energy histogram, the traces of
+an energy span, a random-trace sampler, an energy spectrum from integrating the
+traces, and a colour-coded **Data table** of the raw dataframe. On the **Random
+traces** view, the **Fast Filter** and **CFD** checkboxes overlay the Pixie-16's
 internal trigger and timing filters, reconstructed offline for every sampled
 trace along with the channel's `FastThresh` / `CFDThresh` — see
-[Pixie-16 fast trigger / CFD reconstruction](pixie_trace_analysis.md). The
-**Custom firmware (w=0.3125)** checkbox controls the CFD weight: stock 500 MHz
-firmware fixes the CFD weight at `w=1`, but our custom firmware build runs it at
-`w=0.3125`. It is checked by default (the firmware in use here); uncheck it for
-a standard Pixie-16, where `w=1` is correct.
+[Pixie-16 fast trigger / CFD reconstruction](pixie_trace_analysis.md). Indented
+beneath the CFD box, the **Custom firmware (w=0.3125)** checkbox controls the
+CFD weight: stock 500 MHz firmware fixes it at `w=1`, but our custom firmware
+build runs it at `w=0.3125`. It is checked by default (the firmware in use
+here); uncheck it for a standard Pixie-16, where `w=1` is correct.
+
+The run properties (date, run, source, **Load**) live on the **Energy** view
+only — you pick and load a run there, then explore it on the other sub-tabs. If
+you drag a highlight over an energy region on the **Energy** view, the
+random-trace sampler draws only from that window; with no highlight it samples
+the whole run. The **Data table** view renders the first rows of the loaded
+list-mode dataframe (visible channels only, the first 500 by default — raise the
+**Rows** field to see more), shading each numeric column low-to-high with a
+chosen colormap so magnitudes and per-column patterns stand out; the colouring
+can be turned off for a plain table.
 
 See [Associated Particle Imaging](api.md).
 

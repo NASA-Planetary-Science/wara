@@ -60,5 +60,27 @@ print(f"CFD weight: w={pta.CFD_W_CUSTOM if dlg.cb_bin_cfd_custom_w.isChecked() e
 dlg._sample_bin_traces()
 print(dlg.lbl_bin_state.text())
 
+# ── restrict the random sample to a highlighted energy region ────────────────
+# Dragging a span on the Energy view highlights an energy window; the sampler
+# then draws only from it. Here we set one in code (roughly the middle third of
+# the loaded energy range) and resample.
+if dlg.df_bin_ch is not None and "energy" in dlg.df_bin_ch.columns:
+    e = dlg.df_bin_ch["energy"]
+    lo, hi = e.quantile(0.33), e.quantile(0.66)
+    dlg._on_bin_span(float(lo), float(hi))
+    dlg._sample_bin_traces()
+    print(dlg.lbl_bin_state.text())
+
+# ── the colour-coded data-table view ─────────────────────────────────────────
+# The Binary tab's "Data table" sub-tab shades each numeric column low-to-high
+# so patterns pop out. It shows the first 500 rows by default -- raise "Rows"
+# for more. Jump to it and (re)fill.
+for i in range(dlg.bin_plot_tabs.count()):
+    if dlg.bin_plot_tabs.tabText(i) == "Data table":
+        dlg.bin_plot_tabs.setCurrentIndex(i)
+        break
+dlg._refresh_bin_table()
+print(dlg.lbl_bin_state.text())
+
 dlg.show()
 sys.exit(app.exec_())

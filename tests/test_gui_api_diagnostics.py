@@ -20,6 +20,7 @@ import pandas as pd
 import pytest
 
 pytest.importorskip("PyQt5")
+from PyQt5.QtCore import Qt
 from PyQt5.QtWidgets import QApplication, QWidget
 
 from wara import helper_api, pixie_trace_analysis as pta
@@ -273,3 +274,116 @@ def test_reload_without_settings_unchecks_the_boxes(dlg, monkeypatch):
     dlg._load_bin()
     assert not dlg.cb_bin_ff.isChecked() and not dlg.cb_bin_cfd.isChecked()
     assert not dlg.cb_bin_ff.isEnabled()
+
+
+# ── the custom-w box is a child of the CFD box ───────────────────────────────
+def test_custom_w_box_is_only_active_while_cfd_is_on(dlg):
+    dlg._load_bin()
+    # CFD box is enabled after load, but its child stays disabled until CFD is on
+    assert dlg.cb_bin_cfd.isEnabled()
+    assert not dlg.cb_bin_cfd_custom_w.isEnabled()
+    dlg.cb_bin_cfd.setChecked(True)
+    assert dlg.cb_bin_cfd_custom_w.isEnabled()
+    dlg.cb_bin_cfd.setChecked(False)
+    assert not dlg.cb_bin_cfd_custom_w.isEnabled()
+
+
+# ── tab order: Binary first, MCA second ──────────────────────────────────────
+def test_binary_tab_comes_before_mca(dlg):
+    assert dlg.tabs.tabText(0) == "Binary"
+    assert dlg.tabs.tabText(1) == "MCA"
+
+
+# ── random sampling honours the highlighted energy region ────────────────────
+def test_random_sample_restricted_to_highlighted_region(dlg):
+    dlg._load_bin()
+    dlg._on_bin_span(500, 700)          # picks the events with 500 < E < 700
+    assert dlg._bin_span_range == (500, 700)
+    dlg.ed_bin_ntraces.setText("50")    # ask for more than the window holds
+    dlg._sample_bin_traces()
+    assert (dlg.df_bin_rand.energy > 500).all()
+    assert (dlg.df_bin_rand.energy < 700).all()
+    assert "from [500" in dlg.lbl_bin_state.text()
+
+
+def test_random_sample_uses_all_events_without_a_highlight(dlg):
+    dlg._load_bin()
+    assert dlg._bin_span_range is None
+    dlg.ed_bin_ntraces.setText(str(N_EVENTS))
+    dlg._sample_bin_traces()
+    assert dlg.df_bin_rand.shape[0] == N_EVENTS
+    # spans a wider energy range than any sub-window would
+    assert dlg.df_bin_rand.energy.max() - dlg.df_bin_rand.energy.min() > 200
+
+
+def test_reload_clears_the_highlight(dlg):
+    dlg._load_bin()
+    dlg._on_bin_span(500, 700)
+    assert dlg._bin_span_range is not None
+    dlg._load_bin()
+    assert dlg._bin_span_range is None
+
+
+# ── the RUN group lives on the Energy sub-tab only ───────────────────────────
+def test_run_group_shows_only_on_the_energy_subtab(dlg):
+    def _index(title):
+        for i in range(dlg.bin_plot_tabs.count()):
+            if dlg.bin_plot_tabs.tabText(i) == title:
+                return i
+        raise AssertionError(f"no {title!r} tab")
+
+    # The dialog isn't shown in headless tests, so isVisible() is always False;
+    # isHidden() reflects the explicit show/hide the tab switch performs.
+    dlg.bin_plot_tabs.setCurrentIndex(_index("Energy"))
+    assert not dlg._bin_run_grp.isHidden()
+    for other in ("Random traces", "Trace energy", "Data table"):
+        dlg.bin_plot_tabs.setCurrentIndex(_index(other))
+        assert dlg._bin_run_grp.isHidden()
+
+
+# ── data-table view ──────────────────────────────────────────────────────────
+def test_data_table_default_row_count_is_500(dlg):
+    assert dlg.ed_bin_tbl_rows.text() == "500"
+
+
+def _table_tab_index(dlg):
+    for i in range(dlg.bin_plot_tabs.count()):
+        if dlg.bin_plot_tabs.tabText(i) == "Data table":
+            return i
+    raise AssertionError("no Data table tab")
+
+
+def test_data_table_populates_and_colours_numeric_cells(dlg):
+    dlg._load_bin()
+    dlg.bin_plot_tabs.setCurrentIndex(_table_tab_index(dlg))  # lazy-fills on show
+    dlg.ed_bin_tbl_rows.setText("10")
+    dlg._refresh_bin_table()
+    assert dlg.bin_tbl.rowCount() == 10
+    assert dlg.bin_tbl.columnCount() == len(dlg.df_bin_ch.columns)
+    cols = list(dlg.df_bin_ch.columns)
+    ecol, tcol = cols.index("energy"), cols.index("trace")
+    # numeric column is shaded; the array (trace) column is shown but not shaded
+    assert dlg.bin_tbl.item(0, ecol).background().style() != Qt.NoBrush
+    assert dlg.bin_tbl.item(0, tcol).background().style() == Qt.NoBrush
+    assert dlg.bin_tbl.item(0, tcol).text().startswith("[")
+
+
+def test_data_table_colour_can_be_turned_off(dlg):
+    dlg._load_bin()
+    dlg.ed_bin_tbl_rows.setText("5")
+    dlg.cb_bin_tbl_color.setChecked(False)   # toggling rebuilds the table
+    ecol = list(dlg.df_bin_ch.columns).index("energy")
+    assert dlg.bin_tbl.item(0, ecol).background().style() == Qt.NoBrush
+
+
+def test_data_table_follows_visible_channels(dlg):
+    dlg._load_bin()
+    dlg.bin_plot_tabs.setCurrentIndex(_table_tab_index(dlg))
+    dlg.ed_bin_tbl_rows.setText(str(N_EVENTS))
+    dlg._refresh_bin_table()
+    # hide channel 7 -> only channel-4 rows remain in the table
+    dlg._toggle_bin_channel(7, False)
+    chan_col = list(dlg.df_bin_ch.columns).index("channel")
+    shown = {dlg.bin_tbl.item(r, chan_col).text()
+             for r in range(dlg.bin_tbl.rowCount())}
+    assert shown == {"4"}

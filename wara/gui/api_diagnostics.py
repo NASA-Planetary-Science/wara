@@ -5,7 +5,7 @@ import traceback
 import numpy as np
 
 from matplotlib.figure import Figure
-from matplotlib import cm
+from matplotlib import cm, colormaps
 from matplotlib.colors import to_hex
 from matplotlib.lines import Line2D
 from matplotlib.widgets import SpanSelector
@@ -13,10 +13,12 @@ from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
 from matplotlib.backends.backend_qt5agg import NavigationToolbar2QT as NavToolbar
 
 from PyQt5.QtWidgets import (
-    QApplication, QCheckBox, QComboBox, QDialog, QHBoxLayout, QLabel,
-    QLineEdit, QPushButton, QScrollArea, QSizePolicy, QTabWidget,
-    QVBoxLayout, QWidget,
+    QAbstractItemView, QApplication, QCheckBox, QComboBox, QDialog,
+    QHBoxLayout, QHeaderView, QLabel, QLineEdit, QPushButton, QScrollArea,
+    QSizePolicy, QTableWidget, QTableWidgetItem, QTabWidget, QVBoxLayout,
+    QWidget,
 )
+from PyQt5.QtGui import QBrush, QColor
 from PyQt5.QtCore import Qt, QSize
 
 from wara import read_parquet_api, apicalc, helper_api
@@ -99,6 +101,7 @@ class DiagnosticsDialog(QDialog):
         self._bin_fast = {}
         self._bin_rand_twins = []  # twin y-axes created for those overlays
         self._bin_span = None      # SpanSelector on the energy plot
+        self._bin_span_range = None  # (lo, hi) energy of the active highlight
         self._bin_yscale = "log"
         self._bin_gam = self._bin_gam_x = None    # energy hist (send to spectrum)
         self._bin_gam2 = self._bin_gam_x2 = None  # trace-integral hist
@@ -108,8 +111,8 @@ class DiagnosticsDialog(QDialog):
         root.setContentsMargins(8, 8, 8, 8)
         root.setSpacing(8)
         self.tabs = QTabWidget()
-        self.tabs.addTab(self._build_mca_tab(), "MCA")
         self.tabs.addTab(self._build_binary_tab(), "Binary")
+        self.tabs.addTab(self._build_mca_tab(), "MCA")
         self._fit_tabbar(self.tabs)
         root.addWidget(self.tabs, 1)
 
@@ -494,6 +497,8 @@ class DiagnosticsDialog(QDialog):
                                   self._bin_canvas, self._bin_toolbar, xlabel,
                                   yscale=yscale, min_h=440, placeholder=ph),
                 title)
+        # A colour-coded view of the raw list-mode dataframe (no canvas).
+        self.bin_plot_tabs.addTab(self._build_bin_table_tab(), "Data table")
         self._fit_tabbar(self.bin_plot_tabs)
         row.addWidget(self.bin_plot_tabs, 1)
 
@@ -506,6 +511,135 @@ class DiagnosticsDialog(QDialog):
     def _on_bin_tab_changed(self, index):
         for i, grp in enumerate(self._bin_ctrl_groups):
             grp.setVisible(i == index)
+        # The RUN group (date / run / source / load) lives on the Energy tab only.
+        self._bin_run_grp.setVisible(self.bin_plot_tabs.tabText(index) == "Energy")
+        # Fill the data table lazily the first time its tab is shown.
+        if (self.bin_plot_tabs.tabText(index) == "Data table"
+                and self.bin_tbl.rowCount() == 0 and self.df_bin_ch is not None):
+            self._refresh_bin_table()
+
+    # ── data-table view ──────────────────────────────────────────────────────
+    def _build_bin_table_tab(self):
+        """A colour-coded table of the loaded list-mode dataframe.
+
+        Each numeric column is min-max normalized and mapped through a
+        colormap, so magnitudes and per-column patterns (e.g. one channel
+        dominating, or a block of piled-up events) stand out at a glance
+        instead of reading as undifferentiated numbers.
+        """
+        wrap = QWidget()
+        lay = QVBoxLayout(wrap)
+        lay.setContentsMargins(0, 0, 0, 0); lay.setSpacing(0)
+        self.bin_tbl = QTableWidget()
+        self.bin_tbl.setEditTriggers(QAbstractItemView.NoEditTriggers)
+        self.bin_tbl.setSelectionMode(QAbstractItemView.NoSelection)
+        self.bin_tbl.setAlternatingRowColors(False)
+        self.bin_tbl.setSortingEnabled(False)
+        self.bin_tbl.verticalHeader().setDefaultSectionSize(22)
+        self.bin_tbl.horizontalHeader().setSectionResizeMode(
+            QHeaderView.ResizeToContents)
+        lay.addWidget(self.bin_tbl)
+        return wrap
+
+    def _sync_bin_table(self):
+        """Keep the data table in step with the visible-channel view.
+
+        Rebuilds it immediately when its tab is showing; otherwise blanks it so
+        the next visit to the tab repopulates lazily (channel toggles shouldn't
+        pay for a table redraw the user isn't looking at).
+        """
+        tbl = getattr(self, "bin_tbl", None)
+        if tbl is None:
+            return
+        idx = self.bin_plot_tabs.currentIndex()
+        if self.bin_plot_tabs.tabText(idx) == "Data table":
+            self._refresh_bin_table()
+        else:
+            tbl.setRowCount(0)
+
+    @staticmethod
+    def _tbl_numeric(series):
+        """Column values as a float array if numeric/boolean, else ``None``.
+
+        Object columns that hold plain bools/numbers (e.g. the ``pileup`` /
+        ``CFD_error`` flags) are converted element-wise; array columns (traces)
+        and strings stay ``None`` so they are shown but not colour-shaded.
+        """
+        dt = series.dtype
+        if dt == bool or np.issubdtype(dt, np.number):
+            try:
+                return series.to_numpy(dtype=float)
+            except (TypeError, ValueError):
+                return None
+        if dt == object:
+            vals = series.to_numpy()
+            out = np.full(len(vals), np.nan, dtype=float)
+            ok = False
+            for i, v in enumerate(vals):
+                if isinstance(v, (bool, np.bool_)):
+                    out[i] = 1.0 if v else 0.0; ok = True
+                elif isinstance(v, (int, float, np.integer, np.floating)):
+                    out[i] = float(v); ok = True
+            return out if ok else None
+        return None
+
+    @staticmethod
+    def _tbl_fmt(val):
+        """Compact cell text for any dataframe value."""
+        if isinstance(val, (np.ndarray, list, tuple)):
+            return f"[{len(val)}]"
+        if isinstance(val, (bool, np.bool_)):
+            return "True" if val else "False"
+        if isinstance(val, (float, np.floating)):
+            return f"{val:.4g}"
+        return str(val)
+
+    def _refresh_bin_table(self):
+        """Fill the data table from the visible-channel view, colour-coding
+        each numeric column low-to-high with the selected colormap."""
+        tbl = self.bin_tbl
+        df = self.df_bin_ch
+        tbl.setUpdatesEnabled(False)
+        try:
+            tbl.clear()
+            if df is None or df.shape[0] == 0:
+                tbl.setRowCount(0); tbl.setColumnCount(0)
+                self._bin_state("Load a run to fill the data table")
+                return
+            n = self._int_or(self.ed_bin_tbl_rows.text(), 500)
+            n = max(min(n, df.shape[0]), 1)
+            self.ed_bin_tbl_rows.setText(str(n))
+            view = df.head(n)
+            cols = list(view.columns)
+            tbl.setColumnCount(len(cols))
+            tbl.setRowCount(n)
+            tbl.setHorizontalHeaderLabels([str(c) for c in cols])
+            color = self.cb_bin_tbl_color.isChecked()
+            cmap = colormaps[self.cmb_bin_tbl_cmap.currentText()]
+            for cix, col in enumerate(cols):
+                s = view[col]
+                num = self._tbl_numeric(s) if color else None
+                lo = hi = None
+                if num is not None:
+                    finite = num[np.isfinite(num)]
+                    if finite.size:
+                        lo, hi = float(finite.min()), float(finite.max())
+                for rix in range(n):
+                    item = QTableWidgetItem(self._tbl_fmt(s.iat[rix]))
+                    item.setTextAlignment(Qt.AlignCenter)
+                    if lo is not None and np.isfinite(num[rix]):
+                        t = 0.5 if hi == lo else (num[rix] - lo) / (hi - lo)
+                        r, g, b, _ = cmap(float(t))
+                        item.setBackground(QBrush(
+                            QColor(int(r * 255), int(g * 255), int(b * 255))))
+                        lum = 0.299 * r + 0.587 * g + 0.114 * b
+                        item.setForeground(QBrush(QColor(
+                            "#000000" if lum > 0.55 else "#ffffff")))
+                    tbl.setItem(rix, cix, item)
+        finally:
+            tbl.setUpdatesEnabled(True)
+        self._bin_state(f"Data table: {n} of {df.shape[0]:,} rows, "
+                        f"{len(cols)} columns")
 
     def _build_binary_controls(self):
         area = QScrollArea()
@@ -516,23 +650,30 @@ class DiagnosticsDialog(QDialog):
         side = QVBoxLayout(inner); side.setSpacing(6)
         side.setContentsMargins(6, 6, 6, 6)
 
-        # ── Run / load (applies to every tab -- always visible) ────────────────
-        side.addWidget(header("RUN"))
+        # ── Run / load ─────────────────────────────────────────────────────────
+        # The run properties (date / run / source / load) belong to the Energy
+        # sub-tab only -- you pick and load a run there, then explore it on the
+        # other sub-tabs. Wrapped in its own group so it hides off the Energy
+        # tab like the per-tab option groups below.
+        self._bin_run_grp = QWidget()
+        run_lay = QVBoxLayout(self._bin_run_grp)
+        run_lay.setContentsMargins(0, 0, 0, 0); run_lay.setSpacing(6)
+        run_lay.addWidget(header("RUN"))
         self.ed_bin_date = QLineEdit(); self.ed_bin_date.setPlaceholderText("YYYY-MM-DD")
-        r, _ = labeled_row("Date", self.ed_bin_date); side.addWidget(r)
+        r, _ = labeled_row("Date", self.ed_bin_date); run_lay.addWidget(r)
         self.ed_bin_run = QLineEdit(); self.ed_bin_run.setPlaceholderText("e.g. 8")
-        r, _ = labeled_row("Run", self.ed_bin_run); side.addWidget(r)
+        r, _ = labeled_row("Run", self.ed_bin_run); run_lay.addWidget(r)
         self.cmb_bin_type = QComboBox()
         self.cmb_bin_type.addItems(["Trace data", "Binary data", "Parquet"])
         self.cmb_bin_type.setToolTip("Which list-mode source to read for this run")
-        side.addWidget(_combo_row("Source", self.cmb_bin_type))
+        run_lay.addWidget(_combo_row("Source", self.cmb_bin_type))
         self.cmb_bin_cfd = QComboBox()
         self.cmb_bin_cfd.addItems(["All", "CFD on", "CFD off"])
         self.cmb_bin_cfd.setToolTip(
             "Filter trace acquisitions by CFD state (Trace data only). "
             "'CFD on' = CFD unchanged/enabled, 'CFD off' = CFD disabled.")
         self._cmb_bin_cfd_row = _combo_row("CFD", self.cmb_bin_cfd)
-        side.addWidget(self._cmb_bin_cfd_row)
+        run_lay.addWidget(self._cmb_bin_cfd_row)
         self.cb_bin_align = QCheckBox("Align on LGL sums")
         self.cb_bin_align.setToolTip(
             "Locate each trace's energy-filter (leading/gap/leading) sum "
@@ -541,7 +682,7 @@ class DiagnosticsDialog(QDialog):
             "match each trace. Applied on the fly -- no reload needed.")
         self.cb_bin_align.toggled.connect(self._toggle_bin_align)
         self._cb_bin_align_row = self.cb_bin_align
-        side.addWidget(self._cb_bin_align_row)
+        run_lay.addWidget(self._cb_bin_align_row)
         # CFD filtering and trace alignment only apply to raw trace data
         self.cmb_bin_type.currentTextChanged.connect(
             lambda k: self._cmb_bin_cfd_row.setVisible(k == "Trace data"))
@@ -552,14 +693,14 @@ class DiagnosticsDialog(QDialog):
         self._cb_bin_align_row.setVisible(_is_trace)
         self.ed_bin_bins = QLineEdit("4098"); self.ed_bin_bins.setFixedWidth(80)
         self.ed_bin_bins.setToolTip("Number of bins for the energy histograms")
-        r, _ = labeled_row("Bins", self.ed_bin_bins); side.addWidget(r)
+        r, _ = labeled_row("Bins", self.ed_bin_bins); run_lay.addWidget(r)
         self.btn_bin_load = QPushButton("Load")
         self.btn_bin_load.setObjectName("open_btn")
         self.btn_bin_load.setCursor(Qt.PointingHandCursor)
         self.btn_bin_load.setToolTip("Read the run's list-mode data and plot the "
                                      "per-channel energy histogram")
         self.btn_bin_load.clicked.connect(self._load_bin)
-        side.addWidget(self.btn_bin_load)
+        run_lay.addWidget(self.btn_bin_load)
 
         self.btn_bin_info = QPushButton("Run stats...")
         self.btn_bin_info.setObjectName("action_btn")
@@ -569,9 +710,9 @@ class DiagnosticsDialog(QDialog):
                                      "counts, rates, pile-up / CFD-error / trace-"
                                      "flag fractions and energy summaries")
         self.btn_bin_info.clicked.connect(self._open_bin_stats)
-        side.addWidget(self.btn_bin_info)
-
-        side.addWidget(hsep())
+        run_lay.addWidget(self.btn_bin_info)
+        run_lay.addWidget(hsep())
+        side.addWidget(self._bin_run_grp)
         self._bin_ctrl_groups = []
 
         # ── Energy plot ──────────────────────────────────────────────────────
@@ -683,10 +824,11 @@ class DiagnosticsDialog(QDialog):
             cb.toggled.connect(self._toggle_bin_filters)
             rand_lay.addWidget(cb)
 
-        # Custom-firmware CFD weight. Stock 500 MHz firmware fixes the CFD
-        # weight at w=1 (correct for our standard Pixie-16); our custom
-        # firmware build runs it at w=0.3125. Checked by default because that
-        # is the firmware in use here.
+        # Custom-firmware CFD weight -- a sub-option of the CFD box above. Stock
+        # 500 MHz firmware fixes the CFD weight at w=1 (correct for our standard
+        # Pixie-16); our custom firmware build runs it at w=0.3125. Checked by
+        # default because that is the firmware in use here. Indented under CFD
+        # and only active while CFD is on, to show it modifies that overlay.
         self.cb_bin_cfd_custom_w = QCheckBox(
             f"Custom firmware (w={pta.CFD_W_CUSTOM:g})")
         self.cb_bin_cfd_custom_w.setChecked(True)
@@ -696,7 +838,14 @@ class DiagnosticsDialog(QDialog):
             "(manual Eq 3-5). Leave this on for our custom firmware; uncheck "
             "it for a standard Pixie-16, where w=1 is correct.")
         self.cb_bin_cfd_custom_w.toggled.connect(self._toggle_bin_filters)
-        rand_lay.addWidget(self.cb_bin_cfd_custom_w)
+        # Indent it under the CFD checkbox so it reads as a child option.
+        _cfd_w_row = QWidget(); _cfd_w_lay = QHBoxLayout(_cfd_w_row)
+        _cfd_w_lay.setContentsMargins(20, 0, 0, 0); _cfd_w_lay.setSpacing(0)
+        _cfd_w_lay.addWidget(self.cb_bin_cfd_custom_w)
+        rand_lay.addWidget(_cfd_w_row)
+        # The sub-option is only meaningful while the CFD overlay is drawn.
+        self.cb_bin_cfd_custom_w.setEnabled(False)
+        self.cb_bin_cfd.toggled.connect(self.cb_bin_cfd_custom_w.setEnabled)
 
         self.cb_bin_leg_rand = QCheckBox("Legend")
         self.cb_bin_leg_rand.toggled.connect(self._toggle_bin_legend_rand)
@@ -731,6 +880,40 @@ class DiagnosticsDialog(QDialog):
         self.btn_bin_send2.clicked.connect(self._send_bin_trace_energy)
         own_lay.addWidget(self.btn_bin_send2)
         side.addWidget(own_grp); self._bin_ctrl_groups.append(own_grp)
+
+        # ── Data table ───────────────────────────────────────────────────────
+        tbl_grp = QWidget(); tbl_lay = QVBoxLayout(tbl_grp)
+        tbl_lay.setContentsMargins(0, 0, 0, 0); tbl_lay.setSpacing(6)
+        tbl_lay.addWidget(header("DATA TABLE"))
+        tbl_note = QLabel("A colour-coded view of the loaded list-mode data. Each "
+                          "numeric column is shaded low-to-high so patterns pop "
+                          "out. Only the first rows are shown, for speed.")
+        tbl_note.setObjectName("stat_key"); tbl_note.setWordWrap(True)
+        tbl_lay.addWidget(tbl_note)
+        self.ed_bin_tbl_rows = QLineEdit("500"); self.ed_bin_tbl_rows.setFixedWidth(80)
+        self.ed_bin_tbl_rows.setToolTip("How many rows (from the top) to display; "
+                                        "raise it to see more of the dataframe")
+        r, _ = labeled_row("Rows", self.ed_bin_tbl_rows); tbl_lay.addWidget(r)
+        self.cmb_bin_tbl_cmap = QComboBox()
+        self.cmb_bin_tbl_cmap.addItems(["viridis", "cividis", "magma", "coolwarm"])
+        self.cmb_bin_tbl_cmap.setToolTip("Colormap used to shade the numeric cells")
+        self.cmb_bin_tbl_cmap.currentTextChanged.connect(
+            lambda _t: self._refresh_bin_table())
+        tbl_lay.addWidget(_combo_row("Colormap", self.cmb_bin_tbl_cmap))
+        self.cb_bin_tbl_color = QCheckBox("Colour cells"); self.cb_bin_tbl_color.setChecked(True)
+        self.cb_bin_tbl_color.setToolTip("Shade each numeric cell by its value; "
+                                         "uncheck for a plain table")
+        self.cb_bin_tbl_color.toggled.connect(lambda _c: self._refresh_bin_table())
+        tbl_lay.addWidget(self.cb_bin_tbl_color)
+        self.btn_bin_tbl_refresh = QPushButton("Refresh table")
+        self.btn_bin_tbl_refresh.setObjectName("primary_btn")
+        self.btn_bin_tbl_refresh.setCursor(Qt.PointingHandCursor)
+        self.btn_bin_tbl_refresh.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Fixed)
+        self.btn_bin_tbl_refresh.setToolTip("Rebuild the table from the currently "
+                                            "visible channels")
+        self.btn_bin_tbl_refresh.clicked.connect(self._refresh_bin_table)
+        tbl_lay.addWidget(self.btn_bin_tbl_refresh)
+        side.addWidget(tbl_grp); self._bin_ctrl_groups.append(tbl_grp)
 
         self.lbl_bin_state = QLabel(""); self.lbl_bin_state.setObjectName("stat_key")
         self.lbl_bin_state.setWordWrap(True); side.addWidget(self.lbl_bin_state)
@@ -799,6 +982,7 @@ class DiagnosticsDialog(QDialog):
         self.df_bin = df
         self.df_bin_tr = None
         self.df_bin_rand = None
+        self._bin_span_range = None   # drop any highlight from the previous run
         # Build the per-channel visibility list (all visible by default).
         if "channel" in df.columns:
             self._bin_chans = sorted(int(c) for c in df.channel.unique())
@@ -878,12 +1062,12 @@ class DiagnosticsDialog(QDialog):
         """Recompute the working view from the currently-visible channels."""
         if self.df_bin is None:
             self.df_bin_ch = None
-            return
-        if "channel" not in self.df_bin.columns:
+        elif "channel" not in self.df_bin.columns:
             self.df_bin_ch = self.df_bin
-            return
-        vis = self._visible_channels()
-        self.df_bin_ch = self.df_bin[self.df_bin.channel.isin(vis)]
+        else:
+            vis = self._visible_channels()
+            self.df_bin_ch = self.df_bin[self.df_bin.channel.isin(vis)]
+        self._sync_bin_table()
 
     def _toggle_bin_channel(self, ch, visible):
         self._bin_ch_visible[ch] = visible
@@ -953,6 +1137,9 @@ class DiagnosticsDialog(QDialog):
             return
         mask = (self.df_bin_ch["energy"] > xmin) & (self.df_bin_ch["energy"] < xmax)
         self.df_bin_tr = self.df_bin_ch[mask].reset_index(drop=True)
+        # Remember the highlight so the random-trace sampler can draw only from
+        # this energy window (an empty drag clears it -> sample from everything).
+        self._bin_span_range = (xmin, xmax) if xmax > xmin else None
         n = self.df_bin_tr.shape[0]
         self.lbl_bin_ntr.setText(f"Total traces: {n}")
         self._plot_bin_traces(self.df_bin_tr, self._bin_ax["ergtr"],
@@ -1017,6 +1204,9 @@ class DiagnosticsDialog(QDialog):
             cb.setEnabled(enabled)
             if not enabled and cb.isChecked():
                 cb.blockSignals(True); cb.setChecked(False); cb.blockSignals(False)
+        # The custom-w sub-option follows the CFD box; blockSignals above skips
+        # the cascade, so mirror CFD's checked state onto it explicitly.
+        self.cb_bin_cfd_custom_w.setEnabled(enabled and self.cb_bin_cfd.isChecked())
 
     def _clear_bin_rand_twins(self):
         """Drop the twin y-axes from the previous Random-traces draw.
@@ -1280,6 +1470,12 @@ class DiagnosticsDialog(QDialog):
         n = self._int_or(self.ed_bin_ntraces.text(), 10)
         self.ed_bin_ntraces.setText(str(n))
         df = self.df_bin_ch
+        # If the user highlighted an energy region on the Energy tab, draw the
+        # random sample only from that window; otherwise use all events.
+        span = self._bin_span_range
+        if span is not None and "energy" in df.columns:
+            lo, hi = span
+            df = df[(df["energy"] > lo) & (df["energy"] < hi)]
         if self.cb_bin_pileup.isChecked():
             df = df[df.pileup == True]  # noqa: E712
         elif self.cb_bin_cfderr.isChecked():
@@ -1287,13 +1483,15 @@ class DiagnosticsDialog(QDialog):
         elif self.cb_bin_flag.isChecked():
             df = df[df.trace_flag == True]  # noqa: E712
         if df.shape[0] == 0:
-            self._bin_state("No events match that filter")
+            self._bin_state("No events match that filter"
+                            + (" in the highlighted region" if span else ""))
             return
         n = min(n, df.shape[0])
         self.df_bin_rand = df.sample(n).sort_index()
         self._plot_bin_rand()
         self.bin_plot_tabs.setCurrentIndex(2)
-        self._bin_state(f"Sampled {n} random traces")
+        region = (f" from [{span[0]:.1f}, {span[1]:.1f}]" if span else "")
+        self._bin_state(f"Sampled {n} random traces{region}")
 
     def _toggle_bin_fft(self):
         if not self.btn_bin_fft.isChecked():
