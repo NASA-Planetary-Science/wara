@@ -236,6 +236,14 @@ class Api3DDialog(QDialog):
             "blank uses dt as-is (assumes the dt spectrum is already "
             "calibrated so 0 ns = production time).")
 
+        self.cb_origin = QCheckBox("Show origin (0,0,0)")
+        self.cb_origin.setChecked(True)
+        self.cb_origin.setToolTip(
+            "Mark the reconstruction origin (the neutron source, at "
+            "X=Y=Z=0) with a red point in the 3D render, for a fixed "
+            "reference when orbiting the volume.")
+        side.addWidget(self.cb_origin)
+
         self.cb_r2 = QCheckBox("1/r² correction")
         self.cb_r2.setToolTip(
             "Weight each event by (r/r_mean)^p, where r is the distance from "

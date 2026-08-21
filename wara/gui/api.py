@@ -539,6 +539,8 @@ class ApiOptions(QScrollArea):
 class ApiController:
     """Wires an ApiOptions panel and ApiPage to the main app."""
 
+    _API3D_DIV_ID = "api3d-scene"   # fixed Plotly div id, for JS restyle calls
+
     def __init__(self, app, options: ApiOptions, page: ApiPage):
         self.app = app
         self.opts = options
@@ -578,6 +580,7 @@ class ApiController:
         self._filter_dlg = None
         self._api3d_dlg = None
         self._api3d_tmp = None      # last temp HTML file, removed on the next plot
+        self._api3d_origin_idx = None   # trace index of the red origin marker
         self._selectors = []
         # Persistent markers for the last applied interactive cut, kept on the
         # panels after the span/rectangle selector is removed so the active cut
@@ -2745,6 +2748,7 @@ class ApiController:
                 self._status(f"Could not open the 3D view: {exc}")
                 return
             self._api3d_dlg.btn_plot.clicked.connect(self._create_plot_3d)
+            self._api3d_dlg.cb_origin.toggled.connect(self._toggle_3d_origin)
         self._api3d_dlg.show()
         self._api3d_dlg.raise_()
         self._api3d_dlg.activateWindow()
@@ -2912,6 +2916,16 @@ class ApiController:
                 traces.append(t)
                 rendered = f"{self.df_current.shape[0]:,} events"
 
+            # Always include the origin marker as its own trace (visibility
+            # toggled live via Plotly.restyle -- see _toggle_3d_origin --
+            # instead of rebuilding/recomputing the whole volume on toggle).
+            traces.append(go.Scatter3d(
+                x=[0], y=[0], z=[0], mode="markers",
+                marker=dict(size=6, color="red"),
+                name="Origin", showlegend=False,
+                visible=dlg.cb_origin.isChecked()))
+            self._api3d_origin_idx = len(traces) - 1
+
             fig = go.Figure(data=traces)
             fig.update_layout(
                 template="plotly_dark",
@@ -2939,7 +2953,8 @@ class ApiController:
             # Inline plotly.js so the render works offline; load via a temp file
             # (setHtml has a payload-size limit that a full volume can exceed).
             # Force a dark page body so there's no white margin around the figure.
-            html = fig.to_html(include_plotlyjs="inline", full_html=True)
+            html = fig.to_html(include_plotlyjs="inline", full_html=True,
+                                div_id=self._API3D_DIV_ID)
             html = html.replace(
                 "<body>", f"<body style='margin:0;background:{API_PLOT_BG}'>", 1)
             with tempfile.NamedTemporaryFile(
@@ -2960,6 +2975,17 @@ class ApiController:
         except Exception as exc:  # noqa: BLE001  -- surface render errors to the dialog
             traceback.print_exc()
             self._set_3d_status(f"Could not build the 3D plot: {exc}")
+
+    def _toggle_3d_origin(self, checked):
+        """Show/hide the origin marker instantly via Plotly.restyle, without
+        rebuilding (and recomputing) the whole volume plot."""
+        dlg = self._api3d_dlg
+        if dlg is None or self._api3d_origin_idx is None:
+            return
+        vis = "true" if checked else "false"
+        js = (f"if (window.Plotly) {{ Plotly.restyle('{self._API3D_DIV_ID}', "
+              f"{{visible: [{vis}]}}, [{self._api3d_origin_idx}]); }}")
+        dlg.browser.page().runJavaScript(js)
 
     def _set_3d_status(self, msg):
         if self._api3d_dlg is not None:

@@ -21,7 +21,8 @@ import pandas as pd
 import pytest
 
 pytest.importorskip("PyQt5")
-from PyQt5.QtWidgets import QApplication, QWidget, QPushButton, QLabel, QDialog
+from PyQt5.QtWidgets import (
+    QApplication, QWidget, QPushButton, QLabel, QDialog, QCheckBox)
 
 from wara import read_parquet_api, apicalc
 from wara.gui.app import WaraApp
@@ -39,9 +40,16 @@ class _StubBrowser:
 
     def __init__(self):
         self.urls = []
+        self.js_calls = []
 
     def setUrl(self, url):
         self.urls.append(url)
+
+    def page(self):
+        return self
+
+    def runJavaScript(self, js):
+        self.js_calls.append(js)
 
 
 class _Stub3DDialog(QWidget):
@@ -62,6 +70,8 @@ class _Stub3DDialog(QWidget):
         self.btn_plot = QPushButton(self)
         self.status = QLabel(self)
         self.browser = _StubBrowser()
+        self.cb_origin = QCheckBox(self)
+        self.cb_origin.setChecked(True)
 
     def value(self, attr, cast):
         return cast(self.DEFAULTS[attr])
@@ -646,7 +656,7 @@ def test_long_name_is_elided_with_full_tooltip(api):
     w._set_file_label(long_name)
     assert w._file_label.text() != long_name          # shortened to fit
     assert len(w._file_label.text()) < len(long_name)
-    assert w._file_label.toolTip() == long_name        # full name on hover
+    assert long_name in w._file_label.toolTip()         # full name on hover
 
 
 def test_3d_view_guards_before_load(api):
@@ -671,6 +681,33 @@ def test_3d_view_renders_volume(api, monkeypatch):
     c._create_plot_3d()
     assert not os.path.exists(first)
     assert c._api3d_tmp != first
+    c._cleanup_3d_tmp()
+
+
+def test_3d_origin_marker_toggle(api, monkeypatch):
+    """The red origin marker is on by default and included as its own trace;
+    unchecking it hides it instantly (Plotly.restyle over JS), without
+    waiting for -- or triggering -- a full replot."""
+    _w, c = api
+    c._load()
+    monkeypatch.setattr(api_mod, "Api3DDialog", _Stub3DDialog)
+    c._open_3d()
+    dlg = c._api3d_dlg
+    assert dlg.cb_origin.isChecked()
+
+    c._create_plot_3d()
+    origin_idx = c._api3d_origin_idx
+    assert origin_idx is not None
+
+    dlg.cb_origin.setChecked(False)
+    assert dlg.browser.js_calls, "toggling the checkbox must run JS immediately"
+    last_js = dlg.browser.js_calls[-1]
+    assert "restyle" in last_js
+    assert f"[{origin_idx}]" in last_js
+    assert "visible: [false]" in last_js
+
+    dlg.cb_origin.setChecked(True)
+    assert "visible: [true]" in dlg.browser.js_calls[-1]
     c._cleanup_3d_tmp()
 
 

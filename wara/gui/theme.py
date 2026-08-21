@@ -1,8 +1,29 @@
 """Palette, fonts, stylesheet, and small paint helpers for the wara GUI."""
+import html
+
 import matplotlib
 from PyQt5.QtCore import Qt, QSize, QRectF
 from PyQt5.QtGui import QColor, QPixmap, QPainter, QIcon, QBrush, QLinearGradient, QPen
-from PyQt5.QtWidgets import QHeaderView, QPushButton
+from PyQt5.QtWidgets import QHeaderView, QPushButton, QWidget
+
+# Plain-text QToolTips only wrap at the screen edge, so a long single-line
+# tooltip (common in this GUI -- see the "use tooltips generously" convention)
+# renders as one very wide, hard-to-read strip. Rich-text tooltips wrap at a
+# fixed width instead, so every setToolTip() call is wrapped in a width-capped
+# <div> here -- once, globally -- rather than at each of the ~300 call sites.
+_TOOLTIP_WRAP_WIDTH = 320
+_TOOLTIP_WRAP_THRESHOLD = 60  # below this, a single line already fits fine
+_orig_set_tool_tip = QWidget.setToolTip
+
+
+def _wrapped_set_tool_tip(self, text):
+    if text and "<" not in text and len(text) > _TOOLTIP_WRAP_THRESHOLD:
+        text = (f"<div style='max-width:{_TOOLTIP_WRAP_WIDTH}px;'>"
+                f"{html.escape(text)}</div>")
+    _orig_set_tool_tip(self, text)
+
+
+QWidget.setToolTip = _wrapped_set_tool_tip
 
 # ── Palette ─────────────────────────────────────────────────────────────────
 BG_DARK      = "#0a0a0f"
