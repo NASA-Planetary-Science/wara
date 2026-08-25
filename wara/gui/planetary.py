@@ -552,6 +552,36 @@ _GLOBE_JS = """
   var gd = document.querySelector('.plotly-graph-div');
   var readout = document.getElementById('wara-readout');
   var nclick = 0;
+  /* plotly.py >= 5.24 serialises numpy arrays as base64 "typed array specs"
+     ({dtype, bdata, shape}) instead of nested JSON arrays, so gd.data[0].x
+     is an *object* with no .length. Every helper below that re-derives
+     geometry from the base surface must decode first, or it silently
+     iterates zero times and builds an empty (and therefore invisible)
+     trace. grid2d() accepts either form and always returns rows of
+     numbers; it is idempotent, so it is safe on already-decoded data. */
+  var DTYPES = {f8: Float64Array, f4: Float32Array,
+                i1: Int8Array, u1: Uint8Array,
+                i2: Int16Array, u2: Uint16Array,
+                i4: Int32Array, u4: Uint32Array};
+  function grid2d(v) {
+    if (v === null || v === undefined) { return v; }
+    if (Array.isArray(v) && Array.isArray(v[0])) { return v; }
+    if (v.bdata === undefined) { return v; }
+    var T = DTYPES[v.dtype];
+    if (T === undefined) { return v; }
+    var bin = atob(v.bdata), buf = new Uint8Array(bin.length);
+    for (var k = 0; k < bin.length; k++) { buf[k] = bin.charCodeAt(k); }
+    var flat = new T(buf.buffer);
+    var shape = ('' + v.shape).split(',');
+    if (shape.length < 2) { return Array.prototype.slice.call(flat); }
+    var nrow = +shape[0], ncol = +shape[1], out = [];
+    for (var i = 0; i < nrow; i++) {
+      var row = [];
+      for (var j = 0; j < ncol; j++) { row.push(flat[i * ncol + j]); }
+      out.push(row);
+    }
+    return out;
+  }
   function lonlat(p) {
     var r = Math.sqrt(p.x * p.x + p.y * p.y + p.z * p.z);
     var lat = Math.asin(p.z / r) * 180 / Math.PI;
@@ -662,7 +692,7 @@ _GLOBE_JS = """
      colorscale, so the resolved [t, color] array must be kept). */
   window.waraSetSurface = function (values, cmin, cmax, title, colorscale) {
     if (window._waraAlbedo === undefined) {
-      window._waraAlbedo = gd.data[0].surfacecolor;
+      window._waraAlbedo = grid2d(gd.data[0].surfacecolor);
       window._waraAlbedoScale = gd._fullData[0].colorscale;
     }
     Plotly.restyle(gd, {surfacecolor: [values],
@@ -690,7 +720,7 @@ _GLOBE_JS = """
   window.waraSetTopo = function (elev, exag) {
     var t = gd.data[0];
     if (window._waraXYZ === undefined) {
-      window._waraXYZ = {x: t.x, y: t.y, z: t.z};
+      window._waraXYZ = {x: grid2d(t.x), y: grid2d(t.y), z: grid2d(t.z)};
     }
     if (elev !== null) { window._waraElev = elev; }
     var e = window._waraElev;
@@ -731,14 +761,16 @@ _GLOBE_JS = """
     var ov = window._waraOverlay;
     if (ov === undefined) { return; }
     window.waraClearOverlay(true);
-    var t = gd.data[0], f = 1.002;
+    var f = 1.002;
+    var bx = grid2d(gd.data[0].x), by = grid2d(gd.data[0].y),
+        bz = grid2d(gd.data[0].z);
     var sx = [], sy = [], sz = [];
-    for (var i = 0; i < t.x.length; i++) {
+    for (var i = 0; i < bx.length; i++) {
       var rx = [], ry = [], rz = [];
-      for (var j = 0; j < t.x[i].length; j++) {
-        rx.push(t.x[i][j] * f);
-        ry.push(t.y[i][j] * f);
-        rz.push(t.z[i][j] * f);
+      for (var j = 0; j < bx[i].length; j++) {
+        rx.push(bx[i][j] * f);
+        ry.push(by[i][j] * f);
+        rz.push(bz[i][j] * f);
       }
       sx.push(rx); sy.push(ry); sz.push(rz);
     }

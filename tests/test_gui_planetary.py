@@ -13,6 +13,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 import matplotlib
 matplotlib.use("Agg")
 
+import re
 from datetime import date
 
 import numpy as np
@@ -896,6 +897,34 @@ def test_grid_checkbox_toggles_in_place(tab, monkeypatch):
     calls.clear()
     tab.opts.cb_grid.setChecked(False)
     assert calls == ["waraSetGrid(false);"]
+
+
+def test_globe_js_decodes_base64_typed_arrays():
+    """plotly.py >= 5.24 serialises numpy arrays as base64 typed-array specs
+    ({dtype, bdata, shape}) rather than nested JSON lists, so ``gd.data[0].x``
+    is an object with no ``.length``. Any helper that re-derives geometry from
+    the base surface must go through ``grid2d()`` first, or it iterates zero
+    times and silently builds an empty -- and therefore invisible -- trace
+    (this is what broke the semi-transparent abundance overlay and the
+    topography relief on machines with a newer plotly)."""
+    js = P._GLOBE_JS
+    assert "grid2d" in js and "bdata" in js and "atob" in js
+    # Every read of a base-surface data array must be wrapped in grid2d(...).
+    code = re.sub(r"/\*.*?\*/", "", js, flags=re.S)   # drop /* comments */
+    for m in re.finditer(r"\S*gd\.data\[0\]\.(x|y|z|surfacecolor)", code):
+        assert m.group(0).startswith("grid2d("), m.group(0)
+
+
+def test_globe_figure_uses_typed_array_specs():
+    """Guards the assumption above: confirm the installed plotly really does
+    emit base64 typed-array specs for the Moon mesh. If this ever stops being
+    true the decoder is harmlessly bypassed (grid2d passes nested arrays
+    through), so this is documentation, not a constraint."""
+    pytest.importorskip("plotly")
+    html = P.build_globe_html(8, 6, graticule=False)
+    i = html.rfind("Plotly.newPlot(")
+    payload = html[i:i + 4000]
+    assert '"bdata"' in payload or '"x":[[' in payload
 
 
 def test_globe_html_graticule_initial_visibility():
