@@ -36,3 +36,15 @@ def test_already_rich_text_tooltip_is_not_double_wrapped(qapp):
     rich = "<b>already rich</b> " + "x" * 100
     b.setToolTip(rich)
     assert b.toolTip() == rich
+
+
+def test_stylesheet_suppresses_the_platform_focus_rectangle():
+    """Arrowing down the nav rail used to leave the platform's own focus box
+    drawn inside the button's border, on top of the themed look, until focus
+    moved on. `outline: none` on the base rule turns it off everywhere -- a
+    QSS type selector matches subclasses, so the QWidget rule reaches every
+    widget in the app. (Not checkable by rendering: the offscreen platform
+    doesn't paint focus rects at all, so a pixel test would pass either way.)"""
+    base = T.STYLESHEET.split("QWidget#nav_panel")[0]
+    assert "QMainWindow, QWidget {" in base
+    assert "outline: none;" in base

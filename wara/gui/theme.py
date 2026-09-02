@@ -162,6 +162,15 @@ QMainWindow, QWidget {{
     color: {TEXT_PRIMARY};
     font-family: {FONT_FAMILY};
     font-size: 15px;
+    /* Kill the platform focus rectangle. Even on a fully stylesheeted widget
+       Qt still paints its own dotted/solid box inside the border of whatever
+       last held keyboard focus, and it stays there until focus moves on -- so
+       arrowing down the nav rail leaves a second, uglier box drawn on top of
+       the button's own. Nothing is lost by dropping it: the widgets people
+       reach with the arrow keys are checkable and already show where they are
+       through :checked. A type selector matches subclasses, so this one rule
+       covers every widget in the app. */
+    outline: none;
 }}
 
 QWidget#nav_panel {{ background-color: {BG_PANEL}; border: 1px solid {BORDER}; border-radius: 8px; }}
