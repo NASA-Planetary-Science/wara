@@ -119,6 +119,32 @@ applies **live filters** across the panels, and lets you:
 - run **time-slice fits** across the `dt` distribution, and
 - pick **X–Y tile selections** to build energy-region-vs-position profiles.
 
+### Interactive cuts: the uncut outline and the kept zoom
+
+With **Interactive cuts** on, dragging a span on a spectrum (or a rectangle on
+the X–Y map) filters the events and redraws the other panels from the cut data.
+Two things make that readable:
+
+- **Show uncut outline** (DISPLAY, on by default) draws the *uncut* run faintly
+  in grey behind the energy, alpha and `dt` spectra while a cut is applied. (The
+  X–Y map is left alone — a grey density either hides behind the hexbins or
+  washes them out, and the cut region is already drawn on that panel.) A
+  selection means little
+  without the whole it was taken from: the outline shows how much of the run the
+  gate kept, and it holds each panel on the scale of the whole, so a cut reads as
+  a *fraction* of the run instead of being re-stretched to fill the axes. It
+  appears only once a cut is applied (before that it would exactly overlap the
+  data) and disappears again with **← Back** or **Reset**. Untick the box to get
+  the plain, self-scaling panels back.
+- **Zoom survives a cut.** A view you set with the navigation toolbar (zoom or
+  pan) is put back after the redraw, so gating a peak you have zoomed into no
+  longer snaps the panel out to the full range. Panels you have not touched
+  still re-range with the data, and **Home**/**Back** on the toolbar still lead
+  out of the kept zoom to the freshly drawn full view.
+
+A runnable, GUI-free version of the outline is in
+`examples/other/example_api_uncut_outline.py`.
+
 ### Flat-field runs (channel 9)
 
 Entering channel **9** loads the run as a *flat field*: the alpha-detector

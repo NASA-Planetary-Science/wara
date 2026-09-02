@@ -61,6 +61,7 @@ from the *filtered* data after an X-Y selection).
 import traceback
 import time
 import shutil
+from contextlib import contextmanager
 from datetime import datetime
 
 import numpy as np
@@ -223,6 +224,18 @@ class ApiPage(QWidget):
         the new home."""
         try:
             self.toolbar.update()
+        except Exception:  # noqa: BLE001
+            pass
+
+    def push_view(self):
+        """Push the axes' current limits onto the toolbar's view history.
+
+        Used by :meth:`ApiController._preserve_zoom` to keep 'Home' honest when
+        a cut redraws a panel the user had zoomed into: the freshly drawn (full)
+        view is pushed first, the kept zoom second -- so Home/Back still lead
+        back out instead of returning to the zoom you are already looking at."""
+        try:
+            self.toolbar.push_current()
         except Exception:  # noqa: BLE001
             pass
 
@@ -396,6 +409,16 @@ class ApiOptions(QScrollArea):
         self.cb_xy_log = QCheckBox("X-Y Log color")
         self.cb_xy_log.setToolTip("Logarithmic color scale on the X-Y map")
         lay.addWidget(self.cb_xy_log)
+        # The "what this was cut out of" outline. On by default: a selection
+        # means little without the whole it was taken from.
+        self.cb_ghost = QCheckBox("Show uncut outline")
+        self.cb_ghost.setChecked(True)
+        self.cb_ghost.setToolTip(
+            "While an interactive cut is applied, draw the uncut run faintly in "
+            "grey behind the\nenergy, alpha and time spectra, so the selection "
+            "can be read against the whole\nit came from. The X-Y map is left "
+            "alone.\nHas no effect until a cut is made.")
+        lay.addWidget(self.cb_ghost)
         self.ed_vmax = QLineEdit(); self.ed_vmax.setPlaceholderText("vmax")
         vrow, _ = labeled_row("vmax", self.ed_vmax)
         self.ed_vmax.setFixedWidth(70)
@@ -548,6 +571,15 @@ class ApiController:
         self.df_api = None
         self.df_current = None
         self.df_previous = None
+        # The working frame with *no* cut applied (df_current as _configure_keys
+        # left it). What the faded grey outline behind every panel is drawn from
+        # -- df_api is not usable for that: the position columns (X2/Y2) are
+        # derived onto the working frame, not onto the master.
+        self._df_uncut = None
+        # Per-axis limits as the last redraw left them, keyed by axes object.
+        # A panel whose current limits differ from these was zoomed/panned by
+        # hand, and _preserve_zoom puts that view back after a cut redraws it.
+        self._auto_views = {}
         self._undo_state = None     # snapshot: (df_current, df_previous, en_flag, dt_flag, xy_flag)
         # Source run identity (set on load); used by "Apply to data".
         self._src_date = self._src_runnr = self._src_ch = None
@@ -692,6 +724,7 @@ class ApiController:
         o.btn_sigma.clicked.connect(self._open_sigma)
         o.cb_spe_log.toggled.connect(self._toggle_spe_log)
         o.cb_xy_log.toggled.connect(lambda *_: self._replot_xy())
+        o.cb_ghost.toggled.connect(self._toggle_ghost)
         o.cb_alpha.toggled.connect(self._toggle_alpha_panel)
         o.ed_vmax.returnPressed.connect(self._apply_vmax)
         for ed in (o.ed_ebins, o.ed_tbins, o.ed_xybins, o.ed_abins):
@@ -722,20 +755,8 @@ class ApiController:
         self._cut_xy, self._cut_alpha = cut_xy, cut_a
         self._undo_state = None
         self.opts.btn_undo.setEnabled(False)
-        if self.page.ax_spe is not None:
-            self.page.ax_spe.clear()
-            self._plot_energy(self.df_current)
-        if self.page.ax_dt is not None:
-            self.page.ax_dt.clear()
-            self._plot_time(self.df_current)
-        if self.page.ax_alpha is not None:
-            self.page.ax_alpha.clear()
-            self._plot_alpha(self.df_current)
-        if self.page.ax_aspe is not None:
-            self.page.ax_aspe.clear()
-            self._plot_alpha_energy(self.df_current)
-        self._replot_xy()
-        self.page.reset_nav()
+        with self._preserve_zoom():
+            self._redraw_panels()
         self.page.canvas.draw_idle()
         self._status(f"Restored previous state  ·  {self.df_current.shape[0]:,} events")
 
@@ -884,6 +905,10 @@ class ApiController:
         if ("X2" not in self.df_current.columns
                 and {"A", "B", "C", "D"}.issubset(self.df_current.columns)):
             self.df_current = apicalc.calc_own_pos(self.df_current)
+        # Every caller re-derives the working frame from df_api before getting
+        # here, so this is the run with no cut on it: the frame the faded grey
+        # outline behind each panel is drawn from (:meth:`_ghost_df`).
+        self._df_uncut = self.df_current
         df = self.df_current
         if {"X2", "Y2"}.issubset(df.columns):
             self.xkey, self.ykey = "X2", "Y2"
@@ -999,6 +1024,9 @@ class ApiController:
         # twinx references don't keep a stale handle to the old axes.
         self._sig_active = False
         self._ax_sig = None
+        # The axes objects are about to be replaced, so the views remembered
+        # for the old ones mean nothing (and would pin dead axes in memory).
+        self._auto_views = {}
         self.page.build_axes(flat_field=self.flat_field, alpha=self._flat_alpha,
                              alpha_panel=self._alpha_active)
         self._detach_selectors()
@@ -1056,6 +1084,105 @@ class ApiController:
             lines.insert(0, f"<i style='color:{T.TEXT_DIM}'>{self._settings_error}</i>")
         self.opts.lbl_info.setText("<br>".join(lines))
 
+    # -- uncut outline ("ghost") -----------------------------------------------
+    #: How the uncut run is drawn behind a cut one: a dim grey line, thin
+    #: enough to stay behind the selection and solid enough to be read as the
+    #: whole it came from.
+    GHOST_LINE = {"color": T.TEXT_DIM, "alpha": 0.55, "linewidth": 0.8,
+                  "zorder": 1}
+    #: The X-Y map has no outline: a grey density under a hexbin either hides
+    #: behind it or washes it out, and the heat map is the answer there. The
+    #: cut region is already marked on that panel by :meth:`_draw_cut_markers`.
+
+    def _cut_active(self):
+        """True while any interactive cut is applied to the working frame."""
+        return any(c is not None for c in (self._cut_energy, self._cut_time,
+                                           self._cut_xy, self._cut_alpha))
+
+    def _ghost_df(self):
+        """The uncut frame to draw faintly behind the panels, or None.
+
+        None unless a cut is actually applied and something was removed by it:
+        the outline answers "what was this cut out of", and drawn against the
+        whole run from the moment a file opens it is a second spectrum nobody
+        asked for (and an exactly overlapping one at that)."""
+        if not self.opts.cb_ghost.isChecked():
+            return None
+        if self._df_uncut is None or self.df_current is None:
+            return None
+        if not self._cut_active():
+            return None
+        if self._df_uncut.shape[0] <= self.df_current.shape[0]:
+            return None
+        return self._df_uncut
+
+    def _ghost_hist(self, key, bins, hrange):
+        """Counts of the uncut frame on *key*, binned like the panel, or None."""
+        df = self._ghost_df()
+        if df is None or key is None or key not in df.columns:
+            return None
+        vals = df[key].to_numpy(dtype=float)
+        vals = vals[np.isfinite(vals)]
+        if vals.size == 0:
+            return None
+        return np.histogram(vals, bins=bins, range=hrange)[0]
+
+    def _draw_ghost_line(self, ax, x, counts):
+        """Draw one uncut outline behind a spectrum panel (no-op for None)."""
+        if counts is None:
+            return
+        ax.plot(x, counts, label="_uncut", **self.GHOST_LINE)
+
+    # -- zoom preservation -----------------------------------------------------
+    def _panel_axes(self):
+        """Every panel axis that currently exists, in no particular order."""
+        return [ax for ax in (self.page.ax_spe, self.page.ax_dt, self.page.ax_xy,
+                              self.page.ax_alpha, self.page.ax_aspe)
+                if ax is not None]
+
+    def _remember_view(self, ax):
+        """Record the limits a fresh (unzoomed) redraw of *ax* just produced."""
+        if ax is not None:
+            self._auto_views[ax] = (ax.get_xlim(), ax.get_ylim())
+
+    def _user_view(self, ax):
+        """The limits of *ax* if the user zoomed/panned it, else None.
+
+        Compared against what the last redraw left (:meth:`_remember_view`):
+        anything else on the axis got there through the navigation toolbar, and
+        is a view the user chose and should keep across a cut."""
+        auto = self._auto_views.get(ax)
+        if auto is None:
+            return None
+        cur = (ax.get_xlim(), ax.get_ylim())
+        if np.allclose(cur[0], auto[0]) and np.allclose(cur[1], auto[1]):
+            return None
+        return cur
+
+    @contextmanager
+    def _preserve_zoom(self):
+        """Redraw the panels without throwing away a zoom the user set.
+
+        A cut clears and re-plots every panel, and a fresh plot autoscales --
+        so before this, zooming in on a peak and then gating it snapped the
+        view straight back out to the whole spectrum, which is exactly when the
+        zoom is wanted. Panels the user never touched still follow the data
+        (their range is *supposed* to move with a cut); only hand-set views are
+        restored."""
+        kept = {ax: view for ax in self._panel_axes()
+                if (view := self._user_view(ax)) is not None}
+        try:
+            yield
+        finally:
+            # Home is the freshly drawn view; the kept zoom goes on top of it,
+            # so the toolbar can still walk back out (see ApiPage.push_view).
+            self.page.reset_nav()
+            if kept:
+                self.page.push_view()
+                for ax, (xlim, ylim) in kept.items():
+                    ax.set_xlim(xlim); ax.set_ylim(ylim)
+                self.page.push_view()
+
     # -- panel drawing ---------------------------------------------------------
     def _compute_energy_hist(self, df):
         """Bin *df* into the energy histogram (self.gam / self.gam_x).
@@ -1074,12 +1201,15 @@ class ApiController:
         ax = self.page.ax_spe
         if ax is None:
             return
+        self._draw_ghost_line(
+            ax, self.gam_x, self._ghost_hist(self.ekey, self.ebins, self.erange))
         ax.plot(self.gam_x, self.gam, color=T.LOGO_GREEN, linewidth=0.9)
         ax.set_yscale("log" if self.opts.cb_spe_log.isChecked() else "linear")
         ax.set_xlabel(self._energy_xlabel())
         ax.set_ylabel("Counts")
         self.page._style(ax)
         self._draw_cut_markers()
+        self._remember_view(ax)
 
     def _plot_alpha(self, df):
         """Draw the alpha energy spectrum (left panel of the split flat-field
@@ -1092,12 +1222,15 @@ class ApiController:
         if ax is None or df is None or self.ekey is None or "alpha" not in df.columns:
             return
         self._compute_energy_hist(df)
+        self._draw_ghost_line(
+            ax, self.gam_x, self._ghost_hist(self.ekey, self.ebins, self.erange))
         ax.plot(self.gam_x, self.gam, color=T.LOGO_GREEN, linewidth=0.9)
         ax.set_yscale("log" if self.opts.cb_spe_log.isChecked() else "linear")
         ax.set_xlabel(self._alpha_xlabel())
         ax.set_ylabel("Counts")
         self.page._style(ax)
         self._draw_cut_markers()
+        self._remember_view(ax)
 
     # -- alpha energy panel (normal runs) --------------------------------------
     @property
@@ -1147,12 +1280,15 @@ class ApiController:
         if ax is None or df is None or self.akey is None or self.akey not in df:
             return
         self._compute_alpha_hist(df)
+        self._draw_ghost_line(
+            ax, self.alp_x, self._ghost_hist(self.akey, self.abins, self.arange))
         ax.plot(self.alp_x, self.alp, color=T.ACCENT_AMBER, linewidth=0.9)
         ax.set_yscale("log" if self.opts.cb_spe_log.isChecked() else "linear")
         ax.set_xlabel("Alpha energy (channels)")
         ax.set_ylabel("Counts")
         self.page._style(ax)
         self._draw_cut_markers()
+        self._remember_view(ax)
 
     def _alpha_xlabel(self):
         """Alpha-panel x-label: raw channels until a calibration is applied."""
@@ -1183,6 +1319,12 @@ class ApiController:
             return
         self._clear_dt_twin()
         low, high = np.percentile(df[self._dt_key], [0.2, 99.5])
+        ghost = self._ghost_df()
+        if ghost is not None and self._dt_key in ghost.columns:
+            # Bin the cut spectrum over the *uncut* window, so the outline is
+            # whole and the axis stops jumping every time a gate narrows.
+            glow, ghigh = np.percentile(ghost[self._dt_key], [0.2, 99.5])
+            low, high = min(low, glow), max(high, ghigh)
         corrected = self._dt_corrected and self._dt_key != "dt" and "dt" in df.columns
         if corrected:
             # Show the raw dt faintly behind the corrected spectrum, over a
@@ -1192,17 +1334,28 @@ class ApiController:
             low, high = min(low, rlow), max(high, rhigh)
             ax.hist(df["dt"], bins=self.tbins, range=(low, high),
                     color=T.TEXT_DIM, alpha=0.35, label="raw")
+        if ghost is not None and self._dt_key in ghost.columns:
+            # Stepped through np.histogram rather than ax.hist: the outline is
+            # one line, where ax.hist would build a patch per bin on top of the
+            # ones the panel already draws.
+            gcounts, gedges = np.histogram(
+                ghost[self._dt_key].to_numpy(dtype=float),
+                bins=self.tbins, range=(low, high))
+            ax.step(gedges, np.append(gcounts, gcounts[-1]), where="post",
+                    label="uncut", **self.GHOST_LINE)
         # Dark bin edges (as in the legacy plot) separate the bars on the cyan fill.
         ax.hist(df[self._dt_key], bins=self.tbins, range=(low, high),
                 color=T.ACCENT_CYAN, alpha=0.8, edgecolor=API_PLOT_BG, linewidth=0.4,
-                label="corrected" if corrected else None)
+                label="corrected" if corrected else ("cut" if ghost is not None
+                                                     else None))
         ax.set_xlabel("dt (ns, shifted)" if self._dt_corrected else "dt (ns)")
         ax.set_ylabel("Counts")
-        if corrected:
+        if corrected or ghost is not None:
             ax.legend(loc="upper right", fontsize=11, facecolor=API_PLOT_BG,
                       edgecolor=T.BORDER, labelcolor=T.TEXT_PRIMARY)
         self.page._style(ax)
         self._draw_cut_markers()
+        self._remember_view(ax)
 
     def _replot_xy(self):
         """Redraw the X-Y hexbin from df_current with the current scale/vmax."""
@@ -1220,9 +1373,14 @@ class ApiController:
             kwargs["vmax"] = self.vmax
         df = self.df_current
         if df.shape[0] == 0:
+            # Nothing survived the cut, so the cursor readout has no hexbin of
+            # its own to report.
             self.page.set_xy_lookup(None, log, 0.0)
+            ax.set_xlim(self.xyplane[0], self.xyplane[1])
+            ax.set_ylim(self.xyplane[2], self.xyplane[3])
             self.page._style(ax, grid=False)
             self._draw_cut_markers()
+            self._remember_view(ax)
             self._xy_reattach_overlay()
             self.page.canvas.draw_idle()
             return
@@ -1244,6 +1402,7 @@ class ApiController:
         ax.set_xlabel("X"); ax.set_ylabel("Y")
         self.page._style(ax, grid=False)
         self._draw_cut_markers()
+        self._remember_view(ax)
         self._xy_reattach_overlay()
         self.page.canvas.draw_idle()
 
@@ -1375,14 +1534,14 @@ class ApiController:
             mask = (self.df_previous[self.ekey] > xmin) & (self.df_previous[self.ekey] < xmax)
             self.df_current = self.df_previous[mask]
         self.df_current = self.df_current.reset_index(drop=True)
-        if self.page.ax_dt is not None:
-            self.page.ax_dt.clear()
-            self._plot_time(self.df_current)
-        if self.page.ax_aspe is not None:
-            self.page.ax_aspe.clear()
-            self._plot_alpha_energy(self.df_current)
-        self._replot_xy()
-        self.page.reset_nav()
+        with self._preserve_zoom():
+            if self.page.ax_dt is not None:
+                self.page.ax_dt.clear()
+                self._plot_time(self.df_current)
+            if self.page.ax_aspe is not None:
+                self.page.ax_aspe.clear()
+                self._plot_alpha_energy(self.df_current)
+            self._replot_xy()
         self.page.canvas.draw_idle()
         self._status(f"Energy filter [{xmin:g}, {xmax:g}]  ·  {self.df_current.shape[0]:,} events")
 
@@ -1407,14 +1566,14 @@ class ApiController:
                     & (self.df_previous[self.akey] < amax))
             self.df_current = self.df_previous[mask]
         self.df_current = self.df_current.reset_index(drop=True)
-        if self.page.ax_spe is not None:
-            self.page.ax_spe.clear()
-            self._plot_energy(self.df_current)
-        if self.page.ax_dt is not None:
-            self.page.ax_dt.clear()
-            self._plot_time(self.df_current)
-        self._replot_xy()
-        self.page.reset_nav()
+        with self._preserve_zoom():
+            if self.page.ax_spe is not None:
+                self.page.ax_spe.clear()
+                self._plot_energy(self.df_current)
+            if self.page.ax_dt is not None:
+                self.page.ax_dt.clear()
+                self._plot_time(self.df_current)
+            self._replot_xy()
         self.page.canvas.draw_idle()
         self._status(f"Alpha energy filter [{amin:g}, {amax:g}]  ·  "
                      f"{self.df_current.shape[0]:,} events")
@@ -1434,14 +1593,14 @@ class ApiController:
             mask = (self.df_previous[self._dt_key] > tmin) & (self.df_previous[self._dt_key] < tmax)
             self.df_current = self.df_previous[mask]
         self.df_current = self.df_current.reset_index(drop=True)
-        if self.page.ax_spe is not None:
-            self.page.ax_spe.clear()
-            self._plot_energy(self.df_current)
-        if self.page.ax_aspe is not None:
-            self.page.ax_aspe.clear()
-            self._plot_alpha_energy(self.df_current)
-        self._replot_xy()
-        self.page.reset_nav()
+        with self._preserve_zoom():
+            if self.page.ax_spe is not None:
+                self.page.ax_spe.clear()
+                self._plot_energy(self.df_current)
+            if self.page.ax_aspe is not None:
+                self.page.ax_aspe.clear()
+                self._plot_alpha_energy(self.df_current)
+            self._replot_xy()
         self.page.canvas.draw_idle()
         self._status(f"Time filter [{tmin:g}, {tmax:g}] ns  ·  {self.df_current.shape[0]:,} events")
 
@@ -1462,24 +1621,25 @@ class ApiController:
         mask = ((base[self.xkey] > xlo) & (base[self.xkey] < xhi)
                 & (base[self.ykey] > ylo) & (base[self.ykey] < yhi))
         self.df_current = base[mask].reset_index(drop=True)
-        if self.page.ax_spe is not None:
-            self.page.ax_spe.clear()
-            self._plot_energy(self.df_current)
-        if self.page.ax_dt is not None:
-            self.page.ax_dt.clear()
-            self._plot_time(self.df_current)
-        # Flat-field split view: the alpha spectrum reflects the X-Y selection.
-        if self.page.ax_alpha is not None:
-            self.page.ax_alpha.clear()
-            self._plot_alpha(self.df_current)
-        # ...and so does the fourth (alpha energy) panel of a normal run.
-        if self.page.ax_aspe is not None:
-            self.page.ax_aspe.clear()
-            self._plot_alpha_energy(self.df_current)
-        # Bug fix vs legacy: redraw the X-Y map from the *filtered* data so the
-        # panel reflects the selection (legacy replotted df_previous, the full map).
-        self._replot_xy()
-        self.page.reset_nav()
+        with self._preserve_zoom():
+            if self.page.ax_spe is not None:
+                self.page.ax_spe.clear()
+                self._plot_energy(self.df_current)
+            if self.page.ax_dt is not None:
+                self.page.ax_dt.clear()
+                self._plot_time(self.df_current)
+            # Flat-field split view: the alpha spectrum reflects the X-Y selection.
+            if self.page.ax_alpha is not None:
+                self.page.ax_alpha.clear()
+                self._plot_alpha(self.df_current)
+            # ...and so does the fourth (alpha energy) panel of a normal run.
+            if self.page.ax_aspe is not None:
+                self.page.ax_aspe.clear()
+                self._plot_alpha_energy(self.df_current)
+            # Bug fix vs legacy: redraw the X-Y map from the *filtered* data so the
+            # panel reflects the selection (legacy replotted df_previous, the full
+            # map).
+            self._replot_xy()
         self.page.canvas.draw_idle()
         self._status(f"X-Y filter  ·  {self.df_current.shape[0]:,} events")
 
@@ -2307,6 +2467,7 @@ class ApiController:
         ax.legend(loc="upper right", fontsize=11, facecolor=API_PLOT_BG,
                   edgecolor=T.BORDER, labelcolor=T.TEXT_PRIMARY)
         self.page._style(ax)
+        self._remember_view(ax)
 
     def _plot_time_overlays(self):
         ax = self.page.ax_dt
@@ -2332,6 +2493,7 @@ class ApiController:
             ax.hist(d, bins=self.tbins, range=(low, high), histtype="step",
                     color=sel["color"], linewidth=1.3)
         self.page._style(ax)
+        self._remember_view(ax)
 
     def _plot_xy_overlays(self):
         ax = self.page.ax_xy
@@ -2370,6 +2532,7 @@ class ApiController:
         ax.set_ylim(self.xyplane[2], self.xyplane[3])
         ax.set_xlabel("X"); ax.set_ylabel("Y")
         self.page._style(ax, grid=False)
+        self._remember_view(ax)
 
     # -- energy calibration ----------------------------------------------------
     def _retrieve_calibration(self):
@@ -3014,6 +3177,31 @@ class ApiController:
                 drew = True
         if drew:
             self.page.canvas.draw_idle()
+
+    def _toggle_ghost(self, checked):
+        """Show/hide the faded grey outline of the uncut run behind the panels.
+
+        Only the panels change -- no data is touched -- so this is a plain
+        redraw, and it keeps whatever zoom the user is looking at."""
+        if self.df_current is None or not self._cut_active():
+            self._status("Uncut outline " + ("on" if checked else "off")
+                         + "  -- shown once a cut is applied")
+            return
+        with self._preserve_zoom():
+            self._redraw_panels()
+        self.page.canvas.draw_idle()
+        self._status("Uncut outline " + ("shown" if checked else "hidden"))
+
+    def _redraw_panels(self):
+        """Clear and re-plot every panel from the current (filtered) frame."""
+        for ax, plot in ((self.page.ax_spe, self._plot_energy),
+                         (self.page.ax_dt, self._plot_time),
+                         (self.page.ax_alpha, self._plot_alpha),
+                         (self.page.ax_aspe, self._plot_alpha_energy)):
+            if ax is not None:
+                ax.clear()
+                plot(self.df_current)
+        self._replot_xy()
 
     def _apply_vmax(self):
         txt = self.opts.ed_vmax.text().strip()

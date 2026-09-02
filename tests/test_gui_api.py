@@ -583,6 +583,114 @@ def test_filter_clears_toolbar_home_history(api):
     assert tb._nav_stack() is None          # 'home' no longer holds the stale view
 
 
+def _ghost_lines(ax):
+    """The faded grey outline artists on *ax* (the uncut run drawn behind)."""
+    return [ln for ln in ax.get_lines()
+            if ln.get_label() in ("_uncut", "uncut")]
+
+
+def test_uncut_outline_drawn_only_while_a_cut_is_applied(api):
+    """The "what was this cut out of" outline: a dim grey copy of the uncut run
+    behind each redrawn spectrum. Nothing is drawn before the first cut -- it
+    would exactly overlap the data."""
+    _w, c = api
+    c._load()
+    assert c.opts.cb_ghost.isChecked()          # on by default
+    assert _ghost_lines(c.page.ax_dt) == []     # no cut yet → no outline
+
+    c.apply_energy_filter(0, 3000)
+    (ghost,) = _ghost_lines(c.page.ax_dt)
+    assert ghost.get_alpha() < 1.0
+    # The outline is the *whole* run, so it stands above the cut histogram.
+    assert ghost.get_ydata().max() > 0
+
+    # A dt cut redraws the energy panel, which then carries one too.
+    c.apply_t_filter(-10, 10)
+    (eghost,) = _ghost_lines(c.page.ax_spe)
+    assert eghost.get_ydata().sum() == 4000     # every event, uncut
+
+
+def test_uncut_outline_leaves_the_xy_map_alone(api):
+    """The outline is a spectra-only affair. A grey density under the X-Y
+    hexbins either hides behind them or washes them out, so that panel keeps
+    exactly the artists it had before the cut -- the region is marked there
+    by the cut markers instead."""
+    _w, c = api
+    c._load()
+    n_coll = len(c.page.ax_xy.collections)
+
+    c.apply_xy_filter(-0.15, 0.15, -0.15, 0.15)
+    assert len(c.page.ax_xy.collections) == n_coll
+
+
+def test_uncut_outline_can_be_switched_off(api):
+    """The DISPLAY checkbox removes the outline without touching the data,
+    and puts it back."""
+    _w, c = api
+    c._load()
+    c.apply_energy_filter(0, 3000)
+    n_events = c.df_current.shape[0]
+
+    c.opts.cb_ghost.setChecked(False)
+    assert _ghost_lines(c.page.ax_dt) == []
+    assert c.df_current.shape[0] == n_events    # a redraw, not a re-cut
+
+    c.opts.cb_ghost.setChecked(True)
+    assert len(_ghost_lines(c.page.ax_dt)) == 1
+
+
+def test_uncut_outline_gone_after_undo_and_reset(api):
+    """With no cut applied there is nothing to outline, so ← Back and Reset
+    take the grey copy away with the cut."""
+    _w, c = api
+    c._load()
+    c.apply_t_filter(-10, 10)
+    assert len(_ghost_lines(c.page.ax_spe)) == 1
+    c._undo()
+    assert _ghost_lines(c.page.ax_spe) == []
+    c.apply_t_filter(-10, 10)
+    c._reset()
+    assert _ghost_lines(c.page.ax_spe) == []
+
+
+def test_cut_keeps_a_hand_set_zoom(api):
+    """A cut must not zoom the panels back out: a view the user set with the
+    navigation toolbar survives the redraw, while an untouched panel still
+    follows the data."""
+    _w, c = api
+    c._load()
+    # Outline off: with it on, the panels stay scaled to the whole run by
+    # design, and an untouched panel could not be seen to re-range at all.
+    c.opts.cb_ghost.setChecked(False)
+    # Panel the user zoomed into (as the toolbar's zoom/pan would leave it).
+    c.page.ax_dt.set_xlim(-8.0, 8.0)
+    c.page.ax_dt.set_ylim(0.0, 120.0)
+    # ...and one they never touched: its y-range is free to follow the counts.
+    spe_top = c.page.ax_spe.get_ylim()[1]
+
+    c.apply_t_filter(-12, 12)
+
+    assert c.page.ax_dt.get_xlim() == pytest.approx((-8.0, 8.0))
+    assert c.page.ax_dt.get_ylim() == pytest.approx((0.0, 120.0))
+    assert c.page.ax_spe.get_ylim()[1] < spe_top     # fewer events after the cut
+    # Home still leads back out of the kept zoom: the freshly drawn view was
+    # pushed onto the history under it.
+    assert c.page.toolbar._nav_stack() is not None
+
+
+def test_uncut_outline_holds_the_panel_scale(api):
+    """A side effect worth keeping: with the whole run drawn behind it, a panel
+    stays on the scale of the whole, so a cut is read as a *fraction* of it
+    instead of being re-stretched to fill the axes."""
+    _w, c = api
+    c._load()
+    top = c.page.ax_spe.get_ylim()[1]
+    c.apply_xy_filter(-0.2, 0.2, -0.2, 0.2)
+    assert c.page.ax_spe.get_ylim()[1] == pytest.approx(top)
+    c.opts.cb_ghost.setChecked(False)          # without it, the panel re-ranges
+    assert c.page.ax_spe.get_ylim()[1] < top
+
+
 def test_vmax_forces_linear_scale(api):
     _w, c = api
     c._load()
