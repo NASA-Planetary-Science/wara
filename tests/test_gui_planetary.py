@@ -885,7 +885,7 @@ def _fake_ns(n=400):
     return ns.LPNsData(product=product, counts=counts, latitude=lat,
                        longitude=lon,
                        altitude_km=np.full(n, 100.0),
-                       time_doy=np.linspace(17.0, 278.0, n))
+                       time_doy=np.linspace(17.0, 278.0, n))  # DOY of 1998
 
 
 @pytest.fixture
@@ -984,6 +984,82 @@ def test_thermal_epithermal_ratio_is_offered_and_labelled(ns_tab):
     assert "ratio" in ns_tab.page.fig.axes[0].get_ylabel().lower()
     title = [c for c in ns_tab._js_calls if c.startswith("waraSetSurface(")][-1]
     assert "Thermal / epithermal ratio" in title
+
+
+def test_ns_filter_cuts_by_date_and_altitude(ns_tab):
+    """The NS filter cuts samples already in memory (the products are
+    whole-mission files, so there is nothing to re-download)."""
+    from wara.planetary.ns import continuous_doy
+
+    data = ns_tab._ns_data
+    assert ns_tab._ns_mask is None
+    assert "no filter" in ns_tab.opts.lbl_ns_filter.text()
+
+    # The fixture spans DOY 17-278 of 1998; keep the first half.
+    ns_tab.opts.ns_end.setText("1998-05-01")
+    ns_tab._on_ns_filter_changed()
+    mask = ns_tab._ns_mask
+    assert mask is not None and mask.any() and not mask.all()
+    assert data.time_doy[mask].max() < continuous_doy("1998-05-02")
+    n = int(np.count_nonzero(mask))
+    assert f"{n} of {data.n_samples}" in ns_tab.opts.lbl_ns_filter.text()
+    # The map and the profile are built from the filtered samples.
+    assert f"{n} of {data.n_samples} accumulations binned" \
+        in ns_tab.opts.status.text()
+    assert "filtered" in ns_tab.page.fig.axes[0].get_legend().get_texts()[0].get_text()
+
+    ns_tab.opts.ns_alt_lo.setValue(101.0)      # the fixture flies at 100 km
+    assert not ns_tab._ns_mask.any()
+    assert "No accumulations pass the filter" in ns_tab.opts.status.text()
+
+
+def test_ns_filter_reset_restores_everything(ns_tab):
+    ns_tab.opts.ns_start.setText("1998-06-01")
+    ns_tab.opts.ns_alt_hi.setValue(120.0)
+    ns_tab._on_ns_filter_changed()
+    assert ns_tab._ns_mask is not None
+    ns_tab.opts.btn_ns_reset.click()
+    assert ns_tab._ns_mask is None
+    assert ns_tab.opts.ns_start.text() == "" and ns_tab.opts.ns_end.text() == ""
+    assert ns_tab.opts.ns_alt_lo.value() == 0.0
+    assert ns_tab.opts.ns_alt_hi.value() == P.NS_ALT_MAX
+    assert "no filter" in ns_tab.opts.lbl_ns_filter.text()
+
+
+def test_ns_filter_ignores_an_unparseable_date(ns_tab):
+    ns_tab.opts.ns_start.setText("last tuesday")
+    ns_tab._on_ns_filter_changed()
+    assert "Ignoring unparseable filter date" in ns_tab.opts.status.text()
+    assert ns_tab._ns_mask is None or ns_tab._ns_mask.all()
+
+
+def test_ns_filter_narrows_the_region_and_the_track(ns_tab):
+    ns_tab.opts.box_size.setValue(30.0)
+    ns_tab.select_region(0.0, -60.0)
+    full = ns_tab._ns_active["stats"]["n"]
+    ns_tab.opts.cb_track.setChecked(True)
+    assert any(c.startswith("waraShowTrack(") for c in ns_tab._js_calls)
+    assert "accumulations, colored by time" in ns_tab.opts.status.text()
+
+    # The fixture's samples run from the south pole (mission start) to the
+    # north (mission end), so an early cut-off keeps only part of a southern
+    # region.
+    ns_tab._js_calls.clear()
+    ns_tab.opts.ns_end.setText("1998-03-01")
+    ns_tab._on_ns_filter_changed()
+    # The active region is re-summed under the filter, and the orbit path
+    # (drawn from the NS ephemeris) follows it.
+    assert ns_tab._ns_active["stats"]["n"] < full
+    assert any(c.startswith("waraShowTrack(") for c in ns_tab._js_calls)
+
+
+def test_ns_filter_rows_are_hidden_in_grs_mode(tab, monkeypatch):
+    monkeypatch.setattr(tab, "_js", lambda script: None)
+    assert not tab.opts.ns_start.isVisibleTo(tab.opts)
+    assert not tab.opts.btn_ns_reset.isVisibleTo(tab.opts)
+    tab.opts.mission.setCurrentIndex(1)
+    assert tab.opts.ns_start.isVisibleTo(tab.opts)
+    assert tab.opts.btn_ns_reset.isVisibleTo(tab.opts)
 
 
 def test_unavailable_neutron_product_explains_itself(ns_tab):

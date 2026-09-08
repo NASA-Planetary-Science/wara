@@ -47,6 +47,7 @@ from .lp import (
 )
 from .ns import (
     NS_BASE_URL,
+    NS_EPOCH,
     NS_CADENCES,
     NS_KINDS,
     NS_PHASES,
@@ -54,6 +55,7 @@ from .ns import (
     NS_STATISTICS,
     LPNsData,
     NSProduct,
+    continuous_doy,
     download_ns,
     neutron_bins,
     neutron_map,
@@ -103,6 +105,8 @@ __all__ = [
     "list_grs_products",
     "read_grs_day",
     "NS_BASE_URL",
+    "NS_EPOCH",
+    "continuous_doy",
     "NS_CADENCES",
     "NS_KINDS",
     "NS_PHASES",

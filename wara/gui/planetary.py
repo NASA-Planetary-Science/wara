@@ -47,6 +47,10 @@ PLANET_PLOT_BG = T.BG_PLOT
 # Globe mesh resolution per detail setting. The visual sharpness of a Plotly
 # surface equals its *mesh* density (the texture is sampled at the vertices),
 # so "high resolution" means a dense mesh + the 2048-px bundled texture.
+# Upper end of the NS altitude filter: the archived spacecraft altitudes top
+# out near 128 km, so this doubles as "no upper bound".
+NS_ALT_MAX = 150.0
+
 GLOBE_DETAIL = {
     "Standard (1.0°)": (360, 180),
     "High (0.5°)": (720, 360),
@@ -377,6 +381,68 @@ class PlanetaryOptions(QScrollArea):
             "bin - the coverage map, useful for judging noisy cells")
         row, _ = labeled_row("Map", self.ns_stat); lay.addWidget(row)
         self.ns_only.append(row)
+
+        # NS products are whole-mission files, so the date/altitude cuts that
+        # the GRS applies when *downloading* are applied here to the samples
+        # already in memory: they re-bin instantly and drive the orbit path.
+        sep, head = hsep(), header("FILTER")
+        lay.addWidget(sep); lay.addWidget(head)
+        self.ns_only += [sep, head]
+
+        self.ns_start = QLineEdit("")
+        self.ns_start.setPlaceholderText("1998-01-16")
+        self.ns_start.setToolTip(
+            "Keep only accumulations from this date on (YYYY-MM-DD). "
+            "Leave empty for no lower bound")
+        row, _ = labeled_row("From", self.ns_start); lay.addWidget(row)
+        self.ns_only.append(row)
+
+        self.ns_end = QLineEdit("")
+        self.ns_end.setPlaceholderText("1998-12-31")
+        self.ns_end.setToolTip(
+            "Keep only accumulations up to and including this date "
+            "(YYYY-MM-DD). Leave empty for no upper bound")
+        row, _ = labeled_row("To", self.ns_end); lay.addWidget(row)
+        self.ns_only.append(row)
+
+        self.ns_alt_lo = DoubleSpinBox()
+        self.ns_alt_lo.setRange(0.0, NS_ALT_MAX); self.ns_alt_lo.setValue(0.0)
+        self.ns_alt_lo.setDecimals(0); self.ns_alt_lo.setSuffix(" km")
+        self.ns_alt_lo.setToolTip(
+            "Lowest spacecraft altitude to keep. Counts rise as the "
+            "spacecraft drops, so a narrow altitude band makes regions "
+            "measured at different heights comparable")
+        row, _ = labeled_row("Alt from", self.ns_alt_lo); lay.addWidget(row)
+        self.ns_only.append(row)
+
+        self.ns_alt_hi = DoubleSpinBox()
+        self.ns_alt_hi.setRange(0.0, NS_ALT_MAX)
+        self.ns_alt_hi.setValue(NS_ALT_MAX)
+        self.ns_alt_hi.setDecimals(0); self.ns_alt_hi.setSuffix(" km")
+        self.ns_alt_hi.setToolTip(
+            f"Highest spacecraft altitude to keep ({NS_ALT_MAX:g} km = no "
+            "upper bound; the high orbit reaches ~128 km)")
+        row, _ = labeled_row("Alt to", self.ns_alt_hi); lay.addWidget(row)
+        self.ns_only.append(row)
+
+        self.lbl_ns_filter = QLabel("")
+        self.lbl_ns_filter.setObjectName("stat_key")
+        self.lbl_ns_filter.setWordWrap(True)
+        self.lbl_ns_filter.setSizePolicy(QSizePolicy.Ignored,
+                                         QSizePolicy.Preferred)
+        lay.addWidget(self.lbl_ns_filter)
+        self.ns_only.append(self.lbl_ns_filter)
+
+        self.btn_ns_reset = QPushButton("Reset filter")
+        self.btn_ns_reset.setObjectName("action_btn")
+        self.btn_ns_reset.setToolTip(
+            "Clear the dates and the altitude range - map every accumulation "
+            "in the loaded product")
+        self.btn_ns_reset.setCursor(Qt.PointingHandCursor)
+        self.btn_ns_reset.setSizePolicy(QSizePolicy.Ignored,
+                                        QSizePolicy.Fixed)
+        lay.addWidget(self.btn_ns_reset)
+        self.ns_only.append(self.btn_ns_reset)
 
         self.cmap = _compact(ComboBox(), 8)
         self.cmap.addItems(list(ABUNDANCE_COLORSCALES))
@@ -1194,6 +1260,8 @@ class PlanetaryController(QObject):
         self._ns = {}              # (kind, phase, cadence) -> LPNsData
         self._ns_data = None       # the neutron product on display
         self._ns_active = None     # neutron region selection: lon/lat/half/stats
+        self._ns_mask = None       # filter mask over the loaded product
+        self._ns_filter_warning = None   # last bad-date message, if any
         self._lola = None          # cached LOLA DEM dict
         self._surface_is_abundance = False  # trace 0 recolored by abundance?
         self._globe_mesh = None    # (n_lon, n_lat) of the *built* globe
@@ -1237,6 +1305,12 @@ class PlanetaryController(QObject):
         # Binning is a pure re-display of data already in memory.
         o.ns_bin.currentTextChanged.connect(lambda *_: self._rebin_neutrons())
         o.ns_stat.currentTextChanged.connect(lambda *_: self._rebin_neutrons())
+        # The filter cuts samples already in memory: re-bin, never re-read.
+        o.ns_start.editingFinished.connect(self._on_ns_filter_changed)
+        o.ns_end.editingFinished.connect(self._on_ns_filter_changed)
+        o.ns_alt_lo.valueChanged.connect(lambda *_: self._on_ns_filter_changed())
+        o.ns_alt_hi.valueChanged.connect(lambda *_: self._on_ns_filter_changed())
+        o.btn_ns_reset.clicked.connect(self._reset_ns_filter)
         o.cb_topo.toggled.connect(self._toggle_topo)
         o.exag.valueChanged.connect(self._on_exag_changed)
         o.cb_flat.toggled.connect(self._toggle_flat)
@@ -1738,6 +1812,27 @@ class PlanetaryController(QObject):
     def _draw_track(self):
         import json
 
+        ns_data = self._ns_data if self.neutron_mode() else None
+        if ns_data is not None and ns_data.time_doy is not None:
+            # The NS carries its own whole-mission ephemeris: draw the track
+            # the map is actually made of, filter and all.
+            mask = self._ns_mask
+            if mask is None:
+                mask = np.ones(ns_data.n_samples, dtype=bool)
+            if not mask.any():
+                self._js("waraClearTrack();")
+                self._status("No accumulations pass the filter — the orbit "
+                             "path is empty.")
+                return
+            x, y, z, color, texts, title, n = self._track_payload(
+                ns_data.longitude[mask], ns_data.latitude[mask],
+                ns_data.altitude_km[mask], ns_data.utc64[mask])
+            source = (f"{len(x)} of {int(np.count_nonzero(mask))} "
+                      f"{ns_data.kind} accumulations")
+            self._js(f"waraShowTrack({x}, {y}, {z}, {color}, "
+                     f"{json.dumps(texts)}, {json.dumps(title)});")
+            self._status(f"Orbit path: {source}, colored by time.")
+            return
         if self._time64 is not None:
             x, y, z, color, texts, title, n = self._track_payload(
                 self._lon, self._lat, self._alt, self._time64)
@@ -1902,6 +1997,7 @@ class PlanetaryController(QObject):
         if key not in NS_PRODUCTS:
             kind, phase, cadence = key
             self._ns_data = None
+            self._ns_mask = None
             self._status(
                 f"The archive has no {kind} neutron data in the "
                 f"{'low' if phase == 'low' else 'high'} orbit at "
@@ -1911,6 +2007,7 @@ class PlanetaryController(QObject):
         if key in self._ns:
             self._ns_data = self._ns[key]
             self._ns_active = None
+            self._recompute_ns_mask()
             self._apply_neutrons()
             self._replot()
             return
@@ -1936,8 +2033,11 @@ class PlanetaryController(QObject):
             return
         self._ns_data = data
         self._ns_active = None
+        self._recompute_ns_mask()
         self._apply_neutrons()
         self._replot()
+        if self.opts.cb_track.isChecked():
+            self._draw_track()
 
     def _rebin_neutrons(self):
         """Bin size / statistic changed - re-bin what is already in memory."""
@@ -1945,6 +2045,113 @@ class PlanetaryController(QObject):
             return
         self._apply_neutrons()
         self._replot()
+
+    def _ns_filter_ranges(self):
+        """``(time_range, alt_range)`` for the filter controls.
+
+        Either is ``None`` when that bound is not narrowed. Dates become the
+        archive's mission-continuous day-of-year; the end date is inclusive,
+        so the range runs to the start of the following day. An unparseable
+        date is reported and ignored rather than blanking the map."""
+        from wara.planetary.ns import continuous_doy
+
+        lo = hi = None
+        bad = []
+        for text, edit in ((self.opts.ns_start.text().strip(), "From"),
+                           (self.opts.ns_end.text().strip(), "To")):
+            if not text:
+                continue
+            try:
+                doy = continuous_doy(text)
+            except ValueError:
+                bad.append(f"{edit} ({text})")
+                continue
+            if edit == "From":
+                lo = doy
+            else:
+                hi = doy + 1.0          # include every accumulation that day
+        self._ns_filter_warning = (
+            f"Ignoring unparseable filter date(s): {', '.join(bad)} — use "
+            "YYYY-MM-DD." if bad else None)
+        time_range = None
+        if lo is not None or hi is not None:
+            time_range = (lo if lo is not None else -np.inf,
+                          hi if hi is not None else np.inf)
+
+        alt_lo = float(self.opts.ns_alt_lo.value())
+        alt_hi = float(self.opts.ns_alt_hi.value())
+        alt_range = None
+        if alt_lo > 0.0 or alt_hi < NS_ALT_MAX:
+            alt_range = (alt_lo, alt_hi)
+        return time_range, alt_range
+
+    def _recompute_ns_mask(self):
+        """Rebuild the filter mask for the loaded product and label it."""
+        data = self._ns_data
+        if data is None:
+            self._ns_mask = None
+            self.opts.lbl_ns_filter.setText("")
+            return
+        time_range, alt_range = self._ns_filter_ranges()
+        if time_range is None and alt_range is None:
+            self._ns_mask = None
+            self.opts.lbl_ns_filter.setText(
+                f"{data.n_samples} accumulations (no filter)")
+            return
+        if time_range is not None and data.time_doy is None:
+            # Only reachable if an 8 s product is ever wired up.
+            self._status(f"{data.product.cadence} s products carry no time "
+                         "array — the date filter is ignored.")
+            time_range = None
+        mask = data.select(time_range=time_range, alt_range=alt_range)
+        self._ns_mask = mask
+        n = int(np.count_nonzero(mask))
+        self.opts.lbl_ns_filter.setText(
+            f"{n} of {data.n_samples} accumulations pass the filter")
+
+    def _on_ns_filter_changed(self, *_):
+        """A filter control changed: re-bin in place (no re-reading)."""
+        if not self.neutron_mode() or self._ns_data is None:
+            return
+        before = self._ns_mask
+        self._recompute_ns_mask()
+        if before is None and self._ns_mask is None:
+            # Nothing actually changed - but a date we could not parse is the
+            # likeliest reason for that, so say so.
+            if self._ns_filter_warning:
+                self._status(self._ns_filter_warning)
+            return
+        if self._ns_mask is not None and not self._ns_mask.any():
+            self._js("waraResetSurface();")
+            self._js("waraClearOverlay();")
+            self._surface_is_abundance = False
+            self._ns_active = None
+            self._replot()
+            self._status(self._ns_filter_warning
+                         or "No accumulations pass the filter — widen the "
+                            "dates or the altitude range.")
+            return
+        # A narrower filter can empty the active region; recompute it.
+        if self._ns_active is not None:
+            a = self._ns_active
+            self._select_region_neutrons(a["lon"], a["lat"], a["half"])
+        else:
+            self._replot()
+        if self.opts.cb_track.isChecked():
+            self._draw_track()
+        self._apply_neutrons()
+        if self._ns_filter_warning:
+            self._status(self._ns_filter_warning)
+
+    def _reset_ns_filter(self):
+        """Clear every filter bound and show the whole product again."""
+        self._flash_button(self.opts.btn_ns_reset)
+        for widget in (self.opts.ns_start, self.opts.ns_end):
+            widget.blockSignals(True); widget.setText(""); widget.blockSignals(False)
+        for widget, value in ((self.opts.ns_alt_lo, 0.0),
+                              (self.opts.ns_alt_hi, NS_ALT_MAX)):
+            widget.blockSignals(True); widget.setValue(value); widget.blockSignals(False)
+        self._on_ns_filter_changed()
 
     def _apply_neutrons(self):
         """Drape the binned neutron map over the Moon."""
@@ -1960,7 +2167,7 @@ class PlanetaryController(QObject):
         statistic = self._ns_statistic()
         lon_axis, lat_axis = self._mesh_axes()
         grid = neutron_map(data, lon_axis, lat_axis, bin_deg=bin_deg,
-                           statistic=statistic)
+                           statistic=statistic, mask=self._ns_mask)
         if statistic == "samples":
             title = f"Samples / {bin_deg:g}\u00b0 bin"
             cmin, cmax = 0.0, float(np.nanpercentile(grid, 99))
@@ -1988,7 +2195,10 @@ class PlanetaryController(QObject):
             extra = f" at {opacity * 100:.0f} % opacity over the albedo Moon"
         unit = ("samples per bin" if statistic == "samples"
                 else data.product.value_label)
-        self._status(f"{data.label}: {data.n_samples} accumulations binned at "
+        n_used = (data.n_samples if self._ns_mask is None
+                  else int(np.count_nonzero(self._ns_mask)))
+        of_all = "" if self._ns_mask is None else f" of {data.n_samples}"
+        self._status(f"{data.label}: {n_used}{of_all} accumulations binned at "
                      f"{bin_deg:g}\u00b0{extra} - {cmin:.4g} to {cmax:.4g} "
                      f"{unit} (1st-99th percentile scale).")
 
@@ -2007,6 +2217,8 @@ class PlanetaryController(QObject):
         lon_range = None if (lat_hi >= 90.0 or lat_lo <= -90.0) \
             else (lon - half, lon + half)
         mask = data.select(lat_range=(lat_lo, lat_hi), lon_range=lon_range)
+        if self._ns_mask is not None:
+            mask &= self._ns_mask          # the region is cut by the filter too
         stats = region_stats(data, mask)
         label = (f"lon {lon:.1f}\u00b0, lat {lat:.1f}\u00b0 \u00b1 {half:g}\u00b0 "
                  f"({stats['n']} samples)")
@@ -2022,12 +2234,14 @@ class PlanetaryController(QObject):
         self._replot()
         digits = 3 if data.product.is_ratio else 1
         unit = "" if data.product.is_ratio else " counts"
-        glob = float(np.nanmean(data.counts))
+        rest = (data.counts if self._ns_mask is None
+                else data.counts[self._ns_mask])
+        scope = "globally" if self._ns_mask is None else "across the filter"
         self._status(
             f"{stats['n']} accumulations in {label}: mean "
             f"{stats['mean']:.{digits}f}{unit} (sd {stats['sd']:.{digits}f}, "
-            f"sem {stats['sem']:.{digits + 1}f}) vs {glob:.{digits}f} "
-            "globally.")
+            f"sem {stats['sem']:.{digits + 1}f}) vs "
+            f"{float(np.nanmean(rest)):.{digits}f} {scope}.")
 
     def _replot_neutrons(self):
         """Zonal profile of the loaded product, with the selection on top."""
@@ -2040,7 +2254,13 @@ class PlanetaryController(QObject):
                 "first use")
             return
         bin_deg = self._ns_bin_deg()
-        lat, mean, sem, _ = zonal_profile(data, bin_deg=bin_deg)
+        if self._ns_mask is not None and not self._ns_mask.any():
+            self.page.show_spectrum_empty(
+                "No accumulations pass the filter - widen the dates or the "
+                "altitude range")
+            return
+        lat, mean, sem, _ = zonal_profile(data, bin_deg=bin_deg,
+                                          mask=self._ns_mask)
         region = None
         if self._ns_active is not None:
             rlat, rmean, _, rn = zonal_profile(
@@ -2048,8 +2268,9 @@ class PlanetaryController(QObject):
             keep = rn > 0
             region = (rlat[keep], rmean[keep], self._ns_active["span"],
                       self._ns_active["label"])
+        whole = "all data" if self._ns_mask is None else "filtered"
         self.page.show_profile(
-            lat, mean, sem, label=f"{data.label} - all data", region=region,
+            lat, mean, sem, label=f"{data.label} - {whole}", region=region,
             ylabel=data.product.value_label.capitalize())
 
     def _abundance_deg(self):

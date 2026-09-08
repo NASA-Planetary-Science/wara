@@ -43,7 +43,7 @@ from pathlib import Path
 
 import numpy as np
 
-from .lp import LP_DATA_DIR, _download_file
+from .lp import LP_DATA_DIR, _as_date, _download_file
 from .moon import wrap_lon
 
 NS_BASE_URL = (
@@ -67,6 +67,10 @@ NS_PHASES = {
 }
 
 NS_CADENCES = (8, 32)      # seconds per accumulation
+
+# Earth_Received_Time counts mission-continuous days from here, so the
+# extended-mission files carry values past 365 (see LPNsData.utc64).
+NS_EPOCH = date(1998, 1, 1)
 
 # Derived products: a ratio of two archived count arrays. Thermal and
 # epithermal counts of the same orbit phase and cadence are sampled on the
@@ -389,6 +393,18 @@ def read_ns(kind, phase, cadence=32, data_dir=LP_DATA_DIR,
         altitude_km=None if alt is None else np.asarray(alt, dtype=float),
         time_doy=None if ert is None else np.asarray(ert, dtype=float),
     )
+
+
+def continuous_doy(day):
+    """Convert a date to the archive's mission-continuous day-of-year.
+
+    Accepts a ``date``, ``datetime``, or ``"YYYY-MM-DD"`` string; 1998-01-01
+    is day 1 and the count keeps going through 1999 (1999-01-16 is day 381),
+    matching :attr:`LPNsData.time_doy`. Use it to turn a calendar date range
+    into a ``time_range`` for :meth:`LPNsData.select` — pass the day *after*
+    your last date, or ``continuous_doy(end) + 1``, to include all of it.
+    """
+    return float((_as_date(day) - NS_EPOCH).days + 1)
 
 
 def _read_ratio(product, data_dir):

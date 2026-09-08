@@ -195,6 +195,29 @@ def test_sample_count_must_match_the_label(tmp_path, monkeypatch):
         ns.read_ns(*key, data_dir=tmp_path)
 
 
+def test_continuous_doy_counts_through_the_year_boundary():
+    """The archive's day-of-year keeps counting into 1999, so a single epoch
+    converts a calendar date for either mission phase."""
+    from datetime import date
+
+    assert ns.continuous_doy("1998-01-01") == 1.0
+    assert ns.continuous_doy(date(1998, 1, 16)) == 16.0
+    assert ns.continuous_doy("1998-12-19") == 353.0   # extended mission starts
+    assert ns.continuous_doy("1999-01-16") == 381.0
+    with pytest.raises(ValueError):
+        ns.continuous_doy("16-01-1998")
+
+
+def test_continuous_doy_bounds_a_date_range(tiny):
+    """A calendar range becomes a time_range: the end date is inclusive when
+    the upper bound is the start of the following day."""
+    data = ns.read_ns("epithermal", "high", 32, data_dir=tiny)
+    lo = ns.continuous_doy("1998-01-17")      # the fixture's first two samples
+    hi = ns.continuous_doy("1998-01-17") + 1
+    mask = data.select(time_range=(lo, hi))
+    assert list(mask) == [True, True, False, False, False, False]
+
+
 # ── Selection ────────────────────────────────────────────────────────────────
 def test_select_box_and_seam(tiny):
     data = ns.read_ns("epithermal", "high", 32, data_dir=tiny)

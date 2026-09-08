@@ -387,6 +387,19 @@ The GRS workflow, in the order the left menu runs it:
       between the mean value per bin and the number of samples per bin — the
       coverage map, which explains noisy cells.
 
+    The **FILTER** block below them cuts the samples already in memory —
+    the products are whole-mission files, so nothing is re-downloaded and the
+    map re-bins instantly. **From** / **To** are inclusive calendar dates
+    (leave either empty for no bound), and **Alt from** / **Alt to** keep only
+    accumulations in an altitude band, which matters because counts rise as
+    the spacecraft descends: a narrow band makes regions measured at different
+    heights comparable. The label underneath says how many accumulations pass,
+    **Reset filter** clears every bound, and an unparseable date is reported
+    and ignored rather than blanking the map. The filter applies to everything
+    downstream — the map, the profile, a selected region's statistics, and the
+    orbit path, which in this mode is drawn from the NS ephemeris itself
+    rather than the bundled metadata.
+
     The map drapes over the Moon exactly like the abundance maps (colormap,
     opacity, 3D relief, and the 2D map all apply), and the panel below the
     globe shows the **zonal profile**: the mean against latitude with a ±1σ
@@ -419,7 +432,9 @@ The same backend is scriptable from Python via `wara.planetary`
 (`list_grs_products`, `filter_products`, `download_products`, `read_grs_day`,
 `download_abundance`, `read_abundance`, `abundance_grid`) — and for the
 neutron data `download_ns`, `read_ns`, `neutron_bins`, `neutron_map`,
-`zonal_profile`, and `region_stats`, with `NS_PRODUCTS` listing every
+`zonal_profile`, `region_stats`, and `continuous_doy` (calendar date ->
+the archive's mission-continuous day-of-year, for `LPNsData.select`), with
+`NS_PRODUCTS` listing every
 (type, orbit, cadence) — archived or derived, such as
 `("thermal/epithermal", "high", 32)`. See
 `examples/planetary/example_lp_neutron_map.py`.
