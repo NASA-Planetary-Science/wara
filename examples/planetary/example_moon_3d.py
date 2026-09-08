@@ -11,7 +11,8 @@ Run it with::
 
 A browser tab (or your default Plotly renderer) opens with the interactive
 globe. Orbit it: 0 deg lon / 0 deg lat faces +x (the sub-Earth point), the
-north pole is +z. Hover anywhere on the surface to read the lon/lat there.
+north pole is +z. Hover anywhere on the surface to read the lon/lat there,
+or read the labeled 30-degree graticule (0 deg, 30E, ... / 30N, 60N, ...).
 """
 import numpy as np
 
@@ -40,5 +41,11 @@ for lon, lat, label in MARKERS:
           f"({float(lon2):6.1f}, {float(lat2):6.1f})  {'OK' if ok else 'MISMATCH'}")
 
 # ---- Build and show the interactive globe -------------------------------
+# The 30-degree graticule is drawn with its major coordinate values labeled:
+# longitudes along the equator, latitudes down the 90E/90W meridians.
 fig = moon_figure(markers=MARKERS)
+
+labelled = [t for t in fig.data if getattr(t, "mode", None) == "text"]
+print("Graticule labels:", ", ".join(labelled[0].text) if labelled else "none")
+
 fig.show()

@@ -127,29 +127,92 @@ def sphere_mesh(n_lon=360, n_lat=180, radius=R_MOON_KM):
     return x, y, z, lon_grid, lat_grid
 
 
-def graticule_traces(step=30, radius=R_MOON_KM, n=181, color="rgba(255,255,255,0.18)"):
+def _lon_label(lon0):
+    """``30`` -> ``"30°E"``, ``-30`` -> ``"30°W"``, ``0``/``180`` -> ``"0°"``/``"180°"``."""
+    lon0 = float(lon0)
+    if lon0 in (0.0, 180.0, -180.0):
+        return f"{abs(lon0):.0f}°"
+    return f"{abs(lon0):.0f}°{'E' if lon0 > 0 else 'W'}"
+
+
+def _lat_label(lat0):
+    """``30`` -> ``"30°N"``, ``-60`` -> ``"60°S"``, ``0`` -> ``"0°"``."""
+    lat0 = float(lat0)
+    if lat0 == 0.0:
+        return "0°"
+    return f"{abs(lat0):.0f}°{'N' if lat0 > 0 else 'S'}"
+
+
+# Graticule colors. The lunar albedo map runs from dark maria to near-white
+# highlands, so a white/grey grid vanishes over half the globe: both the lines
+# and the labels are a saturated amber (the Planetary tab's accent hue), which
+# stays legible on both extremes and cannot be confused with the cyan/green
+# selection boxes, landmarks, or the Viridis orbit track.
+# Fully opaque on purpose: with any alpha, plotly stops writing depth for the
+# line traces and the far-side meridians bleed through the globe as pale
+# streaks (most visibly the 180 deg meridian down the middle of the near side).
+GRATICULE_COLOR = "#ff8a3d"
+GRATICULE_LABEL_COLOR = "#ff8a3d"
+
+
+def graticule_traces(step=30, radius=R_MOON_KM, n=181, color=GRATICULE_COLOR,
+                     labels=True, label_color=GRATICULE_LABEL_COLOR):
     """Latitude/longitude grid lines, lifted just above the surface.
 
     Returns a list of Plotly ``Scatter3d`` line traces (one per meridian and
-    parallel), spaced every ``step`` degrees. Requires ``plotly``.
+    parallel), spaced every ``step`` degrees. With ``labels`` a final text
+    trace carries the major lon/lat values: longitudes along the equator,
+    latitudes down the +/-90 deg meridians (two copies, so a label stays
+    readable from most viewpoints). The text sits on the same shell as the
+    lines, so the far side is hidden by the globe itself. Requires ``plotly``.
     """
     import plotly.graph_objects as go
 
-    lift = radius * 1.002
+    # 1.002 lets the mesh punch through the lines (they render dashed/broken at
+    # high mesh resolutions); 1.006 clears the surface the way the GUI's
+    # selection boxes do. Labels ride higher still (1.02): anchored on the line
+    # shell, half of every glyph box is swallowed by the sphere ("60N" reads as
+    # "0N"), while 1.02 keeps the far side hidden by the globe.
+    lift = radius * 1.006
+    label_lift = radius * 1.02
     traces = []
     # Meridians (constant longitude, latitude sweeps pole to pole).
     lat = np.linspace(-90, 90, n)
-    for lon0 in np.arange(-180, 180, step):
+    lons0 = np.arange(-180, 180, step)
+    for lon0 in lons0:
         x, y, z = lonlat_to_xyz(np.full_like(lat, lon0), lat, lift)
         traces.append(go.Scatter3d(
-            x=x, y=y, z=z, mode="lines", line=dict(color=color, width=1),
+            x=x, y=y, z=z, mode="lines", line=dict(color=color, width=3),
             hoverinfo="skip", showlegend=False))
     # Parallels (constant latitude, longitude sweeps the full circle).
     lon = np.linspace(-180, 180, n)
-    for lat0 in np.arange(-60, 90, step):
+    lats0 = np.arange(-60, 90, step)
+    for lat0 in lats0:
         x, y, z = lonlat_to_xyz(lon, np.full_like(lon, lat0), lift)
         traces.append(go.Scatter3d(
-            x=x, y=y, z=z, mode="lines", line=dict(color=color, width=1),
+            x=x, y=y, z=z, mode="lines", line=dict(color=color, width=3),
+            hoverinfo="skip", showlegend=False))
+    if labels:
+        tlon, tlat, text = [], [], []
+        for lon0 in lons0:                      # longitudes on the equator
+            tlon.append(float(lon0)); tlat.append(0.0)
+            text.append(_lon_label(lon0))
+        for lat0 in lats0:                      # latitudes off the equator
+            if float(lat0) == 0.0:
+                continue                        # equator row is the lon labels
+            # Four copies, one per quadrant meridian: a label centred exactly
+            # on the limb is half-swallowed by the globe (a clipped "60N"
+            # reads as "0N"), so spreading them guarantees a whole one faces
+            # the camera from any angle.
+            for lon0 in (-180.0, -90.0, 0.0, 90.0):
+                tlon.append(lon0); tlat.append(float(lat0))
+                text.append(_lat_label(lat0))
+        tx, ty, tz = lonlat_to_xyz(tlon, tlat, label_lift)
+        traces.append(go.Scatter3d(
+            x=tx, y=ty, z=tz, mode="text",
+            text=[f"<b>{t}</b>" for t in text],
+            textposition="middle center",
+            textfont=dict(color=label_color, size=12),
             hoverinfo="skip", showlegend=False))
     return traces
 
@@ -208,7 +271,8 @@ def moon_figure(texture=None, n_lon=360, n_lat=180, radius=R_MOON_KM,
     radius : float
         Sphere radius in km.
     graticule : bool
-        Overlay 30-degree lat/lon grid lines.
+        Overlay 30-degree lat/lon grid lines, labeled with the major
+        longitude/latitude values (see :func:`graticule_traces`).
     markers : sequence of (lon, lat, label) or None
         Optional reference points drawn as labeled dots just above the surface —
         useful for visually confirming the coordinate system.

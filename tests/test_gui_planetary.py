@@ -792,13 +792,14 @@ def test_globe_load_redraws_landmarks_when_checked(tab, monkeypatch):
     assert not any(c.startswith("waraShowMarks(") for c in calls)
 
 
-# ── Send to Spectrum ──────────────────────────────────────────────────────────
+# ── Send to Spectrum ────────────────────────────────────────────────────
 class _FakeApp:
     def __init__(self):
-        self.received = []
+        self.received = []          # (spect, name) in send order
 
-    def load_external_spectrum(self, spect, name, switch_tab=True):
-        self.received.append((spect, name, switch_tab))
+    def load_external_spectra(self, specs, switch_tab=True):
+        self.received.extend(specs)
+        self.switch_tab = switch_tab
 
     def statusBar(self):
         class _SB:
@@ -807,25 +808,197 @@ class _FakeApp:
         return _SB()
 
 
-def test_send_to_spectrum_hands_region_sum(qapp):
+def _fake_ctl(qapp, lat=None):
     opts = P.PlanetaryOptions(); page = P.PlanetaryPage()
     fake = _FakeApp()
     ctl = P.PlanetaryController(fake, opts, page)
-    ctl._load_done([_fake_day(lat=[0.0, 40.0, 41.0, -40.0])])
+    ctl._load_done([_fake_day(lat=lat if lat is not None
+                              else [0.0, 40.0, 41.0, -40.0])])
+    return ctl, fake, opts, page
+
+
+def test_send_to_spectrum_hands_region_sum(qapp):
+    ctl, fake, opts, page = _fake_ctl(qapp)
     ctl.opts.box_size.setValue(5.0)
     ctl.select_region(0.0, 40.0)
     ctl._send_to_spectrum()
     assert len(fake.received) == 1
-    spect, name, switch = fake.received[0]
+    spect, name = fake.received[0]
     assert np.allclose(spect.counts, 2 * np.arange(512))
     assert "LP-GRS" in name and "lat 40.0" in name
-    assert switch is False                 # stay on the Planetary tab
+    assert fake.switch_tab is False        # stay on the Planetary tab
     page.deleteLater(); opts.deleteLater()
 
 
-def test_send_without_selection_reports(tab):
+def test_send_without_selection_hands_all_loaded_data(qapp):
+    """With nothing selected the panel plots the all-data sum, so that is what
+    the button sends (it used to be disabled, so the click did nothing)."""
+    ctl, fake, opts, page = _fake_ctl(qapp)
+    assert ctl.opts.btn_send.isEnabled()
+    ctl._send_to_spectrum()
+    assert len(fake.received) == 1
+    spect, name = fake.received[0]
+    assert np.allclose(spect.counts, 4 * np.arange(512))   # all 4 records
+    assert "all loaded data (4 records)" in name
+    page.deleteLater(); opts.deleteLater()
+
+
+def test_send_carries_kept_spectra_as_overlays(qapp):
+    ctl, fake, opts, page = _fake_ctl(qapp)
+    ctl.opts.box_size.setValue(5.0)
+    ctl.opts.cb_keep.setChecked(True)
+    ctl.select_region(0.0, 40.0)           # 2 records, later pinned
+    ctl.select_region(0.0, -40.0)          # 1 record, active
+    ctl._send_to_spectrum()
+    names = [n for _, n in fake.received]
+    assert len(names) == 2
+    assert "lat -40.0" in names[0]         # active first
+    assert "lat 40.0" in names[1]          # kept as an overlay
+    assert "+1 kept" in ctl.opts.status.text()
+    page.deleteLater(); opts.deleteLater()
+
+
+def test_send_disabled_until_data_is_loaded(tab):
+    assert not tab.opts.btn_send.isEnabled()
     tab._send_to_spectrum()
-    assert "Click a region" in tab.opts.status.text()
+    assert "Load data" in tab.opts.status.text()
+    tab._load_done([_fake_day()])
+    assert tab.opts.btn_send.isEnabled()
+    tab._clear_selection()                 # data is still loaded
+    assert tab.opts.btn_send.isEnabled()
+
+
+# ── Neutrons (LP-NS) ─────────────────────────────────────────────────
+NS_KEY = ("epithermal", "high", 32)
+
+
+def _fake_ns(n=400):
+    """A small LPNsData with a built-in polar dip, so the profile and the map
+    have something real to show."""
+    from wara.planetary import ns
+
+    rng = np.random.default_rng(0)
+    lat = np.linspace(-90, 90, n)
+    lon = np.linspace(-180, 180, n)
+    counts = 600.0 + 25.0 * np.cos(np.radians(lat)) + rng.normal(0, 1, n)
+    product = ns.NSProduct(*NS_KEY, n_samples=n)
+    return ns.LPNsData(product=product, counts=counts, latitude=lat,
+                       longitude=lon,
+                       altitude_km=np.full(n, 100.0),
+                       time_doy=np.linspace(17.0, 278.0, n))
+
+
+@pytest.fixture
+def ns_tab(tab, monkeypatch):
+    """Planetary tab in neutron mode with a product already in memory."""
+    monkeypatch.setattr(tab, "_js", lambda script: tab._js_calls.append(script))
+    tab._js_calls = []
+    tab._globe_ready = True
+    tab.opts.mission.setCurrentIndex(1)         # Lunar Prospector NS
+    tab._neutrons_loaded((NS_KEY, _fake_ns()))
+    return tab
+
+
+def test_ns_mission_swaps_the_options_panel(tab, monkeypatch, qapp):
+    """The two instruments share only the globe: picking one hides the
+    other's controls instead of stacking both in the 270 px panel."""
+    monkeypatch.setattr(tab, "_js", lambda script: None)
+    tab._load_done([_fake_day()])               # a gamma spectrum is available
+    assert tab.opts.btn_send.isEnabled()
+    assert tab.opts.grs_only and tab.opts.ns_only
+
+    tab.opts.mission.setCurrentIndex(1)         # Lunar Prospector NS
+    assert tab.neutron_mode()
+    assert all(w.isVisibleTo(tab.opts) for w in tab.opts.ns_only)
+    assert not any(w.isVisibleTo(tab.opts) for w in tab.opts.grs_only)
+    # Neutron counts are not a gamma spectrum: nothing to send.
+    assert not tab.opts.btn_send.isEnabled()
+    # The colour controls belong to whichever map is on screen.
+    assert tab.opts.cmap.isEnabled() and tab.opts.opacity.isEnabled()
+
+    tab.opts.mission.setCurrentIndex(0)         # back to the GRS
+    assert not tab.neutron_mode()
+    assert all(w.isVisibleTo(tab.opts) for w in tab.opts.grs_only)
+    assert not any(w.isVisibleTo(tab.opts) for w in tab.opts.ns_only)
+    assert tab.opts.btn_send.isEnabled()        # the loaded spectra are back
+
+
+def test_grs_dataset_combo_no_longer_offers_neutrons(tab):
+    items = [tab.opts.dataset.itemText(i)
+             for i in range(tab.opts.dataset.count())]
+    assert items == ["Raw", "Calibrated", "Elevation (LOLA)"]
+    missions = [tab.opts.mission.itemText(i)
+                for i in range(tab.opts.mission.count())]
+    assert missions == ["Lunar Prospector GRS", "Lunar Prospector NS"]
+
+
+def test_neutron_load_drapes_the_map_and_plots_the_profile(ns_tab):
+    assert any(c.startswith("waraSetSurface(") for c in ns_tab._js_calls)
+    ax = ns_tab.page.fig.axes[0]
+    assert "Latitude" in ax.get_xlabel()
+    assert "Counts / 32 s" == ax.get_ylabel()
+    assert "Epithermal" in ns_tab.opts.status.text()
+    assert "binned at 2\u00b0" in ns_tab.opts.status.text()
+
+
+def test_neutron_region_selection_reports_stats(ns_tab):
+    ns_tab.opts.box_size.setValue(10.0)
+    ns_tab.select_region(0.0, -85.0)
+    status = ns_tab.opts.status.text()
+    assert "accumulations in" in status and "mean" in status
+    assert ns_tab._ns_active is not None
+    # The selection is drawn on the Moon and added to the profile.
+    assert any(c.startswith("waraShowBox(") for c in ns_tab._js_calls)
+    assert len(ns_tab.page.fig.axes[0].lines) == 2
+    # An empty box clears the overlay instead of leaving a stale one.
+    ns_tab.opts.box_size.setValue(0.05)
+    ns_tab.select_region(37.3, 11.7)
+    assert ns_tab._ns_active is None
+    assert "0 samples" in ns_tab.opts.status.text()
+
+
+def test_neutron_binning_and_statistic_redraw_without_reloading(ns_tab):
+    ns_tab._js_calls.clear()
+    ns_tab.opts.ns_bin.setCurrentText("5\u00b0")
+    assert "binned at 5\u00b0" in ns_tab.opts.status.text()
+    ns_tab.opts.ns_stat.setCurrentText("Samples / bin")
+    assert "samples per bin" in ns_tab.opts.status.text()
+    assert any(c.startswith("waraSetSurface(") for c in ns_tab._js_calls)
+
+
+def test_thermal_epithermal_ratio_is_offered_and_labelled(ns_tab):
+    """The derived ratio is a menu entry like any other product, and the map
+    and profile call it a ratio rather than counts."""
+    from wara.planetary.ns import NS_MENU, LPNsData, ns_product
+
+    assert "Thermal / epithermal" in NS_MENU
+    product = ns_product("thermal/epithermal", "high", 32)
+    ratio = LPNsData(product=product,
+                     counts=ns_tab._ns_data.counts / 600.0,
+                     latitude=ns_tab._ns_data.latitude,
+                     longitude=ns_tab._ns_data.longitude)
+    ns_tab.opts.ns_kind.setCurrentText("Thermal / epithermal")
+    ns_tab._neutrons_loaded((("thermal/epithermal", "high", 32), ratio))
+    assert ns_tab._ns_key() == ("thermal/epithermal", "high", 32)
+    assert "ratio" in ns_tab.opts.status.text()
+    assert "ratio" in ns_tab.page.fig.axes[0].get_ylabel().lower()
+    title = [c for c in ns_tab._js_calls if c.startswith("waraSetSurface(")][-1]
+    assert "Thermal / epithermal ratio" in title
+
+
+def test_unavailable_neutron_product_explains_itself(ns_tab):
+    ns_tab.opts.ns_kind.setCurrentText("Moderated")   # high orbit has none
+    assert "no moderated neutron data" in ns_tab.opts.status.text()
+    assert ns_tab._ns_data is None
+
+
+def test_neutron_map_uses_the_globe_mesh(ns_tab):
+    """The drape must match the mesh, or plotly silently drops the surface."""
+    from wara.planetary.ns import neutron_map
+
+    lon_axis, lat_axis = ns_tab._mesh_axes()
+    grid = neutron_map(ns_tab._ns_data, lon_axis, lat_axis, bin_deg=2.0)
+    assert grid.shape == (len(lat_axis), len(lon_axis))
 
 
 # ── Click bridge ──────────────────────────────────────────────────────────────
@@ -932,6 +1105,17 @@ def test_globe_html_graticule_initial_visibility():
     html = P.build_globe_html(90, 45, graticule=False)
     # Graticule traces are present (toggleable) but start hidden.
     assert "wara-grat" in html and '"visible":false' in html
+
+
+def test_globe_html_shows_grid_labels():
+    """The graticule's coordinate labels reach the page. plotly serialises the
+    figure with ensure_ascii, so the degree sign lands as a literal backslash-u
+    JSON escape in the HTML, not as the character itself."""
+    pytest.importorskip("plotly")
+    html = P.build_globe_html(16, 8, graticule=True)
+    deg = r"\u00b0"
+    for want in (f"60{deg}N", f"90{deg}W", f"0{deg}"):
+        assert want in html
 
 
 def test_empty_date_fields_mean_no_bound(tab):

@@ -119,6 +119,40 @@ def test_moon_figure_builds_with_markers():
     assert list(marker_traces[0].text) == ["origin", "NE"]
 
 
+def test_graticule_labels_major_values():
+    """The graticule carries one text trace with the major lon/lat values:
+    longitudes on the equator, latitudes repeated on the four quadrant
+    meridians (a label centred on the limb is half-hidden by the globe)."""
+    pytest.importorskip("plotly")
+    from wara.planetary.moon import graticule_traces
+
+    traces = graticule_traces()
+    text = [t for t in traces if t.mode == "text"]
+    assert len(text) == 1
+    # Labels are bolded for contrast against the bright highlands.
+    assert all(t.startswith("<b>") and t.endswith("</b>") for t in text[0].text)
+    labels = [t[3:-4] for t in text[0].text]
+    for want in ("0°", "90°E", "90°W", "180°",
+                 "60°N", "30°S"):
+        assert want in labels
+    # No label sits on the equator twice (the equator row is longitudes only).
+    assert labels.count("0°") == 1
+    # Each latitude appears once per quadrant meridian.
+    assert labels.count("60°N") == 4
+    # Labels float above the line shell: anchored on it, half of every glyph
+    # box is swallowed by the sphere.
+    r = np.sqrt(np.array(text[0].x) ** 2 + np.array(text[0].y) ** 2
+                + np.array(text[0].z) ** 2)
+    assert np.allclose(r, R_MOON_KM * 1.02)
+
+
+def test_graticule_labels_can_be_disabled():
+    pytest.importorskip("plotly")
+    from wara.planetary.moon import graticule_traces
+
+    assert all(t.mode == "lines" for t in graticule_traces(labels=False))
+
+
 def test_moon_figure_without_graticule_or_markers():
     pytest.importorskip("plotly")
     fig = moon_figure(n_lon=48, n_lat=24, graticule=False, markers=None)

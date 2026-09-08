@@ -214,6 +214,38 @@ class PlanetaryPage(QWidget):
         self.toolbar.update()
         self.toolbar.push_current()
 
+    def show_profile(self, lat, mean, sem=None, label="", region=None,
+                     ylabel="Counts per accumulation"):
+        """Plot a zonal (mean-vs-latitude) profile, the LP-NS counterpart of
+        the regional spectrum.
+
+        ``lat``/``mean`` is the whole-dataset profile (grey, with a +/-1 sigma
+        band from ``sem``); ``region``, if given, is
+        ``(lat, mean, (lat_lo, lat_hi), label)`` for the selected box, drawn
+        in cyan over a shaded latitude span."""
+        self.fig.clf()
+        ax = self.fig.add_subplot(111)
+        ax.plot(lat, mean, color=T.TEXT_DIM, lw=1.4, label=label)
+        if sem is not None:
+            sem = np.asarray(sem, dtype=float)
+            ax.fill_between(lat, mean - sem, mean + sem, color=T.TEXT_DIM,
+                            alpha=0.25, linewidth=0)
+        if region is not None:
+            rlat, rmean, span, rlabel = region
+            ax.axvspan(span[0], span[1], color=T.ACCENT_CYAN, alpha=0.12,
+                       linewidth=0)
+            ax.plot(rlat, rmean, color=T.ACCENT_CYAN, lw=1.6, marker="o",
+                    markersize=3.5, label=rlabel)
+        ax.set_xlim(-90, 90)
+        ax.set_xticks(range(-90, 91, 30))
+        ax.set_xlabel("Latitude (\u00b0)")
+        ax.set_ylabel(ylabel)
+        ax.legend(loc="upper right", fontsize=12)
+        self._restyle()
+        self.canvas.draw_idle()
+        self.toolbar.update()
+        self.toolbar.push_current()
+
     def _restyle(self):
         self.fig.set_facecolor(PLANET_PLOT_BG)
         for ax in self.fig.axes:
@@ -258,10 +290,21 @@ class PlanetaryOptions(QScrollArea):
             combo.setMinimumContentsLength(chars)
             return combo
 
+        # Widgets that belong to one instrument only; set_mission_mode()
+        # shows exactly one set, so neither workflow's controls clutter the
+        # other's (the two instruments share nothing but the globe).
+        self.grs_only, self.ns_only = [], []
+
         lay.addWidget(header("MISSION"))
         self.mission = _compact(ComboBox(), 18)
-        self.mission.addItems(["Lunar Prospector GRS"])
-        self.mission.setToolTip("NASA mission / instrument (more coming)")
+        self.mission.addItems(["Lunar Prospector GRS",
+                               "Lunar Prospector NS"])
+        self.mission.setToolTip(
+            "Which Lunar Prospector instrument to work with.\n"
+            "GRS: the gamma-ray spectrometer - daily spectra, regional "
+            "summing, elemental abundance maps.\n"
+            "NS: the neutron spectrometer - whole-mission neutron counts "
+            "binned into maps and latitude profiles")
         lay.addWidget(self.mission)
 
         self.dataset = _compact(ComboBox(), 16)
@@ -272,6 +315,7 @@ class PlanetaryOptions(QScrollArea):
             "(lp-l-grs-5-elem-abundance-v1), draped over the Moon.\n"
             "Elevation: LRO LOLA global topography draped as a color map")
         row, _ = labeled_row("Data", self.dataset); lay.addWidget(row)
+        self.grs_only.append(row)
 
         from wara.planetary.abundance import ABUNDANCE_ELEMENTS
         self.element = _compact(ComboBox(), 8)
@@ -281,16 +325,63 @@ class PlanetaryOptions(QScrollArea):
             "weight fraction)")
         self.element.setEnabled(False)
         row, _ = labeled_row("Element", self.element); lay.addWidget(row)
+        self.grs_only.append(row)
 
         self.resolution = _compact(ComboBox(), 5)
         self.resolution.addItems(["2°", "5°", "20°"])
         self.resolution.setToolTip("Map pixel size (equal-area binning)")
         self.resolution.setEnabled(False)
         row, _ = labeled_row("Map pixels", self.resolution); lay.addWidget(row)
+        self.grs_only.append(row)
+
+        from wara.planetary.ns import NS_MENU
+        self.ns_kind = _compact(ComboBox(), 10)
+        self.ns_kind.addItems(list(NS_MENU))
+        self.ns_kind.setToolTip(
+            "What to map from the LP Neutron Spectrometer.\n"
+            "Epithermal counts dip where hydrogen moderates neutrons (the "
+            "polar signature); thermal counts respond to strong absorbers "
+            "(Fe, Ti, Gd, Sm); fast neutrons track average atomic mass.\n"
+            "Thermal / epithermal is their per-accumulation ratio - the two "
+            "share one set of accumulations, so it divides exactly and "
+            "cancels much of what is common to both.\n"
+            "Fast is 32 s only; moderated exists only in the low orbit")
+        row, _ = labeled_row("Neutrons", self.ns_kind); lay.addWidget(row)
+        self.ns_only.append(row)
+
+        self.ns_phase = _compact(ComboBox(), 10)
+        self.ns_phase.addItems(["High orbit", "Low orbit"])
+        self.ns_phase.setToolTip(
+            "Mission phase: the ~100 km mapping orbit (1998-01-16 to "
+            "1999-01-16) or the ~30-40 km extended mission (down to the "
+            "1999-07-31 impact). The low orbit resolves finer detail; the "
+            "high orbit covers the whole Moon more evenly")
+        row, _ = labeled_row("Orbit", self.ns_phase); lay.addWidget(row)
+        self.ns_only.append(row)
+
+        self.ns_bin = _compact(ComboBox(), 5)
+        self.ns_bin.addItems(["1\u00b0", "2\u00b0", "5\u00b0"])
+        self.ns_bin.setCurrentIndex(1)
+        self.ns_bin.setToolTip(
+            "Lat/lon cell size the counts are binned into. Finer bins show "
+            "more detail but hold fewer samples each - switch the map to "
+            "Samples / bin to see the coverage behind the colors")
+        row, _ = labeled_row("Bin size", self.ns_bin); lay.addWidget(row)
+        self.ns_only.append(row)
+
+        self.ns_stat = _compact(ComboBox(), 12)
+        self.ns_stat.addItems(["Mean counts", "Samples / bin"])
+        self.ns_stat.setToolTip(
+            "Mean counts: the average corrected counts per accumulation in "
+            "each bin. Samples / bin: how many accumulations landed in the "
+            "bin - the coverage map, useful for judging noisy cells")
+        row, _ = labeled_row("Map", self.ns_stat); lay.addWidget(row)
+        self.ns_only.append(row)
 
         self.cmap = _compact(ComboBox(), 8)
         self.cmap.addItems(list(ABUNDANCE_COLORSCALES))
-        self.cmap.setToolTip("Colormap of the abundance map draped on the Moon")
+        self.cmap.setToolTip(
+            "Colormap of the abundance / neutron map draped on the Moon")
         self.cmap.setEnabled(False)
         row, _ = labeled_row("Colormap", self.cmap); lay.addWidget(row)
 
@@ -299,7 +390,8 @@ class PlanetaryOptions(QScrollArea):
         self.opacity.setDecimals(0); self.opacity.setSingleStep(10.0)
         self.opacity.setSuffix(" %")
         self.opacity.setToolTip(
-            "Opacity of the composition map. Below 100 % it floats as a "
+            "Opacity of the composition / neutron map. Below 100 % it "
+            "floats as a "
             "semi-transparent layer over the grey albedo Moon, so the base "
             "shows through (including the 3D topography relief if enabled)")
         self.opacity.setEnabled(False)
@@ -328,18 +420,23 @@ class PlanetaryOptions(QScrollArea):
         self.exag.setEnabled(False)
         row, _ = labeled_row("Exaggeration", self.exag); lay.addWidget(row)
 
-        lay.addWidget(hsep()); lay.addWidget(header("PDS DATA"))
+        sep, head = hsep(), header("PDS DATA")
+        lay.addWidget(sep); lay.addWidget(head)
+        self.grs_only += [sep, head]
         # Filled from the bundled orbit metadata when the tab is activated.
         self.lbl_avail = QLabel("")
         self.lbl_avail.setObjectName("stat_key"); self.lbl_avail.setWordWrap(True)
         self.lbl_avail.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
         lay.addWidget(self.lbl_avail)
+        self.grs_only.append(self.lbl_avail)
         self.ed_start = QLineEdit("1998-01-16")
         self.ed_start.setToolTip("First measurement date (YYYY-MM-DD)")
         row, _ = labeled_row("Start", self.ed_start); lay.addWidget(row)
+        self.grs_only.append(row)
         self.ed_end = QLineEdit("1998-01-31")
         self.ed_end.setToolTip("Last measurement date (YYYY-MM-DD, inclusive)")
         row, _ = labeled_row("End", self.ed_end); lay.addWidget(row)
+        self.grs_only.append(row)
 
         self.phase = _compact(ComboBox())
         self.phase.addItems(["All altitudes", "High (~100 km)", "Low (~30-40 km)"])
@@ -347,6 +444,7 @@ class PlanetaryOptions(QScrollArea):
             "Orbit phase: the ~100 km mapping orbit (Jan-Dec 1998) or the "
             "low-altitude extended mission (Dec 1998 - Jul 1999)")
         row, _ = labeled_row("Orbit", self.phase); lay.addWidget(row)
+        self.grs_only.append(row)
 
         self.btn_search = QPushButton("Search PDS")
         self.btn_search.setObjectName("open_btn")
@@ -354,6 +452,7 @@ class PlanetaryOptions(QScrollArea):
             "List the matching daily products in the NASA PDS archive")
         self.btn_search.setCursor(Qt.PointingHandCursor)
         lay.addWidget(self.btn_search)
+        self.grs_only.append(self.btn_search)
 
         self.btn_download = QPushButton("Download")
         self.btn_download.setObjectName("action_btn")
@@ -363,6 +462,7 @@ class PlanetaryOptions(QScrollArea):
         self.btn_download.setCursor(Qt.PointingHandCursor)
         self.btn_download.setEnabled(False)
         lay.addWidget(self.btn_download)
+        self.grs_only.append(self.btn_download)
 
         self.btn_load = QPushButton("Load into memory")
         self.btn_load.setObjectName("action_btn")
@@ -371,7 +471,9 @@ class PlanetaryOptions(QScrollArea):
             "become selectable on the globe")
         self.btn_load.setCursor(Qt.PointingHandCursor)
         lay.addWidget(self.btn_load)
+        self.grs_only.append(self.btn_load)
 
+        lay.addWidget(hsep()); lay.addWidget(header("DATA FOLDER"))
         self.lbl_dir = QLabel()
         self.lbl_dir.setObjectName("stat_key"); self.lbl_dir.setWordWrap(True)
         # A path is one long unbreakable token — never let it dictate the
@@ -381,7 +483,10 @@ class PlanetaryOptions(QScrollArea):
         lay.addWidget(self.lbl_dir)
         self.btn_dir = QPushButton("Data folder…")
         self.btn_dir.setObjectName("action_btn")
-        self.btn_dir.setToolTip("Where downloaded LP-GRS products are stored")
+        self.btn_dir.setToolTip(
+            "Where downloaded Lunar Prospector products are stored - the "
+            "daily GRS spectra, the abundance tables, and the whole-mission "
+            "neutron files alike")
         self.btn_dir.setCursor(Qt.PointingHandCursor)
         lay.addWidget(self.btn_dir)
 
@@ -404,6 +509,7 @@ class PlanetaryOptions(QScrollArea):
         row, _ = labeled_row("Box half-width", self.box_size); lay.addWidget(row)
 
         self.cb_compare = QCheckBox("Compare to all data")
+        self.grs_only.append(self.cb_compare)
         self.cb_compare.setChecked(True)
         self.cb_compare.setToolTip(
             "Overlay the per-record average of every loaded record, scaled to "
@@ -411,6 +517,7 @@ class PlanetaryOptions(QScrollArea):
         lay.addWidget(self.cb_compare)
 
         self.cb_keep = QCheckBox("Keep spectra")
+        self.grs_only.append(self.cb_keep)
         self.cb_keep.setToolTip(
             "While checked, selecting a new region keeps the previous "
             "spectrum visible for comparison; each kept spectrum and its box "
@@ -420,11 +527,14 @@ class PlanetaryOptions(QScrollArea):
         self.btn_send = QPushButton("Send to spectrum")
         self.btn_send.setObjectName("action_btn")
         self.btn_send.setToolTip(
-            "Hand the selected region's summed spectrum to the Spectrum tab "
-            "for peak finding / fitting")
+            "Hand whatever the spectrum panel is showing to the Spectrum tab "
+            "for peak finding / fitting: the selected region if one is "
+            "active, otherwise the sum over all loaded data. Kept spectra go "
+            "along as overlays")
         self.btn_send.setCursor(Qt.PointingHandCursor)
         self.btn_send.setEnabled(False)
         lay.addWidget(self.btn_send)
+        self.grs_only.append(self.btn_send)
 
         self.btn_clear_sel = QPushButton("Clear selection")
         self.btn_clear_sel.setObjectName("action_btn")
@@ -448,6 +558,10 @@ class PlanetaryOptions(QScrollArea):
             "selection keep working; 3D relief is ignored while flat")
         lay.addWidget(self.cb_flat)
         self.cb_grid = QCheckBox("Lat/lon grid")
+        self.cb_grid.setToolTip(
+            "Draw the 30° latitude/longitude graticule on the Moon, "
+            "labeled with the major values (longitudes along the equator, "
+            "latitudes down the 90°E/90°W meridians)")
         lay.addWidget(self.cb_grid)
         self.cb_marks = QCheckBox("Landmarks")
         self.cb_marks.setToolTip(
@@ -469,6 +583,14 @@ class PlanetaryOptions(QScrollArea):
 
         lay.addStretch(1)
         self.setWidget(inner)
+        self.set_mission_mode(neutrons=False)
+
+    def set_mission_mode(self, neutrons):
+        """Show one instrument's controls and hide the other's."""
+        for w in self.grs_only:
+            w.setVisible(not neutrons)
+        for w in self.ns_only:
+            w.setVisible(neutrons)
 
     def set_data_dir_label(self, path):
         """Show the data folder compactly (middle-elided); the tooltip carries
@@ -1000,7 +1122,9 @@ def build_flat_html(texture=None, carrier=(720, 360)):
         hoverinfo="none", name="wara-carrier", colorscale="Greys")
 
     axis_common = dict(
-        dtick=30, gridcolor="rgba(255,255,255,0.18)", showgrid=False,
+        # Amber, matching the globe's graticule: a white grid disappears over
+        # the bright highlands of the albedo map underneath.
+        dtick=30, gridcolor="rgba(255,138,61,0.75)", showgrid=False,
         zeroline=False, color=T.TEXT_DIM, constrain="domain",
         tickfont=dict(size=12, color=T.TEXT_DIM), linecolor=T.BORDER)
     fig = go.Figure(data=[carrier_trace])
@@ -1067,6 +1191,9 @@ class PlanetaryController(QObject):
         self._time64 = None        # per-record UTC timestamps (datetime64[s])
         self._meta = None          # cached bundled orbit metadata (lazy)
         self._abundance = {}       # resolution deg -> parsed abundance table
+        self._ns = {}              # (kind, phase, cadence) -> LPNsData
+        self._ns_data = None       # the neutron product on display
+        self._ns_active = None     # neutron region selection: lon/lat/half/stats
         self._lola = None          # cached LOLA DEM dict
         self._surface_is_abundance = False  # trace 0 recolored by abundance?
         self._globe_mesh = None    # (n_lon, n_lat) of the *built* globe
@@ -1099,11 +1226,17 @@ class PlanetaryController(QObject):
         o.cb_track.toggled.connect(self._toggle_track)
         o.cb_marks.toggled.connect(self._toggle_landmarks)
         o.btn_info.clicked.connect(self._show_mission_info)
+        o.mission.currentIndexChanged.connect(self._on_mission_changed)
         o.dataset.currentIndexChanged.connect(self._on_dataset_changed)
         o.element.currentTextChanged.connect(lambda *_: self._refresh_abundance())
         o.resolution.currentTextChanged.connect(lambda *_: self._refresh_abundance())
         o.cmap.currentTextChanged.connect(self._refresh_drape)
-        o.opacity.valueChanged.connect(lambda *_: self._refresh_abundance())
+        o.opacity.valueChanged.connect(self._refresh_drape)
+        o.ns_kind.currentTextChanged.connect(lambda *_: self._refresh_neutrons())
+        o.ns_phase.currentTextChanged.connect(lambda *_: self._refresh_neutrons())
+        # Binning is a pure re-display of data already in memory.
+        o.ns_bin.currentTextChanged.connect(lambda *_: self._rebin_neutrons())
+        o.ns_stat.currentTextChanged.connect(lambda *_: self._rebin_neutrons())
         o.cb_topo.toggled.connect(self._toggle_topo)
         o.exag.valueChanged.connect(self._on_exag_changed)
         o.cb_flat.toggled.connect(self._toggle_flat)
@@ -1339,7 +1472,7 @@ class PlanetaryController(QObject):
         # pinned, so they survive a reload; the active selection is dropped
         # (its mask belonged to the previous dataset).
         self._active = None
-        self.opts.btn_send.setEnabled(False)
+        self._refresh_send_enabled()      # the panel now shows the all-data sum
         self._js("waraClearSel();")
         if self.opts.cb_track.isChecked():
             self._draw_track()
@@ -1366,6 +1499,10 @@ class PlanetaryController(QObject):
 
     def select_region(self, lon, lat):
         half = float(self.opts.box_size.value())
+        if self.neutron_mode():
+            self._js_box("waraShowBox", lon, lat, half)
+            self._select_region_neutrons(lon, lat, half)
+            return
         # While "Keep spectra" is checked, the outgoing selection is pinned
         # (spectrum stays plotted, its Moon box recolored to match) instead of
         # being replaced by the new click.
@@ -1384,7 +1521,7 @@ class PlanetaryController(QObject):
                  f"({n_sel} records)")
         if n_sel == 0:
             self._active = None
-            self.opts.btn_send.setEnabled(False)
+            self._refresh_send_enabled()  # falls back to the all-data sum
             self._replot()
             self.page.readout.setText(label)
             self._status(f"0 records in {label} — LP covers ~13° of longitude "
@@ -1393,7 +1530,7 @@ class PlanetaryController(QObject):
         self._active = {"lon": lon, "lat": lat, "half": half, "n_sel": n_sel,
                         "spectrum": self._spectra[mask].sum(axis=0),
                         "label": label}
-        self.opts.btn_send.setEnabled(True)
+        self._refresh_send_enabled()
         self._replot()
         self.page.readout.setText(label)
         self._status(f"Summed {n_sel} records in {label}.")
@@ -1402,6 +1539,9 @@ class PlanetaryController(QObject):
         """Redraw the spectrum panel from the current state: kept spectra in
         their box colors, the active selection in cyan on top, and (optionally)
         the scaled all-data comparison."""
+        if self.neutron_mode():
+            self._replot_neutrons()
+            return
         kept = [(k["label"], k["spectrum"], k["color"]) for k in self._kept]
         if self._active is None and not kept:
             if self._spectra is not None:
@@ -1445,30 +1585,58 @@ class PlanetaryController(QObject):
             self._replot()
             self._status("Dropped the kept spectra.")
 
+    @staticmethod
+    def _send_name(entry):
+        """Spectrum-tab name for a region selection (active or kept)."""
+        return (f"LP-GRS lon {entry['lon']:.1f}, lat {entry['lat']:.1f} "
+                f"± {entry['half']:g}")
+
+    def _sendable(self):
+        """What the spectrum panel is showing, as ``[(counts, name), ...]``.
+
+        The first entry becomes the active spectrum on the Spectrum tab, the
+        rest ride along as overlays. This mirrors :meth:`_replot` exactly: the
+        selected region when there is one, otherwise the all-loaded-data sum
+        (which is what the panel plots with nothing selected — the case that
+        used to leave the button dead), plus every kept spectrum."""
+        out = []
+        if self.neutron_mode():
+            return out          # neutron counts are not a gamma spectrum
+        if self._active is not None:
+            out.append((self._active["spectrum"], self._send_name(self._active)))
+        elif self._spectra is not None and not self._kept:
+            n = len(self._spectra)
+            out.append((self._spectra.sum(axis=0),
+                        f"LP-GRS all loaded data ({n} records)"))
+        out.extend((k["spectrum"], self._send_name(k)) for k in self._kept)
+        return out
+
+    def _refresh_send_enabled(self):
+        self.opts.btn_send.setEnabled(bool(self._sendable()))
+
     def _send_to_spectrum(self):
-        """Hand the active region's summed spectrum to the Spectrum tab (raw
-        channels), mirroring the API tab's send."""
-        if self._active is None:
-            self._status("Click a region on the Moon first.")
+        """Hand the plotted spectra to the Spectrum tab (raw channels),
+        mirroring the API tab's send."""
+        specs = self._sendable()
+        if not specs:
+            self._status("Load data (or click a region on the Moon) first.")
             return
         if self.app is None:
             self._status("No main window to send to.")
             return
         from wara import spectrum as sp
 
-        a = self._active
-        name = (f"LP-GRS lon {a['lon']:.1f}, lat {a['lat']:.1f} "
-                f"± {a['half']:g}")
         try:
-            spect = sp.Spectrum(counts=a["spectrum"])
+            built = [(sp.Spectrum(counts=counts), name) for counts, name in specs]
         except Exception as exc:  # noqa: BLE001 — surface build errors
             self._status(f"Could not build spectrum: {exc}")
             return
         # Load as the active spectrum but stay on this tab; a brief button
         # flash confirms the send (same pattern as the API tab).
-        self.app.load_external_spectrum(spect, name, switch_tab=False)
+        self.app.load_external_spectra(built, switch_tab=False)
         self._flash_button(self.opts.btn_send)
-        self._status(f"Sent {a['label']} to the Spectrum tab.")
+        extra = f" (+{len(built) - 1} kept)" if len(built) > 1 else ""
+        self._status(f"Sent {built[0][1]}{extra} to the Spectrum tab.")
 
     def _flash_button(self, button):
         """Briefly brighten a button so the click visibly registered."""
@@ -1640,14 +1808,41 @@ class PlanetaryController(QObject):
             self._status("Mission documentation loaded.")
 
     # -- dataset drapes: abundance maps and LOLA elevation -------------------------
+    def _on_mission_changed(self, idx):
+        """Switch instrument: GRS (daily gamma spectra + derived maps) or NS
+        (whole-mission neutron counts). The two share only the globe, so the
+        options panel shows one instrument's controls at a time."""
+        neutrons = idx == 1
+        self.opts.set_mission_mode(neutrons)
+        self.opts.cmap.setEnabled(
+            neutrons or self.opts.dataset.currentIndex() in (1, 2))
+        self.opts.opacity.setEnabled(
+            neutrons or self.opts.dataset.currentIndex() == 1)
+        self._refresh_send_enabled()
+        if neutrons:
+            self._active = None      # the gamma selection is not neutron data
+            self._js("waraClearOverlay();")
+            self._surface_is_abundance = False
+            self._refresh_neutrons()
+            return
+        # Back to the GRS: drop the neutron drape and restore this dataset's.
+        self._ns_active = None
+        self._js("waraClearOverlay();")
+        self._surface_is_abundance = False
+        self._js("waraResetSurface();")
+        self._on_dataset_changed(self.opts.dataset.currentIndex())
+
     def _on_dataset_changed(self, idx):
         abundance, elevation = idx == 1, idx == 2
         self.opts.element.setEnabled(abundance)
         self.opts.resolution.setEnabled(abundance)
         self.opts.cmap.setEnabled(abundance or elevation)
         self.opts.opacity.setEnabled(abundance)
+        if self.neutron_mode():
+            return          # the dataset combo belongs to the GRS workflow
         if abundance:
             self._refresh_abundance()
+            self._replot()
             return
         # Leaving Calibrated: drop the transparent overlay if any, and put
         # the chosen dataset on the base surface.
@@ -1658,14 +1853,204 @@ class PlanetaryController(QObject):
         else:
             self._js("waraResetSurface();")
             self._status("Raw spectra dataset — albedo Moon restored.")
+        self._replot()
 
     def _refresh_drape(self, *_):
         """Re-apply whichever color drape the dataset combo selects."""
+        if self.neutron_mode():
+            self._apply_neutrons()
+            return
         idx = self.opts.dataset.currentIndex()
         if idx == 1:
             self._refresh_abundance()
         elif idx == 2:
             self._refresh_elevation()
+
+    # -- neutrons (LP-NS) ----------------------------------------------------------
+    def neutron_mode(self):
+        """True while the Neutron Spectrometer is the selected instrument."""
+        return self.opts.mission.currentIndex() == 1
+
+    def _ns_key(self):
+        """(kind, phase, cadence) for the current neutron controls.
+
+        Phase 1 ships the 32 s cadence only: it is the one the archive
+        publishes with altitude and time arrays (the 8 s files carry latitude
+        and longitude alone)."""
+        from wara.planetary.ns import NS_MENU
+
+        kind = NS_MENU[self.opts.ns_kind.currentText()]
+        phase = "low" if self.opts.ns_phase.currentIndex() == 1 else "high"
+        return kind, phase, 32
+
+    def _ns_bin_deg(self):
+        return float(self.opts.ns_bin.currentText().rstrip("\u00b0"))
+
+    def _ns_statistic(self):
+        return "samples" if self.opts.ns_stat.currentIndex() == 1 else "mean"
+
+    def _refresh_neutrons(self):
+        """Show the selected neutron product, downloading it on first use.
+
+        Unlike the GRS spectra there is nothing to search day by day: each
+        (type, orbit, cadence) is one whole-mission file pair of 2-17 MB."""
+        if not self.neutron_mode():
+            return
+        from wara.planetary.ns import NS_PRODUCTS
+
+        key = self._ns_key()
+        if key not in NS_PRODUCTS:
+            kind, phase, cadence = key
+            self._ns_data = None
+            self._status(
+                f"The archive has no {kind} neutron data in the "
+                f"{'low' if phase == 'low' else 'high'} orbit at "
+                f"{cadence} s - pick another combination.")
+            self._replot()
+            return
+        if key in self._ns:
+            self._ns_data = self._ns[key]
+            self._ns_active = None
+            self._apply_neutrons()
+            self._replot()
+            return
+
+        data_dir = self.data_dir
+        product = NS_PRODUCTS[key]
+
+        def job(progress):
+            from wara.planetary.ns import download_ns, read_ns
+            progress(f"Downloading {product.label} ({len(product.files)} "
+                     "file(s), up to ~11 MB)...")
+            download_ns(*key, data_dir=data_dir)
+            progress(f"Reading {product.label}...")
+            return key, read_ns(*key, data_dir=data_dir)
+
+        self._run(job, self._neutrons_loaded)
+
+    def _neutrons_loaded(self, result):
+        key, data = result
+        self._ns[key] = data
+        # The controls may have moved on while the files downloaded.
+        if not self.neutron_mode() or self._ns_key() != key:
+            return
+        self._ns_data = data
+        self._ns_active = None
+        self._apply_neutrons()
+        self._replot()
+
+    def _rebin_neutrons(self):
+        """Bin size / statistic changed - re-bin what is already in memory."""
+        if not self.neutron_mode() or self._ns_data is None:
+            return
+        self._apply_neutrons()
+        self._replot()
+
+    def _apply_neutrons(self):
+        """Drape the binned neutron map over the Moon."""
+        import json
+
+        from wara.planetary.ns import neutron_map
+
+        if not self.neutron_mode() or self._ns_data is None \
+                or not self._globe_ready:
+            return
+        data = self._ns_data
+        bin_deg = self._ns_bin_deg()
+        statistic = self._ns_statistic()
+        lon_axis, lat_axis = self._mesh_axes()
+        grid = neutron_map(data, lon_axis, lat_axis, bin_deg=bin_deg,
+                           statistic=statistic)
+        if statistic == "samples":
+            title = f"Samples / {bin_deg:g}\u00b0 bin"
+            cmin, cmax = 0.0, float(np.nanpercentile(grid, 99))
+        else:
+            title = f"{data.product.pretty_kind} ({data.product.value_label})"
+            # Robust range: the polar hydrogen dip is a few percent, so a
+            # min/max scale washes it out whenever one cell is an outlier.
+            cmin = float(np.nanpercentile(grid, 1))
+            cmax = float(np.nanpercentile(grid, 99))
+        values = json.dumps(np.round(np.nan_to_num(grid, nan=cmin), 3).tolist())
+        cmap = self.opts.cmap.currentText() or "Viridis"
+        opacity = float(self.opts.opacity.value()) / 100.0
+        if opacity >= 0.995:
+            self._js("waraClearOverlay();")
+            self._js(f"waraSetSurface({values}, {cmin:.6g}, {cmax:.6g}, "
+                     f"{json.dumps(title)}, {json.dumps(cmap)});")
+            self._surface_is_abundance = True
+            extra = ""
+        else:
+            self._js("waraResetSurface();")
+            self._surface_is_abundance = False
+            self._js(f"waraSetOverlay({values}, {cmin:.6g}, {cmax:.6g}, "
+                     f"{json.dumps(title)}, {json.dumps(cmap)}, "
+                     f"{opacity:.2f});")
+            extra = f" at {opacity * 100:.0f} % opacity over the albedo Moon"
+        unit = ("samples per bin" if statistic == "samples"
+                else data.product.value_label)
+        self._status(f"{data.label}: {data.n_samples} accumulations binned at "
+                     f"{bin_deg:g}\u00b0{extra} - {cmin:.4g} to {cmax:.4g} "
+                     f"{unit} (1st-99th percentile scale).")
+
+    def _select_region_neutrons(self, lon, lat, half):
+        """Region selection in neutron mode: summarize the counts in the box
+        and overlay that latitude band's profile."""
+        from wara.planetary.ns import region_stats
+
+        data = self._ns_data
+        if data is None:
+            self._status(f"Selected lon {lon:.1f}\u00b0, lat {lat:.1f}\u00b0 - "
+                         "no neutron data loaded yet.")
+            return
+        lat_lo, lat_hi = max(lat - half, -90.0), min(lat + half, 90.0)
+        # Over a pole the box spans every longitude, matching region_mask().
+        lon_range = None if (lat_hi >= 90.0 or lat_lo <= -90.0) \
+            else (lon - half, lon + half)
+        mask = data.select(lat_range=(lat_lo, lat_hi), lon_range=lon_range)
+        stats = region_stats(data, mask)
+        label = (f"lon {lon:.1f}\u00b0, lat {lat:.1f}\u00b0 \u00b1 {half:g}\u00b0 "
+                 f"({stats['n']} samples)")
+        self.page.readout.setText(label)
+        if stats["n"] == 0:
+            self._ns_active = None
+            self._replot()
+            self._status(f"0 samples in {label} - enlarge the box.")
+            return
+        self._ns_active = {"lon": lon, "lat": lat, "half": half,
+                           "mask": mask, "stats": stats, "label": label,
+                           "span": (lat_lo, lat_hi)}
+        self._replot()
+        digits = 3 if data.product.is_ratio else 1
+        unit = "" if data.product.is_ratio else " counts"
+        glob = float(np.nanmean(data.counts))
+        self._status(
+            f"{stats['n']} accumulations in {label}: mean "
+            f"{stats['mean']:.{digits}f}{unit} (sd {stats['sd']:.{digits}f}, "
+            f"sem {stats['sem']:.{digits + 1}f}) vs {glob:.{digits}f} "
+            "globally.")
+
+    def _replot_neutrons(self):
+        """Zonal profile of the loaded product, with the selection on top."""
+        from wara.planetary.ns import zonal_profile
+
+        data = self._ns_data
+        if data is None:
+            self.page.show_spectrum_empty(
+                "Choose a neutron type and orbit - the counts download on "
+                "first use")
+            return
+        bin_deg = self._ns_bin_deg()
+        lat, mean, sem, _ = zonal_profile(data, bin_deg=bin_deg)
+        region = None
+        if self._ns_active is not None:
+            rlat, rmean, _, rn = zonal_profile(
+                data, bin_deg=bin_deg, mask=self._ns_active["mask"])
+            keep = rn > 0
+            region = (rlat[keep], rmean[keep], self._ns_active["span"],
+                      self._ns_active["label"])
+        self.page.show_profile(
+            lat, mean, sem, label=f"{data.label} - all data", region=region,
+            ylabel=data.product.value_label.capitalize())
 
     def _abundance_deg(self):
         return int(self.opts.resolution.currentText().rstrip("°"))
@@ -1886,8 +2271,9 @@ class PlanetaryController(QObject):
     def _clear_selection(self):
         self._js("waraClearBoxes();")
         self._active = None
+        self._ns_active = None
         self._kept = []
-        self.opts.btn_send.setEnabled(False)
+        self._refresh_send_enabled()
         self.page.readout.setText("")
         self._replot()
 

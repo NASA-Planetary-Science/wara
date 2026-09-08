@@ -8,6 +8,9 @@ Step 1: a self-contained 3D Moon rendered with the correct latitude/longitude
 coordinate system (:mod:`wara.planetary.moon`).
 Step 2: search/download/read LP-GRS products from the NASA PDS and select/sum
 spectra by date, (lat, lon), altitude, ... (:mod:`wara.planetary.lp`).
+Step 3: the derived maps that go with them — elemental abundances
+(:mod:`wara.planetary.abundance`), LOLA topography (:mod:`wara.planetary.lola`),
+and the LP-NS neutron counts (:mod:`wara.planetary.ns`).
 """
 from .abundance import (
     ABUNDANCE_ELEMENTS,
@@ -41,6 +44,23 @@ from .lp import (
     list_grs_products,
     load_orbit_metadata,
     read_grs_day,
+)
+from .ns import (
+    NS_BASE_URL,
+    NS_CADENCES,
+    NS_KINDS,
+    NS_PHASES,
+    NS_PRODUCTS,
+    NS_STATISTICS,
+    LPNsData,
+    NSProduct,
+    download_ns,
+    neutron_bins,
+    neutron_map,
+    ns_product,
+    read_ns,
+    region_stats,
+    zonal_profile,
 )
 from .moon import (
     LUNAR_LANDMARKS,
@@ -82,6 +102,21 @@ __all__ = [
     "filter_products",
     "list_grs_products",
     "read_grs_day",
+    "NS_BASE_URL",
+    "NS_CADENCES",
+    "NS_KINDS",
+    "NS_PHASES",
+    "NS_PRODUCTS",
+    "NS_STATISTICS",
+    "LPNsData",
+    "NSProduct",
+    "download_ns",
+    "neutron_bins",
+    "neutron_map",
+    "ns_product",
+    "read_ns",
+    "region_stats",
+    "zonal_profile",
     "LUNAR_LANDMARKS",
     "R_MOON_KM",
     "lonlat_to_xyz",
