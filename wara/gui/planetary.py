@@ -834,7 +834,9 @@ _GLOBE_JS = """
   };
   /* Orbit ground track: one point per record, colored by measurement time.
      The colorbar title runs along the bar (side:'right') so it cannot be
-     clipped by the plot's right edge. */
+     clipped by the plot's right edge. It lives in the bottom half of the
+     right edge; composition colorbars (surface/overlay) take the top half,
+     so both can be shown at once without overlapping. */
   window.waraShowTrack = function (x, y, z, c, text, title) {
     window.waraClearTrack();
     Plotly.addTraces(gd, {type: 'scatter3d', mode: 'markers',
@@ -843,8 +845,9 @@ _GLOBE_JS = """
                colorbar: {title: {text: title, side: 'right',
                                   font: {color: '#aab2e0', size: 13}},
                           tickfont: {color: '#aab2e0', size: 12},
-                          thickness: 12, len: 0.55,
+                          thickness: 12, len: 0.46,
                           x: 0.94, xanchor: 'left',
+                          y: 0, yanchor: 'bottom',
                           outlinecolor: '#2a2a45'}},
       name: 'wara-track', text: text, hoverinfo: 'text', showlegend: false});
   };
@@ -889,7 +892,8 @@ _GLOBE_JS = """
       'colorbar.title.text': title, 'colorbar.title.side': 'right',
       'colorbar.title.font': {color: '#aab2e0', size: 13},
       'colorbar.tickfont': {color: '#aab2e0', size: 12},
-      'colorbar.thickness': 12, 'colorbar.len': 0.55,
+      'colorbar.thickness': 12, 'colorbar.len': 0.46,
+      'colorbar.y': 1, 'colorbar.yanchor': 'top',
       'colorbar.x': 0.88, 'colorbar.xanchor': 'left',
       'colorbar.outlinecolor': '#2a2a45'}, [0]);
   };
@@ -968,7 +972,8 @@ _GLOBE_JS = """
       colorbar: {title: {text: ov.title, side: 'right',
                          font: {color: '#aab2e0', size: 13}},
                  tickfont: {color: '#aab2e0', size: 12},
-                 thickness: 12, len: 0.55, x: 0.94, xanchor: 'left',
+                 thickness: 12, len: 0.46, x: 0.94, xanchor: 'left',
+                 y: 1, yanchor: 'top',
                  outlinecolor: '#2a2a45'},
       lighting: {ambient: 0.85, diffuse: 0.25, specular: 0.05},
       contours: {x: {highlight: false}, y: {highlight: false},
@@ -1095,8 +1100,9 @@ _FLAT_JS = """
                colorbar: {title: {text: title, side: 'right',
                                   font: {color: '#aab2e0', size: 13}},
                           tickfont: {color: '#aab2e0', size: 12},
-                          thickness: 12, len: 0.55,
+                          thickness: 12, len: 0.46,
                           x: 0.94, xanchor: 'left',
+                          y: 0, yanchor: 'bottom',
                           outlinecolor: '#2a2a45'}},
       name: 'wara-track', text: text, hoverinfo: 'text', showlegend: false});
   };
@@ -1129,7 +1135,8 @@ _FLAT_JS = """
       colorbar: {title: {text: title, side: 'right',
                          font: {color: '#aab2e0', size: 13}},
                  tickfont: {color: '#aab2e0', size: 12},
-                 thickness: 12, len: 0.55, x: 0.88, xanchor: 'left',
+                 thickness: 12, len: 0.46, x: 0.88, xanchor: 'left',
+                 y: 1, yanchor: 'top',
                  outlinecolor: '#2a2a45'},
       name: 'wara-drape', hoverinfo: 'none', showlegend: false});
   };
@@ -1145,7 +1152,8 @@ _FLAT_JS = """
       colorbar: {title: {text: title, side: 'right',
                          font: {color: '#aab2e0', size: 13}},
                  tickfont: {color: '#aab2e0', size: 12},
-                 thickness: 12, len: 0.55, x: 0.94, xanchor: 'left',
+                 thickness: 12, len: 0.46, x: 0.94, xanchor: 'left',
+                 y: 1, yanchor: 'top',
                  outlinecolor: '#2a2a45'},
       name: 'wara-abund', hoverinfo: 'none', showlegend: false});
   };

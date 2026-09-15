@@ -1164,6 +1164,27 @@ def test_globe_js_decodes_base64_typed_arrays():
         assert m.group(0).startswith("grid2d("), m.group(0)
 
 
+@pytest.mark.parametrize("js", [P._GLOBE_JS, P._FLAT_JS])
+def test_track_and_composition_colorbars_do_not_overlap(js):
+    """The orbit-track colorbar and the composition colorbar can be visible
+    together; they must occupy disjoint vertical halves of the right edge."""
+    code = re.sub(r"/\*.*?\*/", "", js, flags=re.S)
+
+    def body(fn):
+        i = code.index(f"window.{fn} = function")
+        return code[i:code.index("\n  };", i)]
+
+    track = body("waraShowTrack")
+    assert "y: 0, yanchor: 'bottom'" in track
+    for fn in ("waraSetSurface", "waraSetOverlay"):
+        b = body(fn)
+        assert ("y: 1, yanchor: 'top'" in b
+                or "'colorbar.y': 1, 'colorbar.yanchor': 'top'" in b), fn
+    for b in (track, body("waraSetSurface"), body("waraSetOverlay")):
+        lens = [float(v) for v in re.findall(r"len'?: (0\.\d+)", b)]
+        assert lens and all(v <= 0.5 for v in lens)
+
+
 def test_globe_figure_uses_typed_array_specs():
     """Guards the assumption above: confirm the installed plotly really does
     emit base64 typed-array specs for the Moon mesh. If this ever stops being
