@@ -3,8 +3,9 @@
 Ported from the ``neutron_trace_analysis_pico.py`` scratch script into a small,
 testable module the Neutrons GUI tab builds on. The physics follows Olcek et
 al. (2026): each baseline-corrected pulse is integrated into a total charge
-(the MCA / energy channel) and split into a prompt and a tail charge, whose
-ratio gives the discrimination parameter ``PSD = 1 - Q_prompt / Q_tail``.
+(the MCA / energy channel) and split into a prompt and a tail charge; the
+tail fraction gives the discrimination parameter
+``PSD = 1 - Q_prompt / Q_total = Q_tail / Q_total``.
 
 All functions assume *positive-going* pulses (call :func:`orient_positive`
 first). Time is in nanoseconds and amplitude in volts, matching the PicoScope
@@ -152,14 +153,15 @@ def mca_integral(traces_corrected, time_ns, gate=None):
 
 def psd_ratio(traces_corrected, time_ns, gate_start_ns, prompt_end_ns,
               tail_end_ns):
-    """Pulse-shape-discrimination ratio ``PSD = 1 - Q_prompt / Q_tail``.
+    """Pulse-shape-discrimination ratio ``PSD = 1 - Q_prompt / Q_total``.
 
     ``Q_prompt`` integrates the fast part of the pulse from *gate_start_ns* to
-    *prompt_end_ns*; ``Q_total`` runs from *gate_start_ns* to *tail_end_ns*, and
-    ``Q_tail = Q_total - Q_prompt``. Traces must already be positive-going and
-    baseline-corrected.
+    *prompt_end_ns*; ``Q_total`` runs from *gate_start_ns* to *tail_end_ns*, so
+    the PSD is the tail fraction ``Q_tail / Q_total`` (in [0, 1] for a clean
+    positive pulse, and bounded however wide the gates are). Traces must already
+    be positive-going and baseline-corrected.
 
-    Returns ``(psd, q_total)`` as arrays; ``psd`` is NaN where ``Q_tail <= 0``.
+    Returns ``(psd, q_total)`` as arrays; ``psd`` is NaN where ``Q_total <= 0``.
     """
     traces_corrected = np.asarray(traces_corrected)
     time_ns = np.asarray(time_ns, dtype=float)
@@ -169,11 +171,10 @@ def psd_ratio(traces_corrected, time_ns, gate_start_ns, prompt_end_ns,
 
     q_prompt = traces_corrected[:, prompt_mask].sum(axis=1, dtype=np.float64) * dt
     q_total = traces_corrected[:, total_mask].sum(axis=1, dtype=np.float64) * dt
-    q_tail = q_total - q_prompt
 
     with np.errstate(divide="ignore", invalid="ignore"):
-        psd = 1.0 - q_prompt / q_tail
-    psd[q_tail <= 0] = np.nan
+        psd = 1.0 - q_prompt / q_total
+    psd[q_total <= 0] = np.nan
     return psd, q_total
 
 
@@ -362,6 +363,89 @@ def figure_of_merit(psd_values, bins=80, psd_range=None):
         counts=counts, edges=edges)
 
 
+#: Columns read from a run's parquet files for PSD (the rest -- positions,
+#: alpha tags, timestamps -- are not needed and are skipped to save memory).
+_PARQUET_PSD_COLUMNS = ("channel", "Trace", "trace", "energy", "pileup",
+                        "CFD_error", "trace_flag")
+
+
+def available_pixie_sources(date, runnr):
+    """PIXIE data sources present on disk for a run, in ``("binary", "trace",
+    "parquet")`` order: ``binary-data/*.bin``, ``trace-data/*.bin`` and
+    ``parquet-data/*-pandas.parquet``. Empty if the run folder is not found."""
+    from wara import helper_api
+
+    try:
+        run_dir = helper_api.find_data_path(date, runnr)
+    except Exception:  # noqa: BLE001 -- unparsable date / missing run
+        return []
+    patterns = {"binary": "binary-data/*.bin", "trace": "trace-data/*.bin",
+                "parquet": "parquet-data/*-pandas.parquet"}
+    return [src for src, pat in patterns.items()
+            if next(run_dir.glob(pat), None) is not None]
+
+
+def _read_parquet_traces(date, runnr):
+    """Concatenate a run's parquet files keeping only the PSD columns, with the
+    parquet ``Trace`` column renamed to ``trace`` like the binary readers."""
+    import pandas as pd
+    import pyarrow.parquet as pq
+
+    from wara import read_parquet_api
+
+    files = read_parquet_api.load_parquet_data_files(date, runnr)
+    if not files:
+        raise FileNotFoundError(f"No parquet files found for run {date}-{runnr}")
+    frames = []
+    for f in sorted(files):
+        names = pq.ParquetFile(f).schema_arrow.names
+        cols = [c for c in _PARQUET_PSD_COLUMNS if c in names]
+        frames.append(pd.read_parquet(f, columns=cols, engine="pyarrow"))
+    df = pd.concat(frames, ignore_index=True)
+    if "trace" not in df.columns:
+        if "Trace" not in df.columns:
+            raise ValueError(f"Run {date}-{runnr} parquet files have no traces")
+        df = df.rename(columns={"Trace": "trace"})
+    return df
+
+
+def read_pixie_run(date, runnr, source="binary", cfd="on", align="fast"):
+    """Read a PIXIE run for PSD from one of three sources (*source*):
+
+    * ``"binary"`` -- the full list-mode run in ``binary-data/``;
+    * ``"trace"`` -- the trace-snapshot acquisitions in ``trace-data/``,
+      filtered by *cfd* (ignored by the other sources);
+    * ``"parquet"`` -- the processed run in ``parquet-data/`` (same events as
+      the binary run, much faster to read).
+
+    Only events that carry a trace are time-aligned (the full run records
+    traces on some channels only), so the channels without traces cost nothing.
+    """
+    from wara import helper_api
+
+    if source == "trace":
+        return helper_api.read_trace_data(date=date, runnr=runnr, cfd=cfd,
+                                          align=align)
+    if source == "binary":
+        df = helper_api.read_binary_data(date, runnr)
+    elif source == "parquet":
+        df = _read_parquet_traces(date, runnr)
+    else:
+        raise ValueError(f"Unknown PIXIE source {source!r}; expected 'binary', "
+                         "'trace' or 'parquet'")
+    if align is not None:
+        df = helper_api.align_traces(df, method=align, inplace=True)
+    return df
+
+
+def pixie_trace_channels(df):
+    """Sorted channels of a PIXIE DataFrame that have at least one trace."""
+    if "channel" not in df.columns:
+        return []
+    has = df["trace"].map(lambda t: hasattr(t, "__len__") and len(t) > 0)
+    return sorted(int(c) for c in df.channel[has.to_numpy()].unique())
+
+
 class NeutronTraces:
     """Loaded trace dataset with a full PSD pipeline behind cached results.
 
@@ -372,7 +456,7 @@ class NeutronTraces:
     filter and plot without re-integrating on every interaction.
     """
 
-    def __init__(self, time_ns, traces, mean=None):
+    def __init__(self, time_ns, traces, mean=None, recorded_energy=None):
         self.time_ns = np.asarray(time_ns, dtype=float)
         # Keep the trace matrix in its native (typically float32) dtype: for a
         # 120k×750 acquisition that is ~360 MB vs. ~720 MB in float64.
@@ -380,6 +464,11 @@ class NeutronTraces:
         self.mean = (self.sign * np.asarray(mean, dtype=float)
                      if mean is not None else self.traces.mean(axis=0))
         self.n_traces = self.traces.shape[0]
+        # Per-pulse energy recorded by the digitizer (e.g. the PIXIE energy in a
+        # parquet run). When set it is used as the energy axis instead of the
+        # gate integral Q_total; the PSD still comes from the traces.
+        self.recorded_energy = (None if recorded_energy is None
+                                else np.asarray(recorded_energy, dtype=float))
 
         # Analysis parameters (sensible defaults; the GUI overrides these).
         self.threshold_v = 0.0
@@ -390,7 +479,8 @@ class NeutronTraces:
 
         # Cached results (filled by compute()).
         self.corrected = None
-        self.energy = None      # q_total per trace (V·ns)
+        self.q_total = None     # gate integral per trace (V·ns)
+        self.energy = None      # recorded_energy if given, else q_total
         self.psd = None
         self.valid = None       # bool mask: above threshold, finite psd, +ve area
 
@@ -417,15 +507,26 @@ class NeutronTraces:
 
     @classmethod
     def from_pixie(cls, date=None, runnr=None, channel=None, cfd="on",
-                   align="fast", df=None, dt_ns=None):
+                   align="fast", df=None, dt_ns=None, source="binary",
+                   recorded_energy=None):
         """Build a PSD dataset from PIXIE-16 list-mode traces.
 
-        Reads a run with :func:`wara.helper_api.read_trace_data` (time-aligning
-        the traces via *align*, one of ``"fast"``/``"edge"``/``"peak"``/``None``,
-        and selecting the *cfd* acquisition), keeps clean single pulses of the
-        selected *channel*, and stacks them into the trace matrix. PIXIE pulses
-        are positive-going ADC on a large pedestal, so a baseline-subtracted mean
-        is passed as the polarity / gate-start reference.
+        *source* picks what is read: ``"binary"`` (default) is the full
+        list-mode run in ``binary-data/`` (:func:`wara.helper_api.read_binary_data`,
+        the same events the API tab processes; only channels recorded with
+        traces are usable), ``"trace"`` the short trace-snapshot acquisitions in
+        ``trace-data/`` (:func:`wara.helper_api.read_trace_data`, filtered by
+        *cfd*; the other sources ignore *cfd*), or ``"parquet"`` the processed
+        run in ``parquet-data/`` (see :func:`read_pixie_run`). The traces are
+        time-aligned via *align*, one of ``"fast"``/``"edge"``/``"peak"``/``None``;
+        clean single pulses of the selected *channel* are kept and stacked into
+        the trace matrix. PIXIE pulses are positive-going ADC on a large
+        pedestal, so a baseline-subtracted mean is passed as the polarity /
+        gate-start reference.
+
+        *recorded_energy* uses the run's ``energy`` column (the digitizer's own
+        energy, in ADC channels) as the energy axis instead of the trace gate
+        integral. ``None`` (default) turns it on for ``source="parquet"`` only.
 
         Pass a pre-read *df* (and *dt_ns*) to rebuild for a different *channel*
         without re-reading the run from disk.
@@ -433,8 +534,7 @@ class NeutronTraces:
         from wara import helper_api
 
         if df is None:
-            df = helper_api.read_trace_data(date=date, runnr=runnr, cfd=cfd,
-                                            align=align)
+            df = read_pixie_run(date, runnr, source=source, cfd=cfd, align=align)
         if dt_ns is None:
             dt_ns = helper_api.read_sample_interval_ns(date, runnr)
 
@@ -444,22 +544,30 @@ class NeutronTraces:
             df = df[df.pileup == 0]              # pile-up wrecks the PSD integrals
         if align is not None and "align_shift" in df.columns:
             df = df[df.align_shift.notna()]      # drop traces that failed to align
+        lengths = df["trace"].map(lambda t: len(t) if hasattr(t, "__len__") else 0)
+        df, lengths = df[lengths > 0], lengths[lengths > 0]   # events without a trace
         if df.shape[0] == 0:
             raise ValueError(
                 f"No usable traces for run {runnr}, channel {channel} "
                 f"(cfd={cfd}, align={align})")
 
-        lengths = df["trace"].map(lambda t: len(t) if hasattr(t, "__len__") else 0)
         modal = int(lengths.mode().iloc[0])
         df = df[lengths == modal]
         traces = np.stack([np.asarray(t, dtype=np.float32) for t in df["trace"]])
         time_ns = np.arange(modal, dtype=float) * float(dt_ns)
+        if recorded_energy is None:
+            recorded_energy = source == "parquet"
+        energy = None
+        if recorded_energy:
+            if "energy" not in df.columns:
+                raise ValueError(f"Run {runnr} has no recorded 'energy' column")
+            energy = df["energy"].to_numpy(dtype=float)
 
         # Baseline-subtracted mean: the raw pedestal (~8000 ADC) would otherwise
         # sit above the auto-pre-trigger's 20%-of-peak rise test and break it.
         npre = max(int(round(0.1 * modal)), 5)
         mean_ref = (traces - traces[:, :npre].mean(axis=1, keepdims=True)).mean(axis=0)
-        return cls(time_ns, traces, mean=mean_ref)
+        return cls(time_ns, traces, mean=mean_ref, recorded_energy=energy)
 
     def set_params(self, *, threshold_v=None, gate_start_ns=None,
                    prompt_end_ns=None, tail_end_ns=None):
@@ -477,11 +585,13 @@ class NeutronTraces:
         """Recompute baseline-corrected traces, energy, PSD and the valid mask."""
         self.corrected = baseline_correct(self.traces, self.time_ns,
                                            self.gate_start_ns)
-        self.psd, self.energy = psd_ratio(
+        self.psd, self.q_total = psd_ratio(
             self.corrected, self.time_ns, self.gate_start_ns,
             self.prompt_end_ns, self.tail_end_ns)
+        self.energy = (self.q_total if self.recorded_energy is None
+                       else self.recorded_energy)
         above = self.traces.max(axis=1) >= self.threshold_v
-        positive = self.energy > 0
+        positive = (self.q_total > 0) & (self.energy > 0)
         self.valid = above & positive & np.isfinite(self.psd)
         return self
 

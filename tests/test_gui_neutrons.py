@@ -11,6 +11,7 @@ import os
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 import matplotlib
+
 matplotlib.use("Agg")
 import numpy as np
 import pytest
@@ -504,3 +505,128 @@ def test_log_run_writes_entry(qapp, synth_npz, monkeypatch, tmp_path):
     assert e["stats"]["Traces"] == "400"
     assert "Valid pulses" in e["stats"]
     w.close()
+
+
+def test_psd_and_mca_histogram_every_valid_pulse(neutrons):
+    """Only the Traces panel sub-samples; the PSD 2-D histogram counts every
+    valid pulse, PSD outliers included (the view is only zoomed)."""
+    nt = neutrons.nt
+    nt.psd = nt.psd.copy()
+    i = int(np.flatnonzero(nt.valid)[0])
+    nt.psd[i] = nt.psd[nt.valid].max() + 50.0      # far outside the 1-99 % band
+    neutrons._redraw()
+    n_valid = int(nt.valid.sum())
+
+    mesh = neutrons.page.ax_psd.collections[0]
+    assert int(np.ma.filled(mesh.get_array(), 0).sum()) == n_valid
+    _, hi = neutrons.page.ax_psd.get_ylim()
+    assert hi < nt.psd[i]                          # outlier counted, not shown
+
+
+# ── PIXIE data source (trace / binary / parquet) ────────────────────────────────
+def _fake_run(tmp_path, folders):
+    run = tmp_path / "RUN"
+    for sub, name in folders:
+        (run / sub).mkdir(parents=True, exist_ok=True)
+        (run / sub / name).write_bytes(b"")
+    return run
+
+
+def test_available_pixie_sources_lists_present_folders(tmp_path, monkeypatch):
+    from wara import helper_api
+    run = _fake_run(tmp_path, [("binary-data", "a-00001.bin"),
+                               ("parquet-data", "RUN-x-00001-pandas.parquet")])
+    monkeypatch.setattr(helper_api, "find_data_path", lambda d, r: run)
+    assert npsd.available_pixie_sources("2026-09-24", 1) == ["binary", "parquet"]
+
+
+def test_read_pixie_run_parquet_renames_and_aligns(tmp_path, monkeypatch):
+    import pandas as pd
+
+    from wara import read_parquet_api
+    t = np.full(80, 100, dtype=np.uint16); t[30:] = 900
+    f = tmp_path / "RUN-x-00001-pandas.parquet"
+    pd.DataFrame({"channel": [1, 1, 9], "Trace": [t, t, np.array([], np.uint16)],
+                  "energy": [1.0, 2.0, 3.0], "X": [0.0, 0.0, 0.0]}).to_parquet(f)
+    monkeypatch.setattr(read_parquet_api, "load_parquet_data_files",
+                        lambda d, r: [f])
+    df = npsd.read_pixie_run("2026-09-24", 1, source="parquet", align="edge")
+    assert "trace" in df.columns and "X" not in df.columns
+    assert npsd.pixie_trace_channels(df) == [1]
+    assert df["align_shift"].iloc[:2].notna().all()
+    with pytest.raises(ValueError):
+        npsd.read_pixie_run("2026-09-24", 1, source="bogus")
+
+
+def test_source_combo_greys_out_missing_sources(neutrons, monkeypatch):
+    from wara.gui import neutrons as gui_neutrons
+    monkeypatch.setattr(gui_neutrons, "available_pixie_sources",
+                        lambda d, r: ["trace", "parquet"])
+    o = neutrons.opts
+    assert list(o.SOURCES) == ["Trace data", "Binary data", "Parquet data"]
+    assert o.cmb_source.currentText() == "Binary data"
+    o.ed_date.setText("2026-09-24"); o.ed_run.setText("1")
+    neutrons._refresh_sources()
+    model = o.cmb_source.model()
+    assert [model.item(i).isEnabled() for i in range(3)] == [True, False, True]
+    # Binary is unavailable, so the pick moves to the first available source
+    # (trace data), which enables the CFD choice.
+    assert o.cmb_source.currentText() == "Trace data"
+    assert o.cmb_cfd.isEnabled()
+
+
+def test_psd_bins_keep_resolution_with_far_outliers(neutrons):
+    """Far PSD outliers (e.g. noisy pulses with Q_total near 0) must land in
+    overflow bins instead of stretching the uniform bins until only a handful
+    remain in the visible band."""
+    from wara.gui.neutrons import NeutronsPage
+    rng = np.random.default_rng(0)
+    psd = np.r_[rng.normal(0.5, 0.05, 5000), -6900.0, 3.0]
+    view = (0.3, 0.7)
+    edges = NeutronsPage._psd_edges(psd, view, 150)
+    assert np.all(np.diff(edges) > 0)
+    in_view = np.sum((edges >= view[0] - 1e-9) & (edges <= view[1] + 1e-9)) - 1
+    assert in_view == 150
+    assert edges[0] == psd.min() and edges[-1] >= psd.max()
+    counts, _ = np.histogram(psd, edges)
+    assert counts.sum() == psd.size
+
+    nt = neutrons.nt
+    nt.psd = nt.psd.copy()
+    nt.psd[int(np.flatnonzero(nt.valid)[0])] = -1e4
+    neutrons._redraw()
+    mesh = neutrons.page.ax_psd.collections[0]
+    assert int(np.ma.filled(mesh.get_array(), 0).sum()) == int(nt.valid.sum())
+
+
+def test_psd_is_tail_fraction_of_total_charge():
+    """PSD = 1 - Q_prompt/Q_total: bounded in [0, 1] for positive pulses no
+    matter how wide the gates, and the long-tail population sits higher."""
+    t, traces, mean = make_traces()
+    nt = npsd.NeutronTraces(t, traces, mean=mean)
+    nt.set_params(prompt_end_ns=90.0, tail_end_ns=299.0)   # prompt past the peak
+    nt.compute()
+    p = nt.psd[nt.valid]
+    # Short-tail pulses have ~no tail left past 90 ns, so noise can dip them a
+    # little below 0 -- but nothing like the old 1 - Q_prompt/Q_tail blow-up.
+    assert p.min() > -0.2 and p.max() <= 1.0
+    corr = nt.corrected
+    dt = t[1] - t[0]
+    qp = corr[:, (t >= nt.gate_start_ns) & (t < 90.0)].sum(axis=1) * dt
+    np.testing.assert_allclose(nt.psd[nt.valid], (1 - qp / nt.q_total)[nt.valid],
+                               atol=1e-5)
+
+
+def test_from_pixie_uses_recorded_energy_for_parquet():
+    import pandas as pd
+    tr = np.full(80, 100.0); tr[30:] = 100 + 800 * np.exp(-np.arange(50) / 10)
+    df = pd.DataFrame({"channel": [1] * 3, "trace": [tr] * 3,
+                       "energy": [1000.0, 2000.0, 3000.0]})
+    nt = npsd.NeutronTraces.from_pixie(channel=1, df=df, dt_ns=2.0, align=None,
+                                       source="parquet").compute()
+    np.testing.assert_array_equal(nt.energy, [1000.0, 2000.0, 3000.0])
+    assert not np.allclose(nt.q_total, nt.energy)
+    # Binary/trace sources keep the gate integral as the energy.
+    nt2 = npsd.NeutronTraces.from_pixie(channel=1, df=df, dt_ns=2.0, align=None,
+                                        source="binary").compute()
+    np.testing.assert_array_equal(nt2.energy, nt2.q_total)

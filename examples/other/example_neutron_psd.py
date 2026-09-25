@@ -7,7 +7,7 @@ three linked panels of the Neutrons GUI tab as static matplotlib plots:
   * Traces  — example baseline-corrected pulses coloured by peak amplitude,
               with the voltage threshold and the Q_prompt / Q_tail gate windows.
   * MCA     — histogram of the per-pulse energy (total charge integral).
-  * PSD     — 2-D histogram of PSD = 1 - Q_prompt/Q_tail vs. energy, where the
+  * PSD     — 2-D histogram of PSD = 1 - Q_prompt/Q_total vs. energy, where the
               neutron (long-tail) and gamma (short-tail) populations separate.
 
 The dataset ``examples/data/EJ309_neutrons_traces_subset.npz`` is a 2000-pulse
@@ -75,7 +75,7 @@ ax_psd.hist2d(energy, psd, bins=[256, 256],
               range=[[energy.min(), energy.max()], [psd_lo - pad, psd_hi + pad]],
               norm=matplotlib.colors.LogNorm(), cmap="jet")
 ax_psd.set_xlabel("Energy / pulse integral (V·ns)")
-ax_psd.set_ylabel("PSD = 1 - Q_prompt/Q_tail")
+ax_psd.set_ylabel("PSD = 1 - Q_prompt/Q_total")
 ax_psd.set_title("PSD vs. energy")
 
 fig.tight_layout()

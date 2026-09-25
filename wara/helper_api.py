@@ -159,23 +159,6 @@ def _filter_trace_files_by_cfd(file_path, files, cfd):
 # ``examples/pixie/example_trace_alignment_pixie.py``.
 
 
-def _trace_matrix(df):
-    """Stack the trace column into a 2-D float array.
-
-    Returns ``(T, idx)`` where ``T`` has shape ``(n, L)`` for the ``L`` = modal
-    trace length and ``idx`` are the DataFrame positional indices of those rows.
-    Rows whose trace has a different length (or none) are left out so callers can
-    return them unchanged.
-    """
-    lengths = df["trace"].map(lambda t: len(t) if hasattr(t, "__len__") else 0)
-    if len(lengths) == 0 or lengths.max() == 0:
-        return np.empty((0, 0)), np.empty(0, dtype=int)
-    modal = int(lengths.mode().iloc[0])
-    idx = np.flatnonzero((lengths == modal).to_numpy())
-    T = np.stack([np.asarray(t, dtype=float) for t in df["trace"].iloc[idx]])
-    return T, idx
-
-
 def _rising_edge_ref(T, fraction):
     """Sub-sample index of the ``fraction``-of-amplitude crossing on the rising
     edge of each (baseline-subtracted) trace. NaN where no crossing is found."""
@@ -388,7 +371,8 @@ def align_traces(df, method="edge", fraction=0.5, ref=None,
 
     A per-trace reference time is derived from the pulse shape and every trace is
     shifted (linear interpolation, baseline preserved) so that reference lands on
-    the same sample index.
+    the same sample index. Runs mixing trace lengths (channels recorded with
+    different trace lengths) are aligned per length group, each on its own grid.
 
     Parameters
     ----------
@@ -423,34 +407,46 @@ def align_traces(df, method="edge", fraction=0.5, ref=None,
     """
     if not inplace:
         df = df.copy()
+    if method not in ("edge", "fast", "peak"):
+        raise ValueError(
+            f"Unknown align method {method!r}; expected 'edge', 'fast' or 'peak'")
     df["align_shift"] = np.nan
-    T, idx = _trace_matrix(df)
-    if len(idx) == 0:
+    # Channels can be recorded with different trace lengths in the same run
+    # (e.g. 500 vs 1500 samples), so align each length group on its own.
+    lengths = df["trace"].map(
+        lambda t: len(t) if hasattr(t, "__len__") else 0).to_numpy()
+    groups = [n for n in np.unique(lengths) if n > 0]
+    if not groups:
         warnings.warn("align_traces: no traces to align.", stacklevel=2)
         return df
 
-    base = T - T[:, :30].mean(axis=1, keepdims=True)  # baseline-subtracted view
-    if method == "edge":
-        pos = _rising_edge_ref(base, fraction)
-    elif method == "fast":
-        pos = _fast_filter_ref(base, rise, gap, threshold)
-    elif method == "peak":
-        pos = _peak_ref(base)
-    else:
-        raise ValueError(
-            f"Unknown align method {method!r}; expected 'edge', 'fast' or 'peak'")
-
-    target = float(np.round(np.nanmedian(pos))) if ref is None else float(ref)
-    shift = target - pos
-    shift_safe = np.where(np.isfinite(shift), shift, 0.0)
-    aligned = _shift_rows(T, shift_safe)
-
     trace_col = df["trace"].to_numpy(dtype=object)
-    for j, row in enumerate(idx):
-        trace_col[row] = aligned[j]
-    df["trace"] = trace_col
     shift_col = df["align_shift"].to_numpy()
-    shift_col[idx] = shift
+    for n in groups:
+        idx = np.flatnonzero(lengths == n)
+        T = np.stack([np.asarray(t, dtype=float) for t in trace_col[idx]])
+
+        base = T - T[:, :30].mean(axis=1, keepdims=True)  # baseline-subtracted
+        if method == "edge":
+            pos = _rising_edge_ref(base, fraction)
+        elif method == "fast":
+            pos = _fast_filter_ref(base, rise, gap, threshold)
+        else:
+            pos = _peak_ref(base)
+
+        if ref is not None:
+            target = float(ref)
+        elif np.isfinite(pos).any():
+            target = float(np.round(np.nanmedian(pos)))
+        else:
+            continue                     # nothing locatable in this group
+        shift = target - pos
+        shift_safe = np.where(np.isfinite(shift), shift, 0.0)
+        aligned = _shift_rows(T, shift_safe)
+        for j, row in enumerate(idx):
+            trace_col[row] = aligned[j]
+        shift_col[idx] = shift
+    df["trace"] = trace_col
     df["align_shift"] = shift_col
     return df
 

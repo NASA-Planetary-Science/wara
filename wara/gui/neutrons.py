@@ -43,7 +43,8 @@ from PyQt5.QtWidgets import (
 )
 from PyQt5.QtCore import Qt, QSize, QTimer
 
-from wara.neutron_psd import NeutronTraces
+from wara.neutron_psd import (NeutronTraces, available_pixie_sources,
+                              pixie_trace_channels, read_pixie_run)
 from wara import runlog
 from wara import spectrum as sp
 
@@ -288,6 +289,29 @@ class NeutronsPage(QWidget):
         self._attach_span()
 
     # -- drawing: PSD panel ----------------------------------------------------
+    @staticmethod
+    def _psd_edges(psd, view, bins, extend=3):
+        """PSD-axis bin edges: *bins* uniform bins across *view*, the same width
+        continued up to *extend* view-widths beyond it, then one overflow bin
+        out to the extreme value on each side.
+
+        Noisy low-energy pulses (Q_total near 0 after baseline subtraction)
+        can land far outside the band. Stretching uniform bins over that range
+        would leave only a few bins in view; the overflow bins keep every pulse
+        counted at a fixed in-view resolution.
+        """
+        lo, hi = view
+        w = (hi - lo) / bins
+        pmin, pmax = float(psd.min()), float(psd.max())
+        below = int(np.ceil(min(max(lo - pmin, 0.0), extend * (hi - lo)) / w))
+        above = int(np.ceil(min(max(pmax - hi, 0.0), extend * (hi - lo)) / w))
+        edges = lo + w * np.arange(-below, bins + above + 1)
+        if pmin < edges[0]:
+            edges = np.r_[pmin, edges]
+        if pmax > edges[-1]:
+            edges = np.r_[edges, np.nextafter(pmax, np.inf)]
+        return edges
+
     def draw_psd(self, energy, psd, bins, energy_range, rects, log_counts=True):
         """2-D energy-vs-PSD histogram with the active MCA band and one or more
         selection rectangles overlaid; (re)attaches the rectangle selector.
@@ -302,9 +326,13 @@ class NeutronsPage(QWidget):
             ex = (float(energy.min()), float(energy.max()))
             plo, phi = np.percentile(psd, [1.0, 99.0])
             pad = 0.05 * (phi - plo) if phi > plo else 0.1
-            ax.hist2d(energy, psd, bins=[bins, bins],
-                      range=[list(ex), [plo - pad, phi + pad]],
+            view = (plo - pad, phi + pad)
+            # Histogram every pulse (outliers included) but open on the 1-99 %
+            # PSD band, at *bins* resolution across that band.
+            ax.hist2d(energy, psd, bins=[bins, self._psd_edges(psd, view, bins)],
+                      range=[list(ex), None],
                       norm=LogNorm() if log_counts else None, cmap="jet")
+            ax.set_ylim(*view)
         if energy_range[0] is not None:
             for x in energy_range:
                 ax.axvline(x, color=T.TEXT_PRIMARY, ls=":", lw=1.2, zorder=6)
@@ -313,7 +341,7 @@ class NeutronsPage(QWidget):
                 (elo, plo_), ehi - elo, phi_ - plo_, fill=False,
                 edgecolor=color, ls=ls, lw=1.8, zorder=7))
         ax.set_xlabel(f"Energy / pulse integral ({self.charge_unit})")
-        ax.set_ylabel("PSD = 1 - Q_prompt / Q_tail")
+        ax.set_ylabel("PSD = 1 - Q_prompt / Q_total")
         if self.armed:
             title = "PSD vs. energy — draw coloured selection boxes"
         elif self.fom_armed:
@@ -486,6 +514,10 @@ class NeutronsPage(QWidget):
 class NeutronsOptions(QScrollArea):
     """Scrollable options for the Neutrons tab."""
 
+    #: Source-combo label -> :func:`wara.neutron_psd.read_pixie_run` source.
+    SOURCES = {"Trace data": "trace", "Binary data": "binary",
+               "Parquet data": "parquet"}
+
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setWidgetResizable(True)
@@ -526,7 +558,7 @@ class NeutronsOptions(QScrollArea):
         pix_hint = QLabel(
             "Load time-aligned traces straight from a PIXIE run (same date / run "
             "/ channel as the API page). Traces are aligned per the option below "
-            "before PSD.")
+            "before PSD. Only channels recorded with traces are listed.")
         pix_hint.setObjectName("stat_key"); pix_hint.setWordWrap(True)
         lay.addWidget(pix_hint)
 
@@ -534,6 +566,19 @@ class NeutronsOptions(QScrollArea):
         r, _ = labeled_row("Date", self.ed_date); lay.addWidget(r)
         self.ed_run = QLineEdit(); self.ed_run.setPlaceholderText("e.g. 19")
         r, _ = labeled_row("Run", self.ed_run); lay.addWidget(r)
+        self.cmb_source = ComboBox()
+        self.cmb_source.addItems(list(self.SOURCES))
+        self.cmb_source.setCurrentText("Binary data")
+        self.cmb_source.setToolTip(
+            "Which PIXIE data to read. Sources with no files for the entered "
+            "date / run are greyed out.\n"
+            "Trace data: the short CFD on/off trace snapshots in trace-data/ "
+            "(~1,000 events per channel).\n"
+            "Binary data (default): every event of the list-mode run in "
+            "binary-data/ — the same events the API tab processes. Slow to read.\n"
+            "Parquet data: the processed run in parquet-data/ — the same "
+            "events as the binary data, but much faster to read.")
+        r, _ = labeled_row("Source", self.cmb_source); lay.addWidget(r)
         self.cmb_channel = ComboBox()
         self.cmb_channel.setToolTip("Detector channel to analyze (populated on load)")
         r, _ = labeled_row("Channel", self.cmb_channel); lay.addWidget(r)
@@ -545,7 +590,10 @@ class NeutronsOptions(QScrollArea):
         r, _ = labeled_row("Align", self.cmb_align); lay.addWidget(r)
         self.cmb_cfd = ComboBox()
         self.cmb_cfd.addItems(["CFD on", "CFD off"])
-        self.cmb_cfd.setToolTip("Which CFD acquisition to read (on = enabled).")
+        self.cmb_cfd.setToolTip(
+            "Which CFD acquisition to read (on = enabled). Trace snapshots only; "
+            "binary and parquet data have a single acquisition.")
+        self.cmb_cfd.setEnabled(False)          # binary data is the default source
         r, _ = labeled_row("CFD", self.cmb_cfd); lay.addWidget(r)
 
         self.btn_load_pixie = QPushButton("Load PIXIE run")
@@ -568,9 +616,9 @@ class NeutronsOptions(QScrollArea):
         lay.addWidget(hsep()); lay.addWidget(header("GATING"))
         hint = QLabel(
             "• Q_prompt = ∫ gate start → prompt end\n"
-            "• Q_tail = ∫ prompt end → tail end\n"
-            "• Energy = ∫ gate start → tail end\n"
-            "• PSD = 1 − Q_prompt / Q_tail")
+            "• Q_total = ∫ gate start → tail end\n"
+            "• PSD = 1 − Q_prompt / Q_total\n"
+            "• Energy = Q_total, or the recorded PIXIE energy for parquet data")
         hint.setObjectName("stat_key"); hint.setWordWrap(True)
         lay.addWidget(hint)
         self.row_thresh, self.lbl_thresh = stat_row("Threshold", T.ACCENT_RED)
@@ -896,7 +944,7 @@ class FOMDialog(QDialog):
             elo, ehi, _plo, _phi = region
             sub = f" — slice {elo:.4g}–{ehi:.4g} {charge_unit}"
         ax.set_title(f"FOM = S / (FWHM_γ + FWHM_n){sub}")
-        ax.set_xlabel("PSD = 1 - Q_prompt / Q_tail")
+        ax.set_xlabel("PSD = 1 - Q_prompt / Q_total")
         ax.set_ylabel("Counts")
         ax.legend(loc="upper right", fontsize=8)
         self._style()
@@ -935,6 +983,7 @@ class NeutronsController:
         # Cached PIXIE run so switching channel doesn't re-read from disk.
         self._pixie_df = None
         self._pixie_dt = None
+        self._pixie_source = None      # read_pixie_run source of the cached run
         self._pixie_desc = ""
         self._file_path = None         # last trace file loaded (for the run log)
         self._wire()
@@ -970,6 +1019,9 @@ class NeutronsController:
         # run is loaded.
         self.opts.cmb_align.activated.connect(lambda *_: self._rebuild_pixie_channel())
         self.opts.cmb_cfd.activated.connect(lambda *_: self._reload_pixie_cfd())
+        self.opts.cmb_source.activated.connect(lambda *_: self._on_source_changed())
+        self.opts.ed_date.editingFinished.connect(self._refresh_sources)
+        self.opts.ed_run.editingFinished.connect(self._refresh_sources)
         self.opts.btn_pixie_stats.clicked.connect(self._show_pixie_stats)
         self.opts.btn_log_run.clicked.connect(self._log_run)
         self.opts.btn_send_spec.clicked.connect(self._send_to_spectrum)
@@ -1059,13 +1111,15 @@ class NeutronsController:
             return
         align = self._ALIGN_MAP.get(self.opts.cmb_align.currentText(), "fast")
         cfd = self._CFD_MAP.get(self.opts.cmb_cfd.currentText(), "on")
+        source = self.opts.SOURCES.get(self.opts.cmb_source.currentText(), "binary")
 
         self._flash_button(self.opts.btn_load_pixie)
         try:
-            self._status("Reading PIXIE run…")
+            self._status("Reading the full binary PIXIE run (this can take a "
+                         "while)…" if source == "binary" else
+                         f"Reading PIXIE {source} data…")
             self.app.repaint()
-            df = helper_api.read_trace_data(date=date, runnr=runnr, cfd=cfd,
-                                            align=align)
+            df = read_pixie_run(date, runnr, source=source, cfd=cfd, align=align)
             dt_ns = helper_api.read_sample_interval_ns(date, runnr)
         except Exception as exc:  # noqa: BLE001 — surface load errors in the UI
             self._pixie_df = None
@@ -1076,14 +1130,18 @@ class NeutronsController:
 
         self._pixie_df = df
         self._pixie_dt = dt_ns
-        self._pixie_desc = f"{date} run {runnr} · {align or 'no'} align · {cfd}"
-        # PIXIE traces are raw ADC, not volts.
-        self._set_page_units("ADC", "ADC·ns", 1.0, "ADC")
+        self._pixie_source = source
+        self._pixie_desc = (f"{date} run {runnr} · {align or 'no'} align · "
+                            + (f"trace data · CFD {cfd}" if source == "trace"
+                               else f"{source} data"))
+        # PIXIE traces are raw ADC, not volts. Parquet runs take their energy
+        # from the recorded PIXIE energy (ADC channels), not the gate integral.
+        self._set_page_units("ADC", "ADC" if source == "parquet" else "ADC·ns",
+                             1.0, "ADC")
         self.opts.btn_pixie_stats.setEnabled(True)
 
         # Populate the channel combo (keep the current pick if still present).
-        chans = (sorted(int(c) for c in df.channel.unique())
-                 if "channel" in df.columns else [])
+        chans = pixie_trace_channels(df)
         cur = self.opts.cmb_channel.currentText()
         cb = self.opts.cmb_channel
         cb.blockSignals(True)
@@ -1094,6 +1152,37 @@ class NeutronsController:
         cb.blockSignals(False)
 
         self._rebuild_pixie_channel()
+
+    def _on_source_changed(self):
+        """CFD only applies to the trace data; re-read a loaded run."""
+        trace = self.opts.SOURCES.get(self.opts.cmb_source.currentText()) == "trace"
+        self.opts.cmb_cfd.setEnabled(trace)
+        if self._pixie_df is not None:
+            self._load_pixie()
+
+    def _refresh_sources(self):
+        """Grey out the sources with no files for the entered date / run, and
+        move off an unavailable pick onto the first available one."""
+        date = self.opts.ed_date.text().strip()
+        try:
+            runnr = int(self.opts.ed_run.text().strip())
+        except ValueError:
+            runnr = None
+        avail = (set(available_pixie_sources(date, runnr))
+                 if date and runnr is not None else None)
+        cb = self.opts.cmb_source
+        model = cb.model()
+        for i, (label, src) in enumerate(self.opts.SOURCES.items()):
+            ok = avail is None or src in avail
+            model.item(i).setEnabled(ok)
+            model.item(i).setToolTip(
+                "" if ok else f"No {label.lower()} found for this run")
+        if avail and self.opts.SOURCES[cb.currentText()] not in avail:
+            first = next(lb for lb, src in self.opts.SOURCES.items() if src in avail)
+            cb.setCurrentText(first)
+            self.opts.cmb_cfd.setEnabled(self.opts.SOURCES[first] == "trace")
+        if avail is not None and not avail:
+            self._status("No PIXIE data found for that date / run")
 
     def _reload_pixie_cfd(self):
         """Re-read the current run when the CFD option changes. Unlike align,
@@ -1115,7 +1204,7 @@ class NeutronsController:
         try:
             nt = NeutronTraces.from_pixie(
                 channel=channel, align=align, df=self._pixie_df,
-                dt_ns=self._pixie_dt)
+                dt_ns=self._pixie_dt, source=self._pixie_source)
             nt.compute()
         except Exception as exc:  # noqa: BLE001
             self.nt = None
@@ -1169,7 +1258,12 @@ class NeutronsController:
             ch = self.opts.cmb_channel.currentText()
             meta["Channels with data"] = folder_meta.pop("Channels with data", ch)
             meta["Alignment"] = self.opts.cmb_align.currentText()
-            meta["CFD"] = self.opts.cmb_cfd.currentText()
+            meta["Energy"] = ("recorded PIXIE energy"
+                              if nt is not None and nt.recorded_energy is not None
+                              else "trace gate integral (Q_total)")
+            meta["Source"] = f"PIXIE run ({self.opts.cmb_source.currentText().lower()})"
+            if self.opts.cmb_cfd.isEnabled():
+                meta["CFD"] = self.opts.cmb_cfd.currentText()
             meta["Data path"] = str(run_dir) if run_dir is not None else "not found"
             meta.update(folder_meta)
         else:

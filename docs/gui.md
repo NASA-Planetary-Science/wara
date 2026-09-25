@@ -218,6 +218,54 @@ PIXIE-16 run loaded straight from disk). It shows three linked panels:
   panels. Arming **PSD selections** switches to multi-box mode, where each box
   gets its own colour in the Traces and MCA panels.
 
+The discrimination parameter is the tail fraction
+
+```
+PSD = 1 − Q_prompt / Q_total = Q_tail / Q_total
+```
+
+with `Q_prompt` integrated from gate start to prompt end and `Q_total` from
+gate start to tail end ({py:func}`wara.neutron_psd.psd_ratio`). It lies in
+[0, 1] for clean positive pulses however wide the gates are; neutrons (longer
+tails) sit above gammas. (Earlier versions used `1 − Q_prompt / Q_tail`,
+which ranks pulses the same way but diverges as `Q_tail → 0`; FOM values and
+PSD box limits from that definition are not comparable with the current one.)
+
+The energy axis (MCA and PSD panels) is `Q_total` for trace files and for PIXIE
+trace/binary data. For **parquet data** it is the energy PIXIE recorded for
+each event (the parquet `energy` column, in ADC channels), so the MCA matches
+the API tab; the PSD is still computed from the traces.
+
+Only the Traces panel draws a random sample (the *Traces* count in DISPLAY).
+The MCA, PSD histogram, figure of merit and **Send to Spectrum** use every
+valid pulse. The PSD panel opens zoomed to the 1–99 % PSD band, but outlier
+pulses are still in the histogram — zoom or pan out to see them.
+
+### PIXIE data source
+
+The **Source** option picks which files of the run **Load PIXIE run** reads
+({py:func}`wara.neutron_psd.read_pixie_run`):
+
+| Source | Folder | Notes |
+|---|---|---|
+| Trace data | `trace-data/*.bin` | short trace snapshots (~1,000 events per channel); the only source the **CFD** on/off choice applies to |
+| Binary data (default) | `binary-data/*.bin` | the full list-mode run, the same events the API tab processes; slow to read |
+| Parquet data | `parquet-data/*-pandas.parquet` | the processed run (same events as the binary data, parquet `Trace` column); much faster to read; energy axis = recorded PIXIE energy |
+
+Once a date and run are entered, sources with no files for that run are greyed
+out ({py:func}`wara.neutron_psd.available_pixie_sources`), and an unavailable
+pick moves to the first one that exists. Changing the source of a loaded run
+re-reads it. See `examples/pixie/example_pixie_psd_sources.py`.
+
+### PIXIE alignment
+
+**Load PIXIE run** time-aligns every trace (the **Align** option: fast filter,
+edge, peak or none) with {py:func}`wara.helper_api.align_traces` before the PSD
+is computed. A run may record different trace lengths on different channels
+(e.g. 500 samples on one, 1500 on another); each length group is aligned on its
+own grid, so every channel is usable — not just the one with the most common
+trace length. See `examples/pixie/example_trace_alignment_pixie.py`.
+
 ### Averaging the traces
 
 The **Average trace only** checkbox (DISPLAY section, off by default) replaces

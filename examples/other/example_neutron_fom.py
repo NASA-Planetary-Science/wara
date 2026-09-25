@@ -55,7 +55,7 @@ ax_psd.hist2d(energy, psd, bins=[200, 200],
 ax_psd.add_patch(plt.Rectangle((e_lo, p_lo), e_hi - e_lo, p_hi - p_lo,
                                fill=False, edgecolor="lime", ls="--", lw=1.8))
 ax_psd.set_xlabel("Energy / pulse integral (V·ns)")
-ax_psd.set_ylabel("PSD = 1 - Q_prompt / Q_tail")
+ax_psd.set_ylabel("PSD = 1 - Q_prompt / Q_total")
 ax_psd.set_title("PSD vs. energy — selected slice")
 
 x = np.linspace(res.centers[0], res.centers[-1], 600)
@@ -66,7 +66,7 @@ ax_fom.plot(x, res.component(x, "gamma"), "--", color="tab:cyan",
 ax_fom.plot(x, res.component(x, "neutron"), "--", color="tab:orange",
             label=f"n: FWHM = {res.fwhm_n:.4f}")
 ax_fom.plot(x, res.curve(x), color="tab:red", lw=2, label="double Gaussian")
-ax_fom.set_xlabel("PSD = 1 - Q_prompt / Q_tail")
+ax_fom.set_xlabel("PSD = 1 - Q_prompt / Q_total")
 ax_fom.set_ylabel("Counts")
 ax_fom.set_title(f"FOM = {res.fom:.3f}  ({res.n_events} pulses)")
 ax_fom.legend(fontsize=8)
@@ -82,7 +82,7 @@ ax_ref.bar(ref.centers, ref.counts, width=np.diff(ref.edges), color="0.7",
 ax_ref.plot(xr, ref.component(xr, "gamma"), "--", color="tab:cyan")
 ax_ref.plot(xr, ref.component(xr, "neutron"), "--", color="tab:orange")
 ax_ref.plot(xr, ref.curve(xr), color="tab:red", lw=2)
-ax_ref.set_xlabel("PSD = 1 - Q_prompt / Q_tail")
+ax_ref.set_xlabel("PSD = 1 - Q_prompt / Q_total")
 ax_ref.set_ylabel("Counts")
 ax_ref.set_title(f"Reference two-band case — FOM = {ref.fom:.3f} (≥ 1.27)")
 print(f"reference well-separated case: FOM = {ref.fom:.3f}")
