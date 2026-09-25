@@ -1205,14 +1205,14 @@ def test_globe_html_graticule_initial_visibility():
 
 
 def test_globe_html_shows_grid_labels():
-    """The graticule's coordinate labels reach the page. plotly serialises the
-    figure with ensure_ascii, so the degree sign lands as a literal backslash-u
-    JSON escape in the HTML, not as the character itself."""
+    """The graticule's coordinate labels reach the page. Whether the degree
+    sign lands as the literal character or as a backslash-u JSON escape
+    depends on plotly's JSON engine (orjson vs stdlib json), so accept both."""
     pytest.importorskip("plotly")
     html = P.build_globe_html(16, 8, graticule=True)
-    deg = r"\u00b0"
-    for want in (f"60{deg}N", f"90{deg}W", f"0{deg}"):
-        assert want in html
+    for label in ("60{}N", "90{}W", "0{}"):
+        assert (label.format("\u00b0") in html
+                or label.format(r"\u00b0") in html), label
 
 
 def test_empty_date_fields_mean_no_bound(tab):

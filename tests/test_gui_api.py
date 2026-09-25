@@ -2062,9 +2062,8 @@ def test_log_run_writes_entry(api, monkeypatch, tmp_path):
     from wara.gui import runlog_dialog
     _, c = api
     monkeypatch.setenv("WARA_RUNLOG_DIR", str(tmp_path))
-    assert not c.opts.btn_log_run.isEnabled()
+    assert c.opts.btn_log_run.isEnabled()     # browse-only before a load
     c._load()
-    assert c.opts.btn_log_run.isEnabled()
     c.apply_energy_filter(0, 3000)
     monkeypatch.setattr(runlog_dialog.RunLogDialog, "exec_",
                         lambda self: QDialog.Accepted)
@@ -2076,10 +2075,79 @@ def test_log_run_writes_entry(api, monkeypatch, tmp_path):
     assert e["description"] == "AmBe run, 5 cm"
     assert e["metadata"]["Date"] == "2023-07-02"
     assert e["metadata"]["Run"] == "91"
-    assert e["metadata"]["Channel"] == "5"
+    assert "Analyzed channel" not in e["metadata"]
+    assert "Type" not in e["metadata"]
     assert e["stats"]["Events loaded"] == "4,000"
+    assert "Events after cuts" not in e["stats"]
     assert e["stats"]["Neutron yield (n/s)"] == "4.300E+06"
     assert "Energy cut" in e["stats"]
+
+
+def test_log_run_duplicate_is_not_appended(api, monkeypatch, tmp_path):
+    from wara import runlog
+    from wara.gui import runlog_dialog
+    _, c = api
+    monkeypatch.setenv("WARA_RUNLOG_DIR", str(tmp_path))
+    c._load()
+    meta, stats = c._runlog_fields()
+    runlog.log_run("first", "API", meta, stats)
+    dlg = runlog_dialog.RunLogDialog("API", meta, stats)
+    # Quiet warning, Save disabled, Replace offered; the read tab shows the log.
+    assert dlg.duplicate is not None
+    assert not dlg.lbl_duplicate.isHidden()
+    assert "already logged" in dlg.lbl_duplicate.text()
+    assert not dlg.btn_save.isEnabled() and not dlg.btn_replace.isHidden()
+    assert dlg.tabs.count() == 2
+    assert "first" in dlg.txt_log.toPlainText()
+    assert "ENTRY 1" in dlg.txt_log.toPlainText()
+    assert dlg.write() is None                     # plain accept writes nothing
+    dlg.close()
+    monkeypatch.setattr(runlog_dialog.RunLogDialog, "exec_",
+                        lambda self: (self._on_replace(), QDialog.Accepted)[1])
+    monkeypatch.setattr(runlog_dialog.RunLogDialog, "description",
+                        lambda self: "replaced")
+    c._log_run()
+    (e,) = runlog.read_entries(tmp_path / "runlog_001.txt")
+    assert e["description"] == "replaced"
+
+
+def test_log_run_dialog_new_run(api, monkeypatch, tmp_path):
+    from wara.gui import runlog_dialog
+    _, c = api
+    monkeypatch.setenv("WARA_RUNLOG_DIR", str(tmp_path))
+    c._load()
+    meta, stats = c._runlog_fields()
+    dlg = runlog_dialog.RunLogDialog("API", meta, stats)
+    assert dlg.duplicate is None and dlg.lbl_duplicate.isHidden()
+    assert dlg.btn_save.isEnabled() and dlg.btn_replace.isHidden()
+    assert "empty" in dlg.txt_log.toPlainText()
+    # The preview is coloured HTML.
+    assert "<span" in dlg.txt_preview.toHtml()
+    dlg.close()
+
+
+def test_log_run_without_run_is_browse_only(api, monkeypatch, tmp_path):
+    from wara import runlog
+    from wara.gui import runlog_dialog
+    _, c = api
+    monkeypatch.setenv("WARA_RUNLOG_DIR", str(tmp_path))
+    runlog.log_run("an earlier run", "API", {"Date": "2026-09-24", "Run": "1"})
+    seen = {}
+
+    def fake_exec(self):
+        seen["dlg"] = self
+        return QDialog.Accepted
+
+    monkeypatch.setattr(runlog_dialog.RunLogDialog, "exec_", fake_exec)
+    assert c.df_api is None
+    c._log_run()                                  # opens the dialog anyway
+    dlg = seen["dlg"]
+    assert dlg.browse_only
+    assert not dlg.tabs.isTabEnabled(0) and dlg.tabs.currentIndex() == 1
+    assert dlg.btn_save.isHidden() and dlg.btn_replace.isHidden()
+    assert "an earlier run" in dlg.txt_log.toPlainText()
+    assert dlg.write() is None
+    assert runlog.count_entries(tmp_path / "runlog_001.txt") == 1
 
 
 def test_log_run_cancel_writes_nothing(api, monkeypatch, tmp_path):

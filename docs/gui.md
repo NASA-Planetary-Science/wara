@@ -454,8 +454,21 @@ and two blocks of fields:
 
 | Tab | Metadata | Statistics |
 |-----|----------|------------|
-| API | date, run, channel, run type, data path, energy/time/position axes, calibration, drift and time shifts | total alphas, live time, neutron yield, events loaded and after cuts, energy and `dt` min/median/max, active cuts, energy selections |
-| Neutrons | trace-file name, path and size, or PIXIE date/run/channel/alignment/CFD and data path; polarity; samples per trace | trace count, threshold, gate markers, valid and selected pulses, energy min/median/max, PSD mean/std, MCA span, PSD boxes, last FOM |
+| API | date, run, setup (from `metadata.json`), all channels with data, data path, whether parquet / binary / MCA / trace data exist and their size, energy/time/position axes, calibration, drift and time shifts | total alphas, live time, neutron yield, events loaded, events per channel, captured traces per channel, active cuts, energy selections |
+| Neutrons | trace-file name, path and size, or PIXIE date/run/setup/channels with data/alignment/CFD, data path and data-folder sizes; polarity; samples per trace | trace count, threshold, (PIXIE runs) events and traces per channel, gate markers, valid and selected pulses, energy min/median/max, PSD mean/std, MCA span, PSD boxes, last FOM |
+
+The pop-up has two tabs. **New entry** holds the description box and a
+coloured preview of the entry. **Log entries** reads back the entries already
+saved, newest first, with a selector for the log file. With no file loaded, the
+button still opens the pop-up, but browse-only: *New entry* is disabled and
+only *Log entries* is available.
+
+Each run is logged only once. A run is identified by the tab plus date and run
+number (PIXIE runs), or by the tab plus file path (trace files). If the loaded
+run is already in the log, a quiet amber note under the preview says so and
+**Save** is disabled. Use **Replace entry** to overwrite the old entry in
+place: it keeps its entry number and gets the new description, fields and time
+stamp.
 
 A log file holds up to **50 entries**. After that, the next entry starts a new
 file: `runlog_001.txt`, then `runlog_002.txt`, and so on. `runlogs/` is
@@ -470,7 +483,16 @@ path = runlog.log_run("Cf-252 at 10 cm, no shielding", source="Neutrons",
                       metadata={"File": "cf252.npz"},
                       stats={"Traces": "12,000"})
 entries = runlog.read_entries(path)   # list of dicts
+runlog.find_run("Neutrons", {"File": "cf252.npz"})   # (path, entry) or None
+
+# Setup, channels, data-folder sizes and per-channel counts of a PIXIE run:
+meta, stats = runlog.run_folder_fields("D:/Data/2026-09-24/RUN-2026-09-24-00001")
 ```
+
+The per-channel event and trace counts are summed from the PIXIE
+`*-stats-*.json` files in `settings/` and `trace-data/` (the `-initial`
+snapshots are skipped), so nothing large is read. Anything a run lacks (no
+`metadata.json`, an older layout, no trace data) is left out or shown as `no`.
 
 See `examples/other/example_runlog.py`.
 

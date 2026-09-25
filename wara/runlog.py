@@ -70,6 +70,94 @@ def current_log_file(log_dir=None, max_entries=MAX_ENTRIES):
     return d / f"{FILE_PREFIX}{n:03d}.txt"
 
 
+#: Data sub-folders of a PIXIE run and the files that hold the data in each.
+RUN_DATA_FOLDERS = (("Parquet data", "parquet-data", "*.parquet"),
+                    ("Binary data", "binary-data", "*.bin"),
+                    ("MCA data", "MCA-data", "*.npy"),
+                    ("Trace data", "trace-data", "*.bin"))
+
+
+def _fmt_size(nbytes):
+    for unit, scale in (("GB", 1e9), ("MB", 1e6), ("kB", 1e3)):
+        if nbytes >= scale:
+            return f"{nbytes / scale:.1f} {unit}"
+    return f"{nbytes} B"
+
+
+def _summed_counts(folder, key="output_counts"):
+    """Per-channel sum of *key* over the ``*-stats-*.json`` files in *folder*,
+    skipping the ``-initial`` snapshots (taken before the acquisition). Returns
+    ``{channel: count}`` for channels with a non-zero count."""
+    import json
+
+    total = {}
+    for f in sorted(Path(folder).glob("*-stats-*.json")):
+        if "initial" in f.stem:
+            continue
+        try:
+            with f.open(encoding="utf-8") as fh:
+                data = json.load(fh)
+        except (OSError, ValueError):
+            continue
+        for mod in data if isinstance(data, list) else [data]:
+            m = int(mod.get("module", 0))
+            for ch, n in enumerate(mod.get(key, [])):
+                # Channels of module m after the first are numbered on (16/module).
+                total[16 * m + ch] = total.get(16 * m + ch, 0) + int(n)
+    return {ch: n for ch, n in sorted(total.items()) if n > 0}
+
+
+def run_folder_fields(run_dir):
+    """Run-log ``(metadata, stats)`` read from a PIXIE run folder.
+
+    Only the folder listing and the small JSON files are read, so this is fast
+    even for large runs. Anything missing (no ``metadata.json``, no trace data,
+    an older run layout, ...) is simply left out or reported as ``no``.
+
+    metadata
+        ``Setup`` (from ``metadata.json``), ``Channels with data`` (non-zero
+        list-mode counts) and, for
+        each data folder, whether it holds data and how much.
+    stats
+        ``Events ch N`` per channel with list-mode data (summed PIXIE output
+        counts in ``settings/``) and ``Traces ch N`` per channel with captured
+        traces (``trace-data/``).
+    """
+    import json
+
+    run_dir = Path(run_dir)
+    meta, stats = {}, {}
+    info = {}
+    try:
+        with (run_dir / "metadata.json").open(encoding="utf-8") as f:
+            info = json.load(f)
+    except (OSError, ValueError):
+        pass
+    if info.get("setup"):
+        meta["Setup"] = str(info["setup"])
+
+    events = _summed_counts(run_dir / "settings")
+    if events:
+        meta["Channels with data"] = ", ".join(str(ch) for ch in events)
+
+    for label, sub, pattern in RUN_DATA_FOLDERS:
+        # Zero-byte files are aborted acquisitions: they hold no data.
+        found = [p for p in sorted((run_dir / sub).glob(pattern))
+                 if p.stat().st_size > 0]
+        if found:
+            size = sum(p.stat().st_size for p in found)
+            n = len(found)
+            meta[label] = f"yes, {n} file{'s' if n > 1 else ''}, {_fmt_size(size)}"
+        else:
+            meta[label] = "no"
+
+    for ch, n in events.items():
+        stats[f"Events ch {ch}"] = f"{n:,}"
+    for ch, n in _summed_counts(run_dir / "trace-data").items():
+        stats[f"Traces ch {ch}"] = f"{n:,}"
+    return meta, stats
+
+
 def _fmt_section(title, items):
     if not items:
         return []
@@ -153,3 +241,50 @@ def read_entries(path):
                 key, _, val = line.strip().partition(" : ")
                 cur[section][key.strip()] = val
     return entries
+
+
+def run_key(source, metadata):
+    """What identifies a run in the log: the tab plus date and run number (PIXIE
+    runs), or the tab plus file path (trace files). ``None`` if neither is known."""
+    md = metadata or {}
+    if md.get("Date") and md.get("Run"):
+        return (str(source), "run", str(md["Date"]), str(md["Run"]))
+    path = md.get("Path") or md.get("File")
+    if path:
+        return (str(source), "file", str(path))
+    return None
+
+
+def find_run(source, metadata, log_dir=None):
+    """Locate an existing entry for the same run (see :func:`run_key`).
+
+    Returns ``(path, entry)`` for the newest matching entry across all log files,
+    or ``None`` when the run has not been logged yet."""
+    key = run_key(source, metadata)
+    if key is None:
+        return None
+    found = None
+    for path in log_files(log_dir):
+        for e in read_entries(path):
+            if run_key(e["source"], e["metadata"]) == key:
+                found = (path, e)
+    return found
+
+
+def replace_entry(path, number, description, source, metadata=None, stats=None,
+                  timestamp=None):
+    """Overwrite entry *number* of the log file *path* in place (it keeps its
+    number and position; the time stamp is updated). Returns *path*."""
+    path = Path(path)
+    text = path.read_text(encoding="utf-8")
+    head = f"{_RULE}\n{ENTRY_MARK} "
+    chunks = text.split(head)
+    for i, chunk in enumerate(chunks[1:], 1):
+        if int(chunk.split("|", 1)[0]) == number:
+            chunks[i] = format_entry(number, description, source, metadata, stats,
+                                     timestamp)[len(head):]
+            break
+    else:
+        raise ValueError(f"No entry {number} in {path}")
+    path.write_text(head.join(chunks), encoding="utf-8")
+    return path

@@ -404,9 +404,9 @@ class ApiOptions(QScrollArea):
         self.btn_log_run = QPushButton("Log run...")
         self.btn_log_run.setObjectName("primary_btn")
         self.btn_log_run.setCursor(Qt.PointingHandCursor)
-        self.btn_log_run.setEnabled(False)
         self.btn_log_run.setToolTip(
-            "Write a description of the loaded run to the run log.\n"
+            "Write a description of the loaded run to the run log, or browse "
+            "the entries already logged (browse-only until a run is loaded).\n"
             "The entry also records the run identity (date / run / channel / "
             "path), the RUN INFO statistics and the active cuts, calibration "
             "and shifts.\nSaved as text in the 'runlogs' folder, up to 50 "
@@ -893,7 +893,6 @@ class ApiController:
         self._configure_keys()
         self._initialize_plots()
         self._load_settings(date, runnr, ch, data_path)
-        self.opts.btn_log_run.setEnabled(True)
         n = self.df_current.shape[0]
         self._status(f"Loaded run {date}-{runnr} ch {ch}  ·  {n:,} events")
 
@@ -3590,15 +3589,21 @@ class ApiController:
     # -- run log ---------------------------------------------------------------
     def _runlog_fields(self):
         """(metadata, stats) dicts describing the loaded run for the run log."""
-        df = self.df_current
-        meta = {"Date": self._src_date, "Run": self._src_runnr,
-                "Channel": self._src_ch,
-                "Type": "flat field" if self.flat_field else "gamma"}
+        meta = {"Date": self._src_date, "Run": self._src_runnr}
+        folder_meta, folder_stats = {}, {}
         try:
-            meta["Data path"] = str(apicalc.find_data_path(
-                self._src_date, self._src_runnr, self._src_data_path))
+            run_dir = apicalc.find_data_path(
+                self._src_date, self._src_runnr, self._src_data_path)
         except Exception:  # noqa: BLE001  -- the path is best-effort metadata
-            meta["Data path"] = "not found"
+            run_dir = None
+        if run_dir is not None:
+            folder_meta, folder_stats = runlog.run_folder_fields(run_dir)
+        if "Setup" in folder_meta:
+            meta["Setup"] = folder_meta.pop("Setup")
+        meta["Channels with data"] = folder_meta.pop(
+            "Channels with data", str(self._src_ch))
+        meta["Data path"] = str(run_dir) if run_dir is not None else "not found"
+        meta.update(folder_meta)
         meta["Energy axis"] = f"{self.ekey} ({self._energy_xlabel()})"
         meta["Time axis"] = self._dt_key
         meta["Position axes"] = f"{self.xkey}, {self.ykey}"
@@ -3611,15 +3616,8 @@ class ApiController:
         stats = {lbl: val for lbl, val, _ in self._settings_rows}
         if self._settings_error:
             stats["Run settings"] = self._settings_error
-        n_all = self.df_api.shape[0]
-        stats["Events loaded"] = f"{n_all:,}"
-        stats["Events after cuts"] = (
-            f"{df.shape[0]:,} ({100.0 * df.shape[0] / max(n_all, 1):.1f}%)")
-        for key, name in ((self.ekey, "Energy"), (self._dt_key, "dt")):
-            if key in df.columns and len(df):
-                col = df[key]
-                stats[f"{name} min / median / max"] = (
-                    f"{col.min():.4g} / {col.median():.4g} / {col.max():.4g}")
+        stats["Events loaded"] = f"{self.df_api.shape[0]:,}"
+        stats.update(folder_stats)
         cuts = {"Energy cut": self._cut_energy, "dt cut": self._cut_time,
                 "X-Y cut": self._cut_xy, "Alpha cut": self._cut_alpha}
         for lbl, cut in cuts.items():
@@ -3633,20 +3631,22 @@ class ApiController:
 
     def _log_run(self):
         """Pop up the run-log dialog and append the entry to the runlogs folder."""
-        if self.df_api is None:
-            self._status("Load an API file before logging a run")
-            return
         self._flash_button(self.opts.btn_log_run)
+        if self.df_api is None:
+            # Nothing loaded: open the dialog to browse the log only.
+            RunLogDialog("API", parent=self.app).exec_()
+            return
         meta, stats = self._runlog_fields()
         dlg = RunLogDialog("API", meta, stats, parent=self.app)
         if dlg.exec_() != QDialog.Accepted:
             return
         try:
-            path = runlog.log_run(dlg.description(), "API", meta, stats)
-        except OSError as exc:
+            path = dlg.write()
+        except (OSError, ValueError) as exc:
             self._status(f"Could not write the run log: {exc}")
             return
-        self._status(f"Logged run {self._src_date}-{self._src_runnr} to {path}")
+        verb = "Replaced" if dlg.replace else "Logged"
+        self._status(f"{verb} run {self._src_date}-{self._src_runnr} in {path}")
 
     def _send_to_spectrum(self):
         if self.gam is None:

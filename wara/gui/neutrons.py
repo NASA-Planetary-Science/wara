@@ -512,9 +512,9 @@ class NeutronsOptions(QScrollArea):
         self.btn_log_run = QPushButton("Log run...")
         self.btn_log_run.setObjectName("primary_btn")
         self.btn_log_run.setCursor(Qt.PointingHandCursor)
-        self.btn_log_run.setEnabled(False)
         self.btn_log_run.setToolTip(
-            "Write a description of the loaded file to the run log.\n"
+            "Write a description of the loaded file to the run log, or browse "
+            "the entries already logged (browse-only until a file is loaded).\n"
             "The entry also records the file / PIXIE run identity, the gate "
             "markers, pulse counts, energy and PSD statistics, the active "
             "selections and the last FOM.\nSaved as text in the 'runlogs' "
@@ -1010,12 +1010,10 @@ class NeutronsController:
             self.nt = None
             self.page.show_empty(f"Could not load file:\n{exc}")
             self.opts.lbl_file.setText("No file loaded")
-            self.opts.btn_log_run.setEnabled(False)
             self._status(f"Failed to load: {exc}")
             return
         self.nt = nt
         self._file_path = path
-        self.opts.btn_log_run.setEnabled(True)
         # PicoScope traces are in volts; reset the page units in case the last
         # load was a PIXIE (ADC) run.
         self._set_page_units("V", "V·ns", 1000.0, "mV")
@@ -1073,7 +1071,6 @@ class NeutronsController:
             self._pixie_df = None
             self.nt = None
             self.page.show_empty(f"Could not read PIXIE run:\n{exc}")
-            self.opts.btn_log_run.setEnabled(False)
             self._status(f"Failed to read run: {exc}")
             return
 
@@ -1123,11 +1120,9 @@ class NeutronsController:
         except Exception as exc:  # noqa: BLE001
             self.nt = None
             self.page.show_empty(f"Could not analyze channel:\n{exc}")
-            self.opts.btn_log_run.setEnabled(False)
             self._status(f"Failed: {exc}")
             return
         self.nt = nt
-        self.opts.btn_log_run.setEnabled(True)
         self._energy_range = (None, None)
         self._psd_region = None
         self._psd_selections = []
@@ -1157,18 +1152,26 @@ class NeutronsController:
         """(metadata, stats) dicts describing the loaded dataset for the run log."""
         nt = self.nt
         pg = self.page
+        folder_stats = {}
         if self._pixie_df is not None:
             meta = {"Source": "PIXIE run", "Date": self.opts.ed_date.text().strip(),
-                    "Run": self.opts.ed_run.text().strip(),
-                    "Channel": self.opts.cmb_channel.currentText(),
-                    "Alignment": self.opts.cmb_align.currentText(),
-                    "CFD": self.opts.cmb_cfd.currentText()}
+                    "Run": self.opts.ed_run.text().strip()}
             try:
                 from wara import helper_api
-                meta["Data path"] = str(helper_api.find_data_path(
-                    meta["Date"], int(meta["Run"])))
+                run_dir = helper_api.find_data_path(meta["Date"], int(meta["Run"]))
             except Exception:  # noqa: BLE001  -- the path is best-effort metadata
-                meta["Data path"] = "not found"
+                run_dir = None
+            folder_meta = {}
+            if run_dir is not None:
+                folder_meta, folder_stats = runlog.run_folder_fields(run_dir)
+            if "Setup" in folder_meta:
+                meta["Setup"] = folder_meta.pop("Setup")
+            ch = self.opts.cmb_channel.currentText()
+            meta["Channels with data"] = folder_meta.pop("Channels with data", ch)
+            meta["Alignment"] = self.opts.cmb_align.currentText()
+            meta["CFD"] = self.opts.cmb_cfd.currentText()
+            meta["Data path"] = str(run_dir) if run_dir is not None else "not found"
+            meta.update(folder_meta)
         else:
             path = self._file_path or ""
             meta = {"Source": "Trace file", "File": os.path.basename(path),
@@ -1189,6 +1192,7 @@ class NeutronsController:
                  "Gate start / prompt end / tail end (ns)":
                      f"{nt.gate_start_ns:.4g} / {nt.prompt_end_ns:.4g} / "
                      f"{nt.tail_end_ns:.4g}"}
+        stats.update(folder_stats)
         if nt.valid is not None:
             n_valid = int(nt.valid.sum())
             stats["Valid pulses"] = (
@@ -1216,20 +1220,22 @@ class NeutronsController:
 
     def _log_run(self):
         """Pop up the run-log dialog and append the entry to the runlogs folder."""
-        if self.nt is None:
-            self._status("Load a trace file or PIXIE run before logging a run")
-            return
         self._flash_button(self.opts.btn_log_run)
+        if self.nt is None:
+            # Nothing loaded: open the dialog to browse the log only.
+            RunLogDialog("Neutrons", parent=self.app).exec_()
+            return
         meta, stats = self._runlog_fields()
         dlg = RunLogDialog("Neutrons", meta, stats, parent=self.app)
         if dlg.exec_() != QDialog.Accepted:
             return
         try:
-            path = runlog.log_run(dlg.description(), "Neutrons", meta, stats)
-        except OSError as exc:
+            path = dlg.write()
+        except (OSError, ValueError) as exc:
             self._status(f"Could not write the run log: {exc}")
             return
-        self._status(f"Logged run to {path}")
+        verb = "Replaced" if dlg.replace else "Logged"
+        self._status(f"{verb} run in {path}")
 
     def _send_to_spectrum(self):
         """Histogram the current MCA selection and load it on the Spectrum tab."""

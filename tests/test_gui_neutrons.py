@@ -484,9 +484,8 @@ def test_log_run_writes_entry(qapp, synth_npz, monkeypatch, tmp_path):
                         lambda *a, **k: (synth_npz, ""))
     w = WaraApp()
     c = w.neutrons
-    assert not c.opts.btn_log_run.isEnabled()
+    assert c.opts.btn_log_run.isEnabled()     # browse-only before a load
     c._load()
-    assert c.opts.btn_log_run.isEnabled()
     # The dialog preview carries the metadata before anything is written.
     meta, stats = c._runlog_fields()
     dlg = runlog_dialog.RunLogDialog("Neutrons", meta, stats)
