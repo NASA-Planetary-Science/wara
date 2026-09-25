@@ -345,7 +345,8 @@ def calculate_neutron_yield(date, runnr, ch=9, data_path=None):
     alpha_counts = get_total_counts(date, runnr, ch, data_path)
     time_total = get_total_time(date, runnr, ch, data_path)
     alpha_cr = alpha_counts / time_total
-    d = 6.7  # cm alpha detector-neutron source distance
+    # cm alpha detector-neutron source distance (6.7 cm for Ngen 1,2)
+    d = 5.8 
     alpha_area = 4.8 * 4.8  # cm2
     phi_a = alpha_cr / alpha_area  # flux at alpha detector
     Y0 = 4 * np.pi * d**2 * phi_a  # neutron yield (n/s)
