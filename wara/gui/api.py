@@ -80,7 +80,7 @@ from PyQt5.QtWidgets import (
 )
 from PyQt5.QtCore import Qt, QSize, QTimer, QUrl
 
-from wara import read_parquet_api, apicalc
+from wara import read_parquet_api, apicalc, runlog
 from wara import spectrum as sp
 from wara import peaksearch as ps
 
@@ -106,6 +106,7 @@ from .api_dialogs import (  # noqa: F401  -- re-exported
     ApiFilterDialog, EnergySelectionDialog, Api3DDialog, ApplyToDataDialog,
     StatsInfoDialog,
 )
+from .runlog_dialog import RunLogDialog
 from .api_shifts import ShiftsDialog  # noqa: F401  -- re-exported
 from .api_combine import CombineRunsDialog  # noqa: F401  -- re-exported
 from .api_diagnostics import DiagnosticsDialog  # noqa: F401  -- re-exported
@@ -400,6 +401,18 @@ class ApiOptions(QScrollArea):
         self.lbl_info.setStyleSheet(
             f"color:{T.TEXT_PRIMARY}; font-family:{T.MONO_FAMILY}; font-size:13px;")
         lay.addWidget(self.lbl_info)
+        self.btn_log_run = QPushButton("Log run...")
+        self.btn_log_run.setObjectName("primary_btn")
+        self.btn_log_run.setCursor(Qt.PointingHandCursor)
+        self.btn_log_run.setEnabled(False)
+        self.btn_log_run.setToolTip(
+            "Write a description of the loaded run to the run log.\n"
+            "The entry also records the run identity (date / run / channel / "
+            "path), the RUN INFO statistics and the active cuts, calibration "
+            "and shifts.\nSaved as text in the 'runlogs' folder, up to 50 "
+            "entries per file.")
+        self.btn_log_run.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Fixed)
+        lay.addWidget(self.btn_log_run)
 
         # ── Display controls ─────────────────────────────────────────
         lay.addWidget(hsep()); lay.addWidget(header("DISPLAY"))
@@ -722,6 +735,7 @@ class ApiController:
         o.btn_combine.clicked.connect(self._open_combine)
         o.btn_diagnostics.clicked.connect(self._open_diagnostics)
         o.btn_sigma.clicked.connect(self._open_sigma)
+        o.btn_log_run.clicked.connect(self._log_run)
         o.cb_spe_log.toggled.connect(self._toggle_spe_log)
         o.cb_xy_log.toggled.connect(lambda *_: self._replot_xy())
         o.cb_ghost.toggled.connect(self._toggle_ghost)
@@ -879,6 +893,7 @@ class ApiController:
         self._configure_keys()
         self._initialize_plots()
         self._load_settings(date, runnr, ch, data_path)
+        self.opts.btn_log_run.setEnabled(True)
         n = self.df_current.shape[0]
         self._status(f"Loaded run {date}-{runnr} ch {ch}  ·  {n:,} events")
 
@@ -3571,6 +3586,67 @@ class ApiController:
             f"color:{T.BG_DARK}; font-weight:800;")
         button.repaint()
         QTimer.singleShot(220, lambda: button.setStyleSheet(""))
+
+    # -- run log ---------------------------------------------------------------
+    def _runlog_fields(self):
+        """(metadata, stats) dicts describing the loaded run for the run log."""
+        df = self.df_current
+        meta = {"Date": self._src_date, "Run": self._src_runnr,
+                "Channel": self._src_ch,
+                "Type": "flat field" if self.flat_field else "gamma"}
+        try:
+            meta["Data path"] = str(apicalc.find_data_path(
+                self._src_date, self._src_runnr, self._src_data_path))
+        except Exception:  # noqa: BLE001  -- the path is best-effort metadata
+            meta["Data path"] = "not found"
+        meta["Energy axis"] = f"{self.ekey} ({self._energy_xlabel()})"
+        meta["Time axis"] = self._dt_key
+        meta["Position axes"] = f"{self.xkey}, {self.ykey}"
+        meta["Calibration"] = self.opts.lbl_cal.text()
+        if self._egain_applied:
+            meta["Energy drift"] = self._egain_label
+        if self._dt_corrected:
+            meta["Time shift"] = self._dt_label
+
+        stats = {lbl: val for lbl, val, _ in self._settings_rows}
+        if self._settings_error:
+            stats["Run settings"] = self._settings_error
+        n_all = self.df_api.shape[0]
+        stats["Events loaded"] = f"{n_all:,}"
+        stats["Events after cuts"] = (
+            f"{df.shape[0]:,} ({100.0 * df.shape[0] / max(n_all, 1):.1f}%)")
+        for key, name in ((self.ekey, "Energy"), (self._dt_key, "dt")):
+            if key in df.columns and len(df):
+                col = df[key]
+                stats[f"{name} min / median / max"] = (
+                    f"{col.min():.4g} / {col.median():.4g} / {col.max():.4g}")
+        cuts = {"Energy cut": self._cut_energy, "dt cut": self._cut_time,
+                "X-Y cut": self._cut_xy, "Alpha cut": self._cut_alpha}
+        for lbl, cut in cuts.items():
+            if cut is not None:
+                stats[lbl] = ", ".join(f"{v:.4g}" for v in cut)
+        if self.selections:
+            stats["Selections"] = ", ".join(
+                f"{s['label']} [{s['emin']:.4g}, {s['emax']:.4g}]"
+                for s in self.selections)
+        return meta, stats
+
+    def _log_run(self):
+        """Pop up the run-log dialog and append the entry to the runlogs folder."""
+        if self.df_api is None:
+            self._status("Load an API file before logging a run")
+            return
+        self._flash_button(self.opts.btn_log_run)
+        meta, stats = self._runlog_fields()
+        dlg = RunLogDialog("API", meta, stats, parent=self.app)
+        if dlg.exec_() != QDialog.Accepted:
+            return
+        try:
+            path = runlog.log_run(dlg.description(), "API", meta, stats)
+        except OSError as exc:
+            self._status(f"Could not write the run log: {exc}")
+            return
+        self._status(f"Logged run {self._src_date}-{self._src_runnr} to {path}")
 
     def _send_to_spectrum(self):
         if self.gam is None:

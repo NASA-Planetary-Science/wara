@@ -24,6 +24,8 @@ double Gaussian in a pop-out window (:class:`FOMDialog`), which reports
 The numerics live in :mod:`wara.neutron_psd`; this module is purely the Qt/
 matplotlib front-end.
 """
+import os
+
 import numpy as np
 
 import matplotlib as mpl
@@ -42,10 +44,12 @@ from PyQt5.QtWidgets import (
 from PyQt5.QtCore import Qt, QSize, QTimer
 
 from wara.neutron_psd import NeutronTraces
+from wara import runlog
 from wara import spectrum as sp
 
 from . import theme as T
 from .widgets import hsep, header, stat_row, SpinBox, ComboBox, labeled_row
+from .runlog_dialog import RunLogDialog
 
 # Pixel tolerance for grabbing a draggable marker line.
 _GRAB_PX = 8
@@ -505,6 +509,17 @@ class NeutronsOptions(QScrollArea):
         self.lbl_file = QLabel("No file loaded")
         self.lbl_file.setObjectName("stat_key"); self.lbl_file.setWordWrap(True)
         lay.addWidget(self.lbl_file)
+        self.btn_log_run = QPushButton("Log run...")
+        self.btn_log_run.setObjectName("primary_btn")
+        self.btn_log_run.setCursor(Qt.PointingHandCursor)
+        self.btn_log_run.setEnabled(False)
+        self.btn_log_run.setToolTip(
+            "Write a description of the loaded file to the run log.\n"
+            "The entry also records the file / PIXIE run identity, the gate "
+            "markers, pulse counts, energy and PSD statistics, the active "
+            "selections and the last FOM.\nSaved as text in the 'runlogs' "
+            "folder, up to 50 entries per file.")
+        lay.addWidget(self.btn_log_run)
 
         # ── PIXIE-16 run source ───────────────────────────────────────────────
         lay.addWidget(hsep()); lay.addWidget(header("PIXIE RUN"))
@@ -687,7 +702,7 @@ class NeutronsOptions(QScrollArea):
         # Let full-width buttons shrink with the fixed-width panel instead of
         # forcing the scroll content wider than the viewport (which would clip
         # their right edge). They still stretch to fill the available width.
-        for b in (self.btn_load, self.btn_load_pixie, self.btn_pixie_stats,
+        for b in (self.btn_load, self.btn_log_run, self.btn_load_pixie, self.btn_pixie_stats,
                   self.btn_psd_select, self.btn_fom, self.btn_reset,
                   self.btn_send_spec):
             b.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Fixed)
@@ -921,6 +936,7 @@ class NeutronsController:
         self._pixie_df = None
         self._pixie_dt = None
         self._pixie_desc = ""
+        self._file_path = None         # last trace file loaded (for the run log)
         self._wire()
 
     # Bright flash colours keyed by button objectName (mirrors the API tab).
@@ -955,6 +971,7 @@ class NeutronsController:
         self.opts.cmb_align.activated.connect(lambda *_: self._rebuild_pixie_channel())
         self.opts.cmb_cfd.activated.connect(lambda *_: self._reload_pixie_cfd())
         self.opts.btn_pixie_stats.clicked.connect(self._show_pixie_stats)
+        self.opts.btn_log_run.clicked.connect(self._log_run)
         self.opts.btn_send_spec.clicked.connect(self._send_to_spectrum)
         self.opts.btn_reset.clicked.connect(self._clear_selection)
         self.opts.btn_psd_select.toggled.connect(self._on_arm)
@@ -993,9 +1010,12 @@ class NeutronsController:
             self.nt = None
             self.page.show_empty(f"Could not load file:\n{exc}")
             self.opts.lbl_file.setText("No file loaded")
+            self.opts.btn_log_run.setEnabled(False)
             self._status(f"Failed to load: {exc}")
             return
         self.nt = nt
+        self._file_path = path
+        self.opts.btn_log_run.setEnabled(True)
         # PicoScope traces are in volts; reset the page units in case the last
         # load was a PIXIE (ADC) run.
         self._set_page_units("V", "V·ns", 1000.0, "mV")
@@ -1053,6 +1073,7 @@ class NeutronsController:
             self._pixie_df = None
             self.nt = None
             self.page.show_empty(f"Could not read PIXIE run:\n{exc}")
+            self.opts.btn_log_run.setEnabled(False)
             self._status(f"Failed to read run: {exc}")
             return
 
@@ -1102,9 +1123,11 @@ class NeutronsController:
         except Exception as exc:  # noqa: BLE001
             self.nt = None
             self.page.show_empty(f"Could not analyze channel:\n{exc}")
+            self.opts.btn_log_run.setEnabled(False)
             self._status(f"Failed: {exc}")
             return
         self.nt = nt
+        self.opts.btn_log_run.setEnabled(True)
         self._energy_range = (None, None)
         self._psd_region = None
         self._psd_selections = []
@@ -1128,6 +1151,85 @@ class NeutronsController:
         dlg = PixieStatsDialog(self.app)
         dlg.populate(self._pixie_df, self._pixie_desc)
         dlg.exec_()
+
+    # -- run log ---------------------------------------------------------------
+    def _runlog_fields(self):
+        """(metadata, stats) dicts describing the loaded dataset for the run log."""
+        nt = self.nt
+        pg = self.page
+        if self._pixie_df is not None:
+            meta = {"Source": "PIXIE run", "Date": self.opts.ed_date.text().strip(),
+                    "Run": self.opts.ed_run.text().strip(),
+                    "Channel": self.opts.cmb_channel.currentText(),
+                    "Alignment": self.opts.cmb_align.currentText(),
+                    "CFD": self.opts.cmb_cfd.currentText()}
+            try:
+                from wara import helper_api
+                meta["Data path"] = str(helper_api.find_data_path(
+                    meta["Date"], int(meta["Run"])))
+            except Exception:  # noqa: BLE001  -- the path is best-effort metadata
+                meta["Data path"] = "not found"
+        else:
+            path = self._file_path or ""
+            meta = {"Source": "Trace file", "File": os.path.basename(path),
+                    "Path": os.path.abspath(path) if path else "--"}
+            try:
+                meta["File size"] = f"{os.path.getsize(path) / 1e6:.2f} MB"
+            except OSError:
+                pass
+        meta["Polarity"] = "flipped" if nt.sign < 0 else "positive"
+        samples = f"{nt.time_ns.size}"
+        if nt.time_ns.size > 1:
+            samples += (f" ({nt.time_ns[1] - nt.time_ns[0]:.4g} ns step, "
+                        f"{nt.time_ns[-1] - nt.time_ns[0]:.4g} ns window)")
+        meta["Samples / trace"] = samples
+
+        stats = {"Traces": f"{nt.n_traces:,}",
+                 "Threshold": f"{nt.threshold_v * pg.thresh_scale:.4g} {pg.thresh_unit}",
+                 "Gate start / prompt end / tail end (ns)":
+                     f"{nt.gate_start_ns:.4g} / {nt.prompt_end_ns:.4g} / "
+                     f"{nt.tail_end_ns:.4g}"}
+        if nt.valid is not None:
+            n_valid = int(nt.valid.sum())
+            stats["Valid pulses"] = (
+                f"{n_valid:,} ({100.0 * n_valid / max(nt.n_traces, 1):.1f}%)")
+            if n_valid:
+                e, p = nt.energy[nt.valid], nt.psd[nt.valid]
+                stats[f"Energy min / median / max ({pg.charge_unit})"] = (
+                    f"{e.min():.4g} / {np.median(e):.4g} / {e.max():.4g}")
+                stats["PSD mean / std"] = f"{p.mean():.4g} / {p.std():.4g}"
+            if self._analysis_ready:
+                stats["Selected pulses"] = f"{int(self._selection_mask().sum()):,}"
+        lo, hi = self._energy_range
+        if lo is not None:
+            stats["MCA span"] = f"{lo:.4g} – {hi:.4g}"
+        if self._psd_region is not None:
+            stats["PSD box (E lo, E hi, PSD lo, PSD hi)"] = ", ".join(
+                f"{v:.4g}" for v in self._psd_region)
+        for i, s in enumerate(self._psd_selections, 1):
+            stats[f"PSD selection {i}"] = ", ".join(f"{v:.4g}" for v in s["region"])
+        r = self._fom_result
+        if r is not None:
+            stats["FOM"] = (f"{r.fom:.3f} (mu_g {r.mu_gamma:.4g}, "
+                            f"mu_n {r.mu_n:.4g}, {r.n_events:,} pulses)")
+        return meta, stats
+
+    def _log_run(self):
+        """Pop up the run-log dialog and append the entry to the runlogs folder."""
+        if self.nt is None:
+            self._status("Load a trace file or PIXIE run before logging a run")
+            return
+        self._flash_button(self.opts.btn_log_run)
+        meta, stats = self._runlog_fields()
+        dlg = RunLogDialog("Neutrons", meta, stats, parent=self.app)
+        if dlg.exec_() != QDialog.Accepted:
+            return
+        try:
+            path = runlog.log_run(dlg.description(), "Neutrons", meta, stats)
+        except OSError as exc:
+            self._status(f"Could not write the run log: {exc}")
+            return
+        self._status(f"Logged run to {path}")
 
     def _send_to_spectrum(self):
         """Histogram the current MCA selection and load it on the Spectrum tab."""

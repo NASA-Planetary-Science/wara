@@ -2055,3 +2055,39 @@ def test_load_guards_blank_inputs(api):
     c.opts.ed_run.setText("")
     c._load()                      # must not raise
     assert c.df_current is None    # nothing loaded
+
+
+def test_log_run_writes_entry(api, monkeypatch, tmp_path):
+    from wara import runlog
+    from wara.gui import runlog_dialog
+    _, c = api
+    monkeypatch.setenv("WARA_RUNLOG_DIR", str(tmp_path))
+    assert not c.opts.btn_log_run.isEnabled()
+    c._load()
+    assert c.opts.btn_log_run.isEnabled()
+    c.apply_energy_filter(0, 3000)
+    monkeypatch.setattr(runlog_dialog.RunLogDialog, "exec_",
+                        lambda self: QDialog.Accepted)
+    monkeypatch.setattr(runlog_dialog.RunLogDialog, "description",
+                        lambda self: "AmBe run, 5 cm")
+    c._log_run()
+    (e,) = runlog.read_entries(tmp_path / "runlog_001.txt")
+    assert e["source"] == "API"
+    assert e["description"] == "AmBe run, 5 cm"
+    assert e["metadata"]["Date"] == "2023-07-02"
+    assert e["metadata"]["Run"] == "91"
+    assert e["metadata"]["Channel"] == "5"
+    assert e["stats"]["Events loaded"] == "4,000"
+    assert e["stats"]["Neutron yield (n/s)"] == "4.300E+06"
+    assert "Energy cut" in e["stats"]
+
+
+def test_log_run_cancel_writes_nothing(api, monkeypatch, tmp_path):
+    from wara.gui import runlog_dialog
+    _, c = api
+    monkeypatch.setenv("WARA_RUNLOG_DIR", str(tmp_path))
+    c._load()
+    monkeypatch.setattr(runlog_dialog.RunLogDialog, "exec_",
+                        lambda self: QDialog.Rejected)
+    c._log_run()
+    assert not any(tmp_path.iterdir())

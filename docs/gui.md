@@ -439,6 +439,41 @@ the archive's mission-continuous day-of-year, for `LPNsData.select`), with
 `("thermal/epithermal", "high", 32)`. See
 `examples/planetary/example_lp_neutron_map.py`.
 
+## Logging a run
+
+Once a file is loaded on the **API** or **Neutrons** tab, the **Log run...**
+button (under *RUN INFO* on the API tab, under the loaded-file label on the
+Neutrons tab) opens a pop-up asking for a free-text description of the file.
+The pop-up also previews everything else that will be recorded. When you
+**Save**, wara appends an entry to a plain-text log in the `runlogs/` folder at
+the repository root (next to `data-path.txt`). Set the `WARA_RUNLOG_DIR`
+environment variable to use a different folder.
+
+Each entry holds a header (entry number, time stamp, tab), your description,
+and two blocks of fields:
+
+| Tab | Metadata | Statistics |
+|-----|----------|------------|
+| API | date, run, channel, run type, data path, energy/time/position axes, calibration, drift and time shifts | total alphas, live time, neutron yield, events loaded and after cuts, energy and `dt` min/median/max, active cuts, energy selections |
+| Neutrons | trace-file name, path and size, or PIXIE date/run/channel/alignment/CFD and data path; polarity; samples per trace | trace count, threshold, gate markers, valid and selected pulses, energy min/median/max, PSD mean/std, MCA span, PSD boxes, last FOM |
+
+A log file holds up to **50 entries**. After that, the next entry starts a new
+file: `runlog_001.txt`, then `runlog_002.txt`, and so on. `runlogs/` is
+gitignored, so each user keeps their own logs.
+
+The same log can be written and read from Python:
+
+```python
+from wara import runlog
+
+path = runlog.log_run("Cf-252 at 10 cm, no shielding", source="Neutrons",
+                      metadata={"File": "cf252.npz"},
+                      stats={"Traces": "12,000"})
+entries = runlog.read_entries(path)   # list of dicts
+```
+
+See `examples/other/example_runlog.py`.
+
 ## Tips
 
 - **Tooltips** are placed throughout the GUI — hover over any control for

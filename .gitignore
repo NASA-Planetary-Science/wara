@@ -5,6 +5,8 @@ __pycache__
 .ipynb_checkpoints/
 wara/version.py
 data-path.txt
+# Per-user run logs written by the API / Neutrons "Log run..." button
+runlogs/
 # Track shared CLAUDE.md and .claude/skills; keep local settings out of git
 .claude/*
 !.claude/skills/

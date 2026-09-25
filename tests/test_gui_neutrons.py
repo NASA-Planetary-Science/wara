@@ -472,3 +472,36 @@ def test_fom_empty_slice_is_surfaced(neutrons):
     assert c._fom_region is None and c.opts.lbl_fom.text() == "—"
     assert any("Drag a box" in t.get_text() for t in c._fom_dialog.ax.texts)
     _arm_fom(c, False)
+
+
+def test_log_run_writes_entry(qapp, synth_npz, monkeypatch, tmp_path):
+    from PyQt5.QtWidgets import QDialog, QFileDialog
+
+    from wara import runlog
+    from wara.gui import runlog_dialog
+    monkeypatch.setenv("WARA_RUNLOG_DIR", str(tmp_path / "logs"))
+    monkeypatch.setattr(QFileDialog, "getOpenFileName",
+                        lambda *a, **k: (synth_npz, ""))
+    w = WaraApp()
+    c = w.neutrons
+    assert not c.opts.btn_log_run.isEnabled()
+    c._load()
+    assert c.opts.btn_log_run.isEnabled()
+    # The dialog preview carries the metadata before anything is written.
+    meta, stats = c._runlog_fields()
+    dlg = runlog_dialog.RunLogDialog("Neutrons", meta, stats)
+    assert "synthetic_traces.npz" in dlg.txt_preview.toPlainText()
+    dlg.close()
+    monkeypatch.setattr(runlog_dialog.RunLogDialog, "exec_",
+                        lambda self: QDialog.Accepted)
+    monkeypatch.setattr(runlog_dialog.RunLogDialog, "description",
+                        lambda self: "synthetic two-population traces")
+    c._log_run()
+    (e,) = runlog.read_entries(tmp_path / "logs" / "runlog_001.txt")
+    assert e["source"] == "Neutrons"
+    assert e["description"] == "synthetic two-population traces"
+    assert e["metadata"]["File"] == "synthetic_traces.npz"
+    assert e["metadata"]["Polarity"] == "flipped"
+    assert e["stats"]["Traces"] == "400"
+    assert "Valid pulses" in e["stats"]
+    w.close()
