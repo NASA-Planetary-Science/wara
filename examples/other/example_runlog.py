@@ -11,6 +11,7 @@ import tempfile
 from pathlib import Path
 
 import numpy as np
+import pandas as pd
 
 from wara import runlog
 from wara.neutron_psd import NeutronTraces
@@ -42,8 +43,9 @@ last = runlog.read_entries(path)[-1]
 print("Parsed back:", last["description"], "|", last["stats"])
 
 # For a PIXIE run folder, run_folder_fields() collects the setup, the channels
-# with data, the data-folder sizes and per-channel event / trace counts. Here a
-# tiny fake run folder is built so the example runs without real data.
+# with data, the data-folder sizes, per-channel recorded / reconstructed event
+# and trace counts, and the reconstruction chain. Here a tiny fake run folder
+# is built so the example runs without real data.
 
 with tempfile.TemporaryDirectory() as tmp:
     run = Path(tmp) / "RUN-2026-09-24-00001"
@@ -53,6 +55,14 @@ with tempfile.TemporaryDirectory() as tmp:
     counts[1], counts[9] = 99272, 101984
     (run / "settings" / "RUN-stats-2026-09-24.json").write_text(
         json.dumps([{"module": 0, "output_counts": counts}]))
+    # Reconstructed events (parquet) and the reduction chain (errors.parquet).
+    (run / "parquet-data").mkdir()
+    pd.DataFrame({"channel": np.ones(840, dtype=int)}).to_parquet(
+        run / "parquet-data" / "RUN-00001-pandas.parquet")
+    pd.DataFrame({"input-total": [6153], "verified-total": [903],
+                  "verified-no-error": [840], "verified-error": [63],
+                  "verified-pileup-1": [5], "verified-trace-flag-1": [58]}
+                 ).to_parquet(run / "parquet-data" / "RUN-00001-errors.parquet")
     meta, stats = runlog.run_folder_fields(run)
     print("\nRun folder metadata:", meta)
     print("Run folder statistics:", stats)

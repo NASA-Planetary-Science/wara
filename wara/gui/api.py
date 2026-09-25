@@ -3616,8 +3616,10 @@ class ApiController:
         stats = {lbl: val for lbl, val, _ in self._settings_rows}
         if self._settings_error:
             stats["Run settings"] = self._settings_error
-        stats["Events loaded"] = f"{self.df_api.shape[0]:,}"
         stats.update(folder_stats)
+        if not any(k.startswith("Reconstructed events") for k in stats):
+            # No parquet files found on disk: fall back to the loaded channel.
+            stats[f"Reconstructed events ch {self._src_ch}"] =                 f"{self.df_api.shape[0]:,}"
         cuts = {"Energy cut": self._cut_energy, "dt cut": self._cut_time,
                 "X-Y cut": self._cut_xy, "Alpha cut": self._cut_alpha}
         for lbl, cut in cuts.items():

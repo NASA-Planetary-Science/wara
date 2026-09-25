@@ -107,6 +107,83 @@ def _summed_counts(folder, key="output_counts"):
     return {ch: n for ch, n in sorted(total.items()) if n > 0}
 
 
+def _parquet_channel_counts(folder):
+    """Reconstructed events per channel in the ``*-pandas.parquet`` files of
+    *folder*. Only the channel column is read: ``channel`` when present,
+    otherwise the legacy ``LaBr[y/n]`` flag (LaBr = channel 4, else 5, as in
+    :func:`wara.read_parquet_api.channel_mask`)."""
+    import pyarrow.compute as pc
+    import pyarrow.parquet as pq
+
+    total = {}
+    for f in sorted(Path(folder).glob("*-pandas.parquet")):
+        try:
+            names = pq.read_schema(f).names
+            if "channel" in names:
+                col = pq.read_table(f, columns=["channel"]).column(0)
+                pairs = [(int(v["values"]), int(v["counts"]))
+                         for v in pc.value_counts(col).to_pylist()
+                         if v["values"] is not None]
+            elif "LaBr[y/n]" in names:
+                col = pq.read_table(f, columns=["LaBr[y/n]"]).column(0)
+                n_labr = int(pc.sum(pc.cast(col, "int64")).as_py() or 0)
+                pairs = [(4, n_labr), (5, len(col) - col.null_count - n_labr)]
+            else:
+                continue
+        except (OSError, ValueError):
+            continue
+        for ch, n in pairs:
+            total[ch] = total.get(ch, 0) + n
+    return {ch: n for ch, n in sorted(total.items()) if n > 0}
+
+
+#: Per-channel verification-error columns of ``*-errors.parquet``.
+_ERROR_KINDS = (("verified-pileup-", "pileup"),
+                ("verified-CFD-error-", "CFD error"),
+                ("verified-trace-flag-", "trace flag"))
+
+
+def _reduction_stats(folder):
+    """Run-log stats for the event-reconstruction chain, summed over the
+    ``*-errors.parquet`` files (one per chunk) of *folder*. Empty if absent."""
+    import pyarrow.parquet as pq
+
+    total = {}
+    for f in sorted(Path(folder).glob("*-errors.parquet")):
+        try:
+            table = pq.read_table(f)
+        except (OSError, ValueError):
+            continue
+        for name in table.column_names:
+            n = sum(int(v) for v in table.column(name).to_pylist() if v is not None)
+            total[name] = total.get(name, 0) + n
+    if not total:
+        return {}
+
+    def get(key):
+        return total.get(key, 0)
+
+    stats = {"Reco input events": f"{get('input-total'):,}",
+             "Reco incomplete groups":
+                 f"{get('group-incomplete-group'):,} "
+                 f"({get('group-discarded-input'):,} events discarded)",
+             "Reco time-window rejects":
+                 f"{get('time-window-incomplete-group'):,} "
+                 f"({get('time-window-discarded-input'):,} events discarded)",
+             "Reco verified events": f"{get('verified-total'):,}",
+             "Reco verified, no error": f"{get('verified-no-error'):,}",
+             "Reco verified, with error": f"{get('verified-error'):,}"}
+    errors = {}
+    for prefix, label in _ERROR_KINDS:
+        for name, n in total.items():
+            if name.startswith(prefix) and name[len(prefix):].isdigit() and n:
+                errors.setdefault(int(name[len(prefix):]), []).append(
+                    f"{label} {n:,}")
+    for ch in sorted(errors):
+        stats[f"Reco errors ch {ch}"] = ", ".join(errors[ch])
+    return stats
+
+
 def run_folder_fields(run_dir):
     """Run-log ``(metadata, stats)`` read from a PIXIE run folder.
 
@@ -119,9 +196,12 @@ def run_folder_fields(run_dir):
         list-mode counts) and, for
         each data folder, whether it holds data and how much.
     stats
-        ``Events ch N`` per channel with list-mode data (summed PIXIE output
-        counts in ``settings/``) and ``Traces ch N`` per channel with captured
-        traces (``trace-data/``).
+        ``Recorded events ch N`` per channel with list-mode data (summed PIXIE
+        output counts in ``settings/``); ``Reconstructed events ch N`` per
+        channel in the parquet files (events that survived grouping and
+        verification); ``Traces ch N`` per channel with captured traces
+        (``trace-data/``); and the reconstruction chain (``Reco ...``) from
+        ``parquet-data/*-errors.parquet``.
     """
     import json
 
@@ -152,9 +232,12 @@ def run_folder_fields(run_dir):
             meta[label] = "no"
 
     for ch, n in events.items():
-        stats[f"Events ch {ch}"] = f"{n:,}"
+        stats[f"Recorded events ch {ch}"] = f"{n:,}"
+    for ch, n in _parquet_channel_counts(run_dir / "parquet-data").items():
+        stats[f"Reconstructed events ch {ch}"] = f"{n:,}"
     for ch, n in _summed_counts(run_dir / "trace-data").items():
         stats[f"Traces ch {ch}"] = f"{n:,}"
+    stats.update(_reduction_stats(run_dir / "parquet-data"))
     return meta, stats
 
 
@@ -288,3 +371,18 @@ def replace_entry(path, number, description, source, metadata=None, stats=None,
         raise ValueError(f"No entry {number} in {path}")
     path.write_text(head.join(chunks), encoding="utf-8")
     return path
+
+
+def delete_entry(path, number):
+    """Remove entry *number* from the log file *path* and renumber the entries
+    after it so the numbering stays 1, 2, 3, ... Returns the entries left."""
+    path = Path(path)
+    text = path.read_text(encoding="utf-8")
+    head = f"{_RULE}\n{ENTRY_MARK} "
+    chunks = text.split(head)
+    kept = [c for c in chunks[1:] if int(c.split("|", 1)[0]) != number]
+    if len(kept) == len(chunks) - 1:
+        raise ValueError(f"No entry {number} in {path}")
+    kept = [f"{i} |{c.split('|', 1)[1]}" for i, c in enumerate(kept, 1)]
+    path.write_text(chunks[0] + "".join(head + c for c in kept), encoding="utf-8")
+    return len(kept)

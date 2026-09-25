@@ -454,14 +454,20 @@ and two blocks of fields:
 
 | Tab | Metadata | Statistics |
 |-----|----------|------------|
-| API | date, run, setup (from `metadata.json`), all channels with data, data path, whether parquet / binary / MCA / trace data exist and their size, energy/time/position axes, calibration, drift and time shifts | total alphas, live time, neutron yield, events loaded, events per channel, captured traces per channel, active cuts, energy selections |
-| Neutrons | trace-file name, path and size, or PIXIE date/run/setup/channels with data/alignment/CFD, data path and data-folder sizes; polarity; samples per trace | trace count, threshold, (PIXIE runs) events and traces per channel, gate markers, valid and selected pulses, energy min/median/max, PSD mean/std, MCA span, PSD boxes, last FOM |
+| API | date, run, setup (from `metadata.json`), all channels with data, data path, whether parquet / binary / MCA / trace data exist and their size, energy/time/position axes, calibration, drift and time shifts | total alphas, live time, neutron yield, recorded and reconstructed events per channel, captured traces per channel, reconstruction chain, active cuts, energy selections |
+| Neutrons | trace-file name, path and size, or PIXIE date/run/setup/channels with data/alignment/CFD, data path and data-folder sizes; polarity; samples per trace | trace count, threshold, (PIXIE runs) recorded/reconstructed events and traces per channel, reconstruction chain, gate markers, valid and selected pulses, energy min/median/max, PSD mean/std, MCA span, PSD boxes, last FOM |
 
 The pop-up has two tabs. **New entry** holds the description box and a
 coloured preview of the entry. **Log entries** reads back the entries already
 saved, newest first, with a selector for the log file. With no file loaded, the
 button still opens the pop-up, but browse-only: *New entry* is disabled and
 only *Log entries* is available.
+
+On **Log entries**, pick an entry with the *Entry* list or by clicking its
+title (the selected entry is framed in cyan), then **Delete entry** removes it
+after a confirmation; the entries after it are renumbered. Delete is greyed out
+on *New entry*, and Save / Replace entry / Cancel are greyed out on *Log
+entries*. Deleting the entry of the loaded run lets you save it again.
 
 Each run is logged only once. A run is identified by the tab plus date and run
 number (PIXIE runs), or by the tab plus file path (trace files). If the loaded
@@ -484,15 +490,39 @@ path = runlog.log_run("Cf-252 at 10 cm, no shielding", source="Neutrons",
                       stats={"Traces": "12,000"})
 entries = runlog.read_entries(path)   # list of dicts
 runlog.find_run("Neutrons", {"File": "cf252.npz"})   # (path, entry) or None
+runlog.delete_entry(path, 1)          # remove entry 1, renumber the rest
 
-# Setup, channels, data-folder sizes and per-channel counts of a PIXIE run:
+# Setup, channels, data-folder sizes, per-channel counts and the
+# reconstruction chain of a PIXIE run:
 meta, stats = runlog.run_folder_fields("D:/Data/2026-09-24/RUN-2026-09-24-00001")
 ```
 
-The per-channel event and trace counts are summed from the PIXIE
-`*-stats-*.json` files in `settings/` and `trace-data/` (the `-initial`
-snapshots are skipped), so nothing large is read. Anything a run lacks (no
-`metadata.json`, an older layout, no trace data) is left out or shown as `no`.
+The event counts of a PIXIE run come in two kinds:
+
+- **Recorded events ch N** — raw list-mode counts per channel, summed from the
+  PIXIE `*-stats-*.json` files in `settings/` (the `-initial` snapshots are
+  skipped). Trace counts come from `trace-data/` the same way.
+- **Reconstructed events ch N** — events per channel in the parquet files
+  (`parquet-data/*-pandas.parquet`), i.e. the gamma-channel events that were
+  grouped with an alpha and passed verification with no error. This is what
+  the API tab loads, so it is much smaller than the recorded count. Only the
+  channel column is read (`channel`, or for 2022-2024 runs the `LaBr[y/n]`
+  flag: LaBr = channel 4, otherwise 5).
+
+The **Reco ...** rows explain the gap. They are summed over the
+`parquet-data/*-errors.parquet` files written by the reconstruction:
+
+| Row | Meaning |
+|-----|---------|
+| Reco input events | all list-mode events fed to the reconstruction |
+| Reco incomplete groups | coincidence groups missing a channel, and the events discarded with them |
+| Reco time-window rejects | groups outside the time window, and the events discarded with them |
+| Reco verified events | groups that reached verification |
+| Reco verified, no error / with error | groups that passed verification (= the reconstructed events) or failed it |
+| Reco errors ch N | per-channel verification failures: pileup, CFD error, trace flag |
+
+Nothing large is read. Anything a run lacks (no `metadata.json`, an older
+layout, no trace or parquet data) is left out or shown as `no`.
 
 See `examples/other/example_runlog.py`.
 

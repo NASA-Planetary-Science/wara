@@ -2062,6 +2062,10 @@ def test_log_run_writes_entry(api, monkeypatch, tmp_path):
     from wara.gui import runlog_dialog
     _, c = api
     monkeypatch.setenv("WARA_RUNLOG_DIR", str(tmp_path))
+    # Keep the test independent of any real run folder on this machine.
+    from wara import apicalc
+    monkeypatch.setattr(apicalc, "find_data_path",
+                        lambda *a, **k: (_ for _ in ()).throw(FileNotFoundError))
     assert c.opts.btn_log_run.isEnabled()     # browse-only before a load
     c._load()
     c.apply_energy_filter(0, 3000)
@@ -2077,7 +2081,9 @@ def test_log_run_writes_entry(api, monkeypatch, tmp_path):
     assert e["metadata"]["Run"] == "91"
     assert "Analyzed channel" not in e["metadata"]
     assert "Type" not in e["metadata"]
-    assert e["stats"]["Events loaded"] == "4,000"
+    assert "Events loaded" not in e["stats"]
+    # No parquet files on disk in the test: falls back to the loaded channel.
+    assert e["stats"][f"Reconstructed events ch {c._src_ch}"] == "4,000"
     assert "Events after cuts" not in e["stats"]
     assert e["stats"]["Neutron yield (n/s)"] == "4.300E+06"
     assert "Energy cut" in e["stats"]
@@ -2148,6 +2154,53 @@ def test_log_run_without_run_is_browse_only(api, monkeypatch, tmp_path):
     assert "an earlier run" in dlg.txt_log.toPlainText()
     assert dlg.write() is None
     assert runlog.count_entries(tmp_path / "runlog_001.txt") == 1
+
+
+def test_log_run_dialog_tab_buttons_and_delete(api, monkeypatch, tmp_path):
+    from PyQt5.QtCore import QUrl
+    from PyQt5.QtWidgets import QMessageBox
+
+    from wara import runlog
+    from wara.gui import runlog_dialog
+    _, c = api
+    monkeypatch.setenv("WARA_RUNLOG_DIR", str(tmp_path))
+    c._load()
+    meta, stats = c._runlog_fields()
+    runlog.log_run("other run", "API", {"Date": "2026-01-01", "Run": "5"})
+    runlog.log_run("this run", "API", meta, stats)
+    runlog.log_run("newest", "API", {"Date": "2026-01-02", "Run": "6"})
+    dlg = runlog_dialog.RunLogDialog("API", meta, stats)
+    # New entry tab: Delete greyed out, Replace / Cancel usable.
+    assert dlg.tabs.currentIndex() == 0
+    assert not dlg.btn_delete.isEnabled()
+    assert dlg.btn_replace.isEnabled() and dlg.btn_cancel.isEnabled()
+    # Log entries tab: the New-entry buttons grey out, Delete is live.
+    dlg.tabs.setCurrentIndex(1)
+    assert not dlg.btn_save.isEnabled() and not dlg.btn_replace.isEnabled()
+    assert not dlg.btn_cancel.isEnabled()
+    assert dlg.btn_delete.isEnabled()
+    # The duplicate (entry 2) is selected; clicking a title picks another.
+    assert dlg.selected_entry()["number"] == 2
+    dlg._on_anchor(QUrl("entry:3"))
+    assert dlg.selected_entry()["description"] == "newest"
+    # Declining the confirmation keeps the entry.
+    monkeypatch.setattr(QMessageBox, "question",
+                        lambda *a, **k: QMessageBox.No)
+    dlg._on_delete()
+    assert runlog.count_entries(tmp_path / "runlog_001.txt") == 3
+    # Deleting the duplicate entry lets the run be saved again.
+    monkeypatch.setattr(QMessageBox, "question",
+                        lambda *a, **k: QMessageBox.Yes)
+    dlg._on_anchor(QUrl("entry:2"))
+    dlg._on_delete()
+    entries = runlog.read_entries(tmp_path / "runlog_001.txt")
+    assert [e["description"] for e in entries] == ["other run", "newest"]
+    assert [e["number"] for e in entries] == [1, 2]
+    assert dlg.duplicate is None and dlg.btn_replace.isHidden()
+    assert "this run" not in dlg.txt_log.toPlainText()
+    dlg.tabs.setCurrentIndex(0)
+    assert dlg.btn_save.isEnabled() and not dlg.btn_delete.isEnabled()
+    dlg.close()
 
 
 def test_log_run_cancel_writes_nothing(api, monkeypatch, tmp_path):

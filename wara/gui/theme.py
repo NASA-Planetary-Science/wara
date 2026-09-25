@@ -237,6 +237,7 @@ QPushButton#danger_btn {{
     border-radius: 5px; padding: 8px 13px; font-size: 14px; font-weight: 700;
 }}
 QPushButton#danger_btn:hover {{ background-color: #4d1a2a; }}
+QPushButton#danger_btn:disabled {{ color: #5a5a7a; border-color: #2e2e48; background-color: #1a1a28; }}
 QPushButton#yellow_btn {{
     background-color: #463808; color: #ffd766; border: 2px solid {ACCENT_AMBER};
     border-radius: 5px; padding: 8px 13px; font-size: 14px; font-weight: 700;

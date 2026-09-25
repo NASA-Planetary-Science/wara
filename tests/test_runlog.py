@@ -93,8 +93,47 @@ def test_run_folder_fields(tmp_path):
     assert meta["Parquet data"] == "yes, 1 file, 10 B"
     assert meta["Trace data"] == "no"
     assert meta["MCA data"] == "no"
-    assert stats == {"Events ch 1": "200", "Events ch 9": "500",
+    assert stats == {"Recorded events ch 1": "200", "Recorded events ch 9": "500",
                      "Traces ch 9": "7"}
+
+
+def test_run_folder_fields_parquet(tmp_path):
+    import pandas as pd
+    pq_dir = tmp_path / "parquet-data"
+    pq_dir.mkdir()
+    # Two chunks: per-channel reconstructed events and the reduction chain
+    # are summed over them.
+    pd.DataFrame({"channel": [1, 1, 4]}).to_parquet(pq_dir / "R-00001-pandas.parquet")
+    pd.DataFrame({"channel": [1, 4, 4]}).to_parquet(pq_dir / "R-00002-pandas.parquet")
+    err = {"input-total": [100], "verified-total": [10], "verified-no-error": [6],
+           "verified-error": [4], "group-incomplete-group": [3],
+           "group-discarded-input": [20], "time-window-incomplete-group": [2],
+           "time-window-discarded-input": [30], "verified-pileup-1": [1],
+           "verified-trace-flag-1": [2], "verified-CFD-error-4": [0]}
+    pd.DataFrame(err).to_parquet(pq_dir / "R-00001-errors.parquet")
+    pd.DataFrame(err).to_parquet(pq_dir / "R-00002-errors.parquet")
+
+    _, stats = runlog.run_folder_fields(tmp_path)
+    assert stats["Reconstructed events ch 1"] == "3"
+    assert stats["Reconstructed events ch 4"] == "3"
+    assert stats["Reco input events"] == "200"
+    assert stats["Reco incomplete groups"] == "6 (40 events discarded)"
+    assert stats["Reco time-window rejects"] == "4 (60 events discarded)"
+    assert stats["Reco verified, no error"] == "12"
+    assert stats["Reco errors ch 1"] == "pileup 2, trace flag 4"
+    assert "Reco errors ch 4" not in stats          # all-zero counts are skipped
+
+
+def test_run_folder_fields_parquet_legacy_labr(tmp_path):
+    # 2022-2024 runs have no channel column: LaBr = channel 4, otherwise 5.
+    import pandas as pd
+    pq_dir = tmp_path / "parquet-data"
+    pq_dir.mkdir()
+    pd.DataFrame({"LaBr[y/n]": [True, False, False]}).to_parquet(
+        pq_dir / "R-00001-pandas.parquet")
+    _, stats = runlog.run_folder_fields(tmp_path)
+    assert stats == {"Reconstructed events ch 4": "1",
+                     "Reconstructed events ch 5": "2"}
 
 
 def test_run_folder_fields_missing_folder(tmp_path):
@@ -110,7 +149,7 @@ def test_find_run_and_replace_entry(tmp_path):
     runlog.log_run("other run", "API", {"Date": "2026-09-24", "Run": "2"},
                    log_dir=tmp_path)
     assert runlog.find_run("API", md, tmp_path) is None
-    path = runlog.log_run("first", "API", md, {"Events ch 1": "10"},
+    path = runlog.log_run("first", "API", md, {"Recorded events ch 1": "10"},
                           log_dir=tmp_path)
     runlog.log_run("after", "Neutrons", {"File": "x.npz", "Path": "/d/x.npz"},
                    log_dir=tmp_path)
@@ -121,11 +160,29 @@ def test_find_run_and_replace_entry(tmp_path):
     assert runlog.find_run("Neutrons", {"Path": "/d/x.npz"}, tmp_path)[1]["number"] == 3
     assert runlog.find_run("API", {}, tmp_path) is None
 
-    runlog.replace_entry(path, 2, "second\nline", "API", md, {"Events ch 1": "20"})
+    runlog.replace_entry(path, 2, "second\nline", "API", md, {"Recorded events ch 1": "20"})
     entries = runlog.read_entries(path)
     assert [x["number"] for x in entries] == [1, 2, 3]
     assert entries[1]["description"] == "second\nline"
-    assert entries[1]["stats"] == {"Events ch 1": "20"}
+    assert entries[1]["stats"] == {"Recorded events ch 1": "20"}
     assert entries[2]["description"] == "after"
     with pytest.raises(ValueError):
         runlog.replace_entry(path, 9, "x", "API")
+
+
+def test_delete_entry_renumbers(tmp_path):
+    for i in range(3):
+        path = runlog.log_run(f"run {i}", "API", {"Date": "d", "Run": str(i)},
+                              log_dir=tmp_path)
+    assert runlog.delete_entry(path, 2) == 2
+    entries = runlog.read_entries(path)
+    assert [(e["number"], e["description"]) for e in entries] == [
+        (1, "run 0"), (2, "run 2")]
+    # The next entry continues the numbering.
+    runlog.log_run("run 3", "API", log_dir=tmp_path)
+    assert [e["number"] for e in runlog.read_entries(path)] == [1, 2, 3]
+    with pytest.raises(ValueError):
+        runlog.delete_entry(path, 7)
+    runlog.delete_entry(path, 1); runlog.delete_entry(path, 1)
+    runlog.delete_entry(path, 1)
+    assert runlog.read_entries(path) == [] and runlog.count_entries(path) == 0
