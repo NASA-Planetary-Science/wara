@@ -2,14 +2,15 @@
 
 Two tabs: *New entry* asks for a description and previews the metadata and
 statistics that will be recorded for the loaded file; *Log entries* reads back
-the entries already in the run-log files and can delete one. A run that is
+the entries already in the run-log files (collapsed to their description;
+a link under it expands one) and can delete one. A run that is
 already in the log is not logged twice: a warning is shown and the user may
 replace the old entry instead. Reading and writing the files is done by
 :mod:`wara.runlog`."""
 from datetime import datetime
 from html import escape
 
-from PyQt5.QtCore import Qt
+from PyQt5.QtCore import QEvent, Qt
 from PyQt5.QtWidgets import (
     QComboBox,
     QDialog,
@@ -41,6 +42,18 @@ _C_NO = T.ACCENT_RED           # data folder missing / not found
 
 _NEW_TAB, _LOG_TAB = 0, 1
 
+# Font sizes (points). Nothing in the GUI goes below 12 pt (see CLAUDE.md).
+_PT_BODY = 13
+_PT_TITLE = 15
+# The app stylesheet sizes these widgets in px, several below 12 pt: the
+# dialog restates them in points (later rules of equal specificity win).
+_DIALOG_CSS = f"""
+QWidget {{ font-size: {_PT_BODY}pt; }}
+QLabel#stat_key, QLabel#section_header {{ font-size: 12pt; }}
+QPushButton, QComboBox, QPlainTextEdit {{ font-size: {_PT_BODY}pt; }}
+QPushButton#danger_btn, QDialogButtonBox QPushButton {{ font-size: 12pt; }}
+"""
+
 
 def _value_html(value):
     v = escape(str(value))
@@ -62,11 +75,14 @@ def _section_html(title, items):
             f"style='margin-left:12px'>{rows}</table>")
 
 
-def entry_html(entry, highlight=False, selected=False, link=False):
+def entry_html(entry, highlight=False, selected=False, link=False,
+               expanded=True):
     """One run-log entry (a dict as returned by :func:`wara.runlog.read_entries`)
     as coloured HTML. *highlight* frames it amber (the duplicate run),
     *selected* frames it cyan (the entry picked for deletion) and *link* makes
-    the title a clickable ``entry:N`` link with an ``entryN`` anchor."""
+    the title a clickable ``entry:N`` link with an ``entryN`` anchor, followed
+    by a ``toggle:N`` link that shows / hides the metadata and statistics.
+    With *expanded* False only the header and description are shown."""
     desc = escape(entry.get("description") or "(no description)")
     desc = desc.replace("\n", "<br>")
     border = (T.ACCENT_CYAN if selected else
@@ -74,14 +90,22 @@ def entry_html(entry, highlight=False, selected=False, link=False):
     width = 2 if (selected or highlight) else 1
     num = entry.get("number", "?")
     title = f"ENTRY {num}"
+    details = ""
     if link:
         title = (f"<a name='entry{num}' href='entry:{num}' "
                  f"style='color:{_C_TITLE}; text-decoration:none'>{title}</a>")
+        label = ("▾ hide metadata &amp; statistics" if expanded
+                 else "▸ show metadata &amp; statistics")
+        details = (f"<div style='margin-top:4px'><a href='toggle:{num}' "
+                   f"style='color:{_C_KEY}'>{label}</a></div>")
+    if expanded:
+        details += (_section_html("Metadata", entry.get("metadata"))
+                    + _section_html("Statistics", entry.get("stats")))
     return (
         f"<table width='100%' cellspacing='0' cellpadding='8' border='{width}' "
         f"style='border-color:{border}; border-style:solid; margin-bottom:10px; "
         f"background:{T.BG_PANEL}'><tr><td>"
-        f"<span style='color:{_C_TITLE}; font-weight:700; font-size:15px'>"
+        f"<span style='color:{_C_TITLE}; font-weight:700; font-size:{_PT_TITLE}pt'>"
         f"{title}</span>"
         f"<span style='color:{_C_KEY}'>&nbsp;&nbsp;{escape(entry.get('timestamp', ''))}"
         f"&nbsp;&nbsp;·&nbsp;&nbsp;</span>"
@@ -90,15 +114,13 @@ def entry_html(entry, highlight=False, selected=False, link=False):
         f"<div style='color:{_C_SECTION}; font-weight:700; margin-top:6px'>"
         f"Description</div>"
         f"<div style='color:{_C_VALUE}; margin-left:12px'><i>{desc}</i></div>"
-        + _section_html("Metadata", entry.get("metadata"))
-        + _section_html("Statistics", entry.get("stats"))
-        + "</td></tr></table>")
+        + details + "</td></tr></table>")
 
 
 def _browser(tooltip):
     b = QTextBrowser()
     b.setOpenLinks(False)
-    b.setStyleSheet(f"font-family:{T.MONO_FAMILY}; font-size:13px;")
+    b.setStyleSheet(f"font-family:{T.MONO_FAMILY}; font-size:{_PT_BODY}pt;")
     b.setToolTip(tooltip)
     return b
 
@@ -117,9 +139,9 @@ class RunLogDialog(QDialog):
         self.browse_only = metadata is None
         self.setWindowTitle(f"Run log — {source}" if self.browse_only
                             else f"Log run — {source}")
-        self.setStyleSheet(T.STYLESHEET)
-        self.setMinimumWidth(560)
-        self.resize(680, 620)
+        self.setStyleSheet(T.STYLESHEET + _DIALOG_CSS)
+        self.setMinimumWidth(760)
+        self.resize(940, 720)
         # Existing entry for this run, or None: then Save is replaced by Replace.
         self.duplicate = (None if self.browse_only
                           else runlog.find_run(source, metadata, log_dir))
@@ -149,7 +171,7 @@ class RunLogDialog(QDialog):
         self.btn_delete.setToolTip(
             "Delete the selected entry from its log file (asks first); the "
             "entries after it are renumbered.\nPick the entry in the Entry list "
-            "or click its title. Only available on the Log entries tab.")
+            "or click it. Only available on the Log entries tab.")
         self.btn_delete.clicked.connect(self._on_delete)
 
         self.tabs = QTabWidget()
@@ -187,13 +209,14 @@ class RunLogDialog(QDialog):
         clipped (mirrors DiagnosticsDialog._fit_tabbar)."""
         bar = tabw.tabBar()
         f = bar.font()
-        f.setPixelSize(14)
+        f.setPointSize(_PT_BODY)
         f.setBold(True)
         bar.setFont(f)
         bar.setElideMode(Qt.ElideNone)
         bar.setExpanding(False)
         tabw.setStyleSheet(
-            "QTabBar::tab { padding: 7px 24px; min-width: 96px; }"
+            f"QTabBar::tab {{ padding: 7px 24px; min-width: 150px; "
+            f"font-size: {_PT_BODY}pt; }}"
             f"QTabBar::tab:disabled {{ color: {T.GRID}; background: {T.BG_DARK}; }}")
 
     def _update_buttons(self, *_):
@@ -286,18 +309,22 @@ class RunLogDialog(QDialog):
         lbl = QLabel("Entry:"); lbl.setObjectName("stat_key")
         row.addWidget(lbl)
         self.cmb_entry = QComboBox()
-        self.cmb_entry.setMinimumWidth(190)
+        self.cmb_entry.setSizeAdjustPolicy(QComboBox.AdjustToContents)
         self.cmb_entry.setToolTip(
             "Selected entry (framed in cyan) — the one Delete entry removes. "
-            "You can also click an entry's title in the list below.")
+            "You can also click an entry in the list below.")
         row.addWidget(self.cmb_entry)
         lay.addLayout(row)
         self.txt_log = _browser("Entries of the selected log file, newest first. "
-                                "Click an entry's title to select it.")
+                                "Click an entry to select it; its 'show "
+                                "metadata & statistics' link expands it.")
         self.txt_log.anchorClicked.connect(self._on_anchor)
+        # A click anywhere on an entry (not only its title) selects it.
+        self.txt_log.viewport().installEventFilter(self)
         lay.addWidget(self.txt_log, 1)
 
         self._files, self._entries = [], []
+        self._expanded = set()        # entry numbers shown in full
         self.cmb_file.currentIndexChanged.connect(lambda i: self._show_file(i))
         self.cmb_entry.currentIndexChanged.connect(self._on_entry_changed)
         start = None
@@ -334,6 +361,7 @@ class RunLogDialog(QDialog):
         if not 0 <= idx < len(self._files):
             return
         self._entries = list(reversed(runlog.read_entries(self._files[idx])))
+        self._expanded = set()
         nums = [e["number"] for e in self._entries]
         self.cmb_entry.blockSignals(True)
         self.cmb_entry.clear()
@@ -362,7 +390,8 @@ class RunLogDialog(QDialog):
             self.duplicate is not None and self.duplicate[0] == path) else None
         sel = self.selected_entry()
         html = "".join(entry_html(e, highlight=e["number"] == dup,
-                                  selected=e is sel, link=True)
+                                  selected=e is sel, link=True,
+                                  expanded=e["number"] in self._expanded)
                        for e in self._entries)
         bar = self.txt_log.verticalScrollBar()
         pos = bar.value()
@@ -377,14 +406,48 @@ class RunLogDialog(QDialog):
         if sel is not None:
             self.txt_log.scrollToAnchor(f"entry{sel['number']}")
 
-    def _on_anchor(self, url):
-        text = url.toString()
-        if not text.startswith("entry:"):
-            return
+    def _select_entry(self, num):
+        """Select entry *num* (re-renders through the Entry list)."""
         nums = [e["number"] for e in self._entries]
-        num = int(text.split(":", 1)[1])
-        if num in nums:
+        if num not in nums:
+            return
+        if nums.index(num) == self.cmb_entry.currentIndex():
+            self._render_log()
+        else:
             self.cmb_entry.setCurrentIndex(nums.index(num))
+
+    def _on_anchor(self, url):
+        """``entry:N`` (the title) selects entry N; ``toggle:N`` (the show /
+        hide link) expands or collapses it and selects it too."""
+        kind, _, num = url.toString().partition(":")
+        if kind not in ("entry", "toggle") or not num.isdigit():
+            return
+        num = int(num)
+        if kind == "toggle":
+            self._expanded ^= {num}
+        self._select_entry(num)
+
+    def _entry_at(self, p):
+        """Entry dict at document position *p*, or None. Each entry is one
+        top-level table of the document, in the order of ``self._entries``."""
+        frames = self.txt_log.document().rootFrame().childFrames()
+        for e, f in zip(self._entries, frames):
+            if f.firstPosition() <= p <= f.lastPosition():
+                return e
+        return None
+
+    def eventFilter(self, obj, event):
+        if (obj is self.txt_log.viewport()
+                and event.type() == QEvent.MouseButtonRelease
+                and event.button() == Qt.LeftButton
+                and not self.txt_log.anchorAt(event.pos())):
+            # Links select through _on_anchor; re-rendering here would drop
+            # the pending link click.
+            e = self._entry_at(
+                self.txt_log.cursorForPosition(event.pos()).position())
+            if e is not None:
+                self._select_entry(e["number"])
+        return super().eventFilter(obj, event)
 
     def _confirm_delete(self, path, entry):
         desc = (entry["description"] or "(no description)").splitlines()[0]

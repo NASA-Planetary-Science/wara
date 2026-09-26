@@ -79,6 +79,10 @@ at import time in `matplotlib_theme.py` and `apicalc.py`).
   `wara/version.py` — never edit that file by hand.
 - CI matrix: ubuntu/windows/macos x Python 3.10 & 3.12. Keep changes portable.
 - Use tooltips in the GUI generously
+- **GUI font size is never smaller than 12pt** (= 16px at 96 dpi) — widgets,
+  labels, tab bars and rich-text/HTML alike. Size new text in `pt`. Older
+  theme rules in `theme.py` still use smaller px sizes; bump them to >= 12pt
+  when touching the code that uses them.
 
 ## API data
 

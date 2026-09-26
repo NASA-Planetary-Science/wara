@@ -2203,6 +2203,46 @@ def test_log_run_dialog_tab_buttons_and_delete(api, monkeypatch, tmp_path):
     dlg.close()
 
 
+def test_log_run_entries_collapse_and_expand(api, monkeypatch, tmp_path):
+    from PyQt5.QtCore import QUrl
+
+    from wara import runlog
+    from wara.gui import runlog_dialog
+    _, c = api
+    monkeypatch.setenv("WARA_RUNLOG_DIR", str(tmp_path))
+    c._load()
+    meta, stats = c._runlog_fields()
+    runlog.log_run("other run", "API", {"Date": "2026-01-01", "Run": "5"},
+                   {"Live time": "123 s"})
+    runlog.log_run("this run", "API", meta, stats)
+    dlg = runlog_dialog.RunLogDialog("API", meta, stats)
+    # Every entry starts collapsed to its description, the duplicate included.
+    text = dlg.txt_log.toPlainText()
+    assert "other run" in text and "this run" in text
+    assert "123 s" not in text and "Metadata" not in text
+    assert text.count("show metadata") == 2
+    # Selecting (title link or a click on the entry) does not expand it.
+    dlg._on_anchor(QUrl("entry:1"))
+    assert dlg.selected_entry()["number"] == 1
+    assert "123 s" not in dlg.txt_log.toPlainText()
+    # A click on the description text selects its entry too.
+    at = dlg.txt_log.document().find("this run").position()
+    dlg._select_entry(dlg._entry_at(at)["number"])
+    assert dlg.selected_entry()["number"] == 2
+    assert "123 s" not in dlg.txt_log.toPlainText()
+    # The show / hide link expands and collapses (and selects).
+    dlg._on_anchor(QUrl("toggle:1"))
+    assert "123 s" in dlg.txt_log.toPlainText()
+    assert "hide metadata" in dlg.txt_log.toPlainText()
+    assert dlg.selected_entry()["number"] == 1
+    dlg._on_anchor(QUrl("toggle:1"))
+    assert "123 s" not in dlg.txt_log.toPlainText()
+    # No font in the dialog is below 12 pt.
+    assert dlg.txt_log.font().pointSizeF() >= 12
+    assert dlg.tabs.tabBar().font().pointSizeF() >= 12
+    dlg.close()
+
+
 def test_log_run_cancel_writes_nothing(api, monkeypatch, tmp_path):
     from wara.gui import runlog_dialog
     _, c = api

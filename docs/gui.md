@@ -507,12 +507,15 @@ and two blocks of fields:
 
 The pop-up has two tabs. **New entry** holds the description box and a
 coloured preview of the entry. **Log entries** reads back the entries already
-saved, newest first, with a selector for the log file. With no file loaded, the
+saved, newest first, with a selector for the log file. Entries start
+collapsed to their header and description; the *show metadata & statistics*
+link under the description expands an entry (*hide ...* collapses it again).
+With no file loaded, the
 button still opens the pop-up, but browse-only: *New entry* is disabled and
 only *Log entries* is available.
 
-On **Log entries**, pick an entry with the *Entry* list or by clicking its
-title (the selected entry is framed in cyan), then **Delete entry** removes it
+On **Log entries**, pick an entry with the *Entry* list or by clicking
+anywhere on it (selecting does not expand it) (the selected entry is framed in cyan), then **Delete entry** removes it
 after a confirmation; the entries after it are renumbered. Delete is greyed out
 on *New entry*, and Save / Replace entry / Cancel are greyed out on *Log
 entries*. Deleting the entry of the loaded run lets you save it again.
