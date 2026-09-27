@@ -24,6 +24,11 @@ __all__ = [
     "baseline_correct",
     "mca_integral",
     "psd_ratio",
+    "fast_filter",
+    "fast_filter_trigger",
+    "triggered_psd",
+    "trace_matrix",
+    "TracePSD",
     "auto_pre_trigger",
     "load_trace_file",
     "double_gaussian",
@@ -176,6 +181,297 @@ def psd_ratio(traces_corrected, time_ns, gate_start_ns, prompt_end_ns,
         psd = 1.0 - q_prompt / q_total
     psd[q_total <= 0] = np.nan
     return psd, q_total
+
+
+# ── Triggered PSD on a raw trace matrix (API list-mode runs) ───────────────────
+#: Default trigger-relative gates (ns) for :class:`TracePSD`: the gate opens
+#: 30 ns before the fast-filter trigger, the prompt window closes 20 ns after
+#: it, and the tail runs to the end of each trace (``None``).
+DEFAULT_PRE_NS = 30.0
+DEFAULT_PROMPT_NS = 20.0
+DEFAULT_TAIL_NS = None
+#: Default fast-filter trigger threshold, in ADC units (see :func:`fast_filter`).
+DEFAULT_FF_THRESHOLD = 30.0
+
+
+def fast_filter(traces, rise=5, gap=2):
+    """Trapezoidal fast filter of each row of *traces*.
+
+    The offline analogue of the PIXIE fast trigger: the mean of the *rise*
+    most recent samples minus the mean of the *rise* samples that end *gap*
+    samples earlier. It is baseline-free and, being a difference of means,
+    reads in the traces' own amplitude units (ADC), so a step of height *h*
+    settles at *h*.
+
+    Returns ``(ff, first)``: column ``j`` of ``ff`` is the filter at sample
+    ``first + j``, where ``first = 2*rise + gap - 1`` is the first sample with
+    both windows inside the trace.
+    """
+    t = np.asarray(traces)
+    m, n = t.shape
+    width = 2 * rise + gap
+    if n < width:
+        raise ValueError(f"Traces of {n} samples are shorter than the fast "
+                         f"filter window 2*rise+gap = {width}")
+    cs = _cumsum0(t)
+    # Column j is sample i = width-1+j; slices (views) instead of index arrays.
+    ff = cs[:, width:] - cs[:, width - rise:n + 1 - rise]           # lead sum
+    ff -= cs[:, width - rise - gap:n + 1 - rise - gap]              # - trail sum
+    ff += cs[:, :n + 1 - width]
+    ff /= rise
+    return ff, width - 1
+
+
+def _cumsum0(traces):
+    """Row-wise float64 cumulative sum with a leading zero column:
+    ``cs[:, k]`` is the sum of the first *k* samples."""
+    m, n = traces.shape
+    cs = np.zeros((m, n + 1))
+    np.cumsum(traces, axis=1, dtype=np.float64, out=cs[:, 1:])
+    return cs
+
+
+def fast_filter_trigger(traces, threshold=DEFAULT_FF_THRESHOLD, rise=5, gap=2):
+    """Sub-sample trigger position of each trace: where its :func:`fast_filter`
+    first rises through *threshold* (ADC units), linearly interpolated.
+
+    NaN where the filter never crosses the threshold, or is already above it
+    at the first valid sample (a pulse too early in the record to time)."""
+    ff, first = fast_filter(traces, rise=rise, gap=gap)
+    above = ff > threshold
+    k = above.argmax(axis=1)
+    rows = np.arange(ff.shape[0])
+    ok = above[rows, k] & (k > 0)
+    y0 = ff[rows, np.maximum(k - 1, 0)]
+    y1 = ff[rows, k]
+    with np.errstate(divide="ignore", invalid="ignore"):
+        frac = np.where(y1 != y0, (threshold - y0) / (y1 - y0), 0.0)
+    return np.where(ok, first + k - 1 + frac, np.nan)
+
+
+def _interp_integral(y, cs, x):
+    """Integral from sample 0 to (fractional) sample *x* of the piecewise-
+    linear interpolant through each row of *y*, from its :func:`_cumsum0`
+    *cs* (the trapezoid integral to sample k is ``cs[k+1] - (y[0]+y[k])/2``)."""
+    n = y.shape[1]
+    rows = np.arange(y.shape[0])
+    k = np.clip(np.floor(x).astype(np.int64), 0, n - 2)
+    f = x - k
+    y0 = y[rows, k].astype(np.float64)
+    y1 = y[rows, k + 1].astype(np.float64)
+    trap_k = cs[rows, k + 1] - 0.5 * (y[:, 0].astype(np.float64) + y0)
+    return trap_k + f * y0 + 0.5 * f * f * (y1 - y0)
+
+
+def triggered_psd(traces, dt_ns, trigger, pre_ns=DEFAULT_PRE_NS,
+                  prompt_ns=DEFAULT_PROMPT_NS, tail_ns=DEFAULT_TAIL_NS):
+    """PSD of positive-going *traces* with gates placed relative to each
+    trace's own *trigger* (in samples, e.g. from :func:`fast_filter_trigger`).
+
+    Equivalent to aligning every trace on its trigger and applying common
+    gates, without resampling: the prompt and total charges are integrated
+    exactly over the linear interpolant of each trace between fractional gate
+    edges. The gate opens *pre_ns* before the trigger, the prompt window closes
+    *prompt_ns* after it, and the tail closes *tail_ns* after it (``None`` =
+    the end of the trace). The baseline is the mean of the whole samples before
+    the gate opens.
+
+    Returns ``(psd, q_total, valid)``: ``PSD = 1 - Q_prompt / Q_total`` and
+    ``Q_total`` in ADC·ns; ``valid`` requires a trigger, a baseline of at least
+    4 samples, the prompt window inside the trace and ``Q_total > 0``.
+    """
+    y = np.asarray(traces)
+    m, n = y.shape
+    trig = np.asarray(trigger, dtype=float)
+    dt = float(dt_ns)
+    ok = np.isfinite(trig)
+    trig = np.where(ok, trig, n / 2.0)       # placeholder, masked out below
+    a = trig - pre_ns / dt
+    p = trig + prompt_ns / dt
+    b = np.full(m, n - 1.0) if tail_ns is None else trig + tail_ns / dt
+    b = np.minimum(b, n - 1.0)
+    ok &= (a >= 4) & (p <= n - 1) & (b > p)
+    a = np.clip(a, 0, n - 1)
+    p = np.clip(p, 0, n - 1)
+
+    cs = _cumsum0(y)
+    kb = np.maximum(np.floor(a).astype(np.int64), 1)
+    baseline = cs[np.arange(m), kb] / kb
+
+    ca = _interp_integral(y, cs, a)
+    q_prompt = (_interp_integral(y, cs, p) - ca - baseline * (p - a)) * dt
+    q_total = (_interp_integral(y, cs, b) - ca - baseline * (b - a)) * dt
+    ok &= q_total > 0
+    with np.errstate(divide="ignore", invalid="ignore"):
+        psd = np.where(ok, 1.0 - q_prompt / q_total, np.nan)
+    return psd, np.where(ok, q_total, np.nan), ok
+
+
+def trace_matrix(column):
+    """Stack a column of per-event traces (arrays / lists / ``None``) into one
+    compact 2-D matrix, keeping the traces' native dtype (uint16 for PIXIE).
+
+    Returns ``(matrix, has_trace)``: one row per event (so row *i* is event
+    *i*), with the rows of events that carry no trace -- or one of a
+    non-modal length -- left zero and flagged ``False`` in *has_trace*.
+    Raises ``ValueError`` when no event has a trace.
+    """
+    col = list(column)
+    lengths = np.fromiter(
+        (len(t) if t is not None and hasattr(t, "__len__") else 0 for t in col),
+        dtype=np.int64, count=len(col))
+    if not (lengths > 0).any():
+        raise ValueError("No event carries a trace")
+    modal = int(np.bincount(lengths[lengths > 0]).argmax())
+    has = lengths == modal
+    first = col[int(np.flatnonzero(has)[0])]
+    dtype = np.asarray(first).dtype
+    if dtype.kind == "O":
+        dtype = np.float32
+    mat = np.zeros((len(col), modal), dtype=dtype)
+    idx = np.flatnonzero(has)
+    if idx.size:
+        mat[idx] = np.stack([np.asarray(col[i], dtype=dtype) for i in idx])
+    return mat, has
+
+
+class TracePSD:
+    """Fast-filter-triggered PSD over a raw (event × sample) trace matrix.
+
+    Built for API list-mode runs, where every event carries a short PIXIE
+    trace (positive-going ADC on a pedestal). Each trace is timed by the
+    :func:`fast_filter_trigger` (threshold in ADC units) and integrated with
+    gates relative to that trigger (:func:`triggered_psd`), processing the
+    matrix in chunks so a run of ~10⁶ traces never needs a float copy of the
+    whole matrix. Triggers are cached: changing only the gates re-integrates
+    without re-triggering.
+
+    Row *i* of *traces* is event *i*; results (``psd``, ``q_total``,
+    ``trigger``, ``valid``) are per-event arrays in that order. *has_trace*
+    flags the rows that hold a real trace (see :func:`trace_matrix`).
+    """
+
+    def __init__(self, traces, dt_ns, has_trace=None,
+                 threshold=DEFAULT_FF_THRESHOLD, rise=5, gap=2,
+                 pre_ns=DEFAULT_PRE_NS, prompt_ns=DEFAULT_PROMPT_NS,
+                 tail_ns=DEFAULT_TAIL_NS, chunk=10000):
+        self.traces = np.asarray(traces)
+        if self.traces.ndim != 2:
+            raise ValueError("traces must be a 2-D (event × sample) matrix")
+        self.n_events, self.n_samples = self.traces.shape
+        self.dt_ns = float(dt_ns)
+        self.has_trace = (np.ones(self.n_events, bool) if has_trace is None
+                          else np.asarray(has_trace, bool))
+        self.threshold = float(threshold)
+        self.rise, self.gap = int(rise), int(gap)
+        self.pre_ns, self.prompt_ns = float(pre_ns), float(prompt_ns)
+        self.tail_ns = None if tail_ns is None else float(tail_ns)
+        self.chunk = int(chunk)
+        self.trigger = None     # per-event trigger (samples), cached
+        self.psd = self.q_total = self.valid = None
+
+    @classmethod
+    def from_column(cls, column, dt_ns, **kwargs):
+        """Build from a DataFrame column of per-event traces."""
+        mat, has = trace_matrix(column)
+        return cls(mat, dt_ns, has_trace=has, **kwargs)
+
+    def _chunks(self):
+        for s in range(0, self.n_events, self.chunk):
+            yield slice(s, min(s + self.chunk, self.n_events))
+
+    def set_trigger(self, *, threshold=None, rise=None, gap=None):
+        """Change the fast-filter settings; the triggers are recomputed on the
+        next :meth:`compute`."""
+        if threshold is not None:
+            self.threshold = float(threshold)
+        if rise is not None:
+            self.rise = int(rise)
+        if gap is not None:
+            self.gap = int(gap)
+        self.trigger = None
+
+    def set_gates(self, *, pre_ns=None, prompt_ns=None, tail_ns=None,
+                  tail_to_end=False):
+        """Change the trigger-relative gates (unset ones are unchanged).
+        *tail_to_end* runs the tail to the end of each trace."""
+        if pre_ns is not None:
+            self.pre_ns = float(pre_ns)
+        if prompt_ns is not None:
+            self.prompt_ns = float(prompt_ns)
+        if tail_to_end:
+            self.tail_ns = None
+        elif tail_ns is not None:
+            self.tail_ns = float(tail_ns)
+
+    def compute(self):
+        """(Re)compute the triggers (if needed), PSD, Q_total and valid mask."""
+        if self.trigger is None:
+            trig = np.full(self.n_events, np.nan)
+            for sl in self._chunks():
+                trig[sl] = fast_filter_trigger(
+                    self.traces[sl], self.threshold, self.rise, self.gap)
+            trig[~self.has_trace] = np.nan
+            self.trigger = trig
+        psd = np.full(self.n_events, np.nan)
+        q = np.full(self.n_events, np.nan)
+        valid = np.zeros(self.n_events, bool)
+        for sl in self._chunks():
+            psd[sl], q[sl], valid[sl] = triggered_psd(
+                self.traces[sl], self.dt_ns, self.trigger[sl],
+                self.pre_ns, self.prompt_ns, self.tail_ns)
+        self.psd, self.q_total, self.valid = psd, q, valid
+        return self
+
+    def gates(self):
+        """The analysis settings as keyword arguments of :class:`TracePSD`
+        (``pre_ns``, ``prompt_ns``, ``tail_ns``, ``threshold``, ``rise``,
+        ``gap``), e.g. to rebuild the same analysis on other traces."""
+        return dict(pre_ns=self.pre_ns, prompt_ns=self.prompt_ns,
+                    tail_ns=self.tail_ns, threshold=self.threshold,
+                    rise=self.rise, gap=self.gap)
+
+    @property
+    def time_ns(self):
+        """Sample times (ns) of the trace record."""
+        return np.arange(self.n_samples) * self.dt_ns
+
+    @property
+    def trigger_ns(self):
+        """The common trigger time (ns) of :meth:`aligned` traces: the median
+        trigger, rounded to a whole sample. Requires :meth:`compute`."""
+        if self.trigger is None or not np.isfinite(self.trigger).any():
+            return 0.5 * self.n_samples * self.dt_ns
+        return float(np.round(np.nanmedian(self.trigger))) * self.dt_ns
+
+    def gate_times(self):
+        """``(gate_start, prompt_end, tail_end)`` in ns on the aligned time
+        axis (trigger at :attr:`trigger_ns`), e.g. for drawing gate markers.
+        An open tail reports the end of the record."""
+        t0 = self.trigger_ns
+        end = self.time_ns[-1]
+        tail = end if self.tail_ns is None else min(t0 + self.tail_ns, end)
+        return t0 - self.pre_ns, t0 + self.prompt_ns, tail
+
+    def aligned(self, idx, baseline=True):
+        """Float traces of events *idx* shifted so their triggers land on
+        :attr:`trigger_ns` (linear interpolation) -- for display, e.g. a
+        random sample with the gate markers. With *baseline* the pre-gate
+        mean is subtracted. Events without a trigger are left unshifted."""
+        from wara.helper_api import _shift_rows
+
+        idx = np.asarray(idx, dtype=np.int64)
+        tr = self.traces[idx].astype(np.float64)
+        if not idx.size:
+            return tr
+        trig = self.trigger[idx]
+        shift = np.where(np.isfinite(trig),
+                         self.trigger_ns / self.dt_ns - trig, 0.0)
+        out = _shift_rows(tr, shift)
+        if baseline:
+            k = max(int(np.floor((self.trigger_ns - self.pre_ns) / self.dt_ns)), 1)
+            out -= out[:, :k].mean(axis=1, keepdims=True)
+        return out
 
 
 # ── Figure of merit ────────────────────────────────────────────────────────────

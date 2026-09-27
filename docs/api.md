@@ -107,6 +107,66 @@ formulations are derived in detail in the accompanying note:
 {download}`API 3D position reconstruction <API_position_reconstruction.pdf>`.
 ```
 
+## Neutron/gamma PSD on per-event traces
+
+Runs taken with a pulse-shape-discriminating detector (e.g. the EJ250 on
+channel 1 of 2026-09-24 RUN 1) store a short digitizer trace with every API
+event, in the parquet `Trace` column. Gamma-only runs have an empty
+`Trace` column. {py:class}`wara.neutron_psd.TracePSD` turns those traces into
+a PSD value per event, so API events can be split into neutrons and gammas:
+
+```python
+from wara import helper_api, read_parquet_api
+from wara.neutron_psd import TracePSD
+
+df = read_parquet_api.read_parquet_file("2026-09-24", 1, ch=1)
+psd = TracePSD.from_column(df["Trace"],
+                           helper_api.read_sample_interval_ns("2026-09-24", 1))
+psd.compute()
+neutron_like = psd.valid & (psd.psd > 0.41)        # read the cut off the plot
+```
+
+How each trace is analysed:
+
+1. **Trigger.** A trapezoidal fast filter
+   ({py:func}`~wara.neutron_psd.fast_filter`, rise 5 / gap 2 samples, the
+   offline analogue of the PIXIE fast trigger) is run over the trace. The
+   trigger is where it first rises through **30 ADC**, interpolated between
+   samples ({py:func}`~wara.neutron_psd.fast_filter_trigger`). Traces that never
+   cross are invalid.
+2. **Gates, relative to the trigger.** The gate opens **30 ns before** the
+   trigger, the prompt window closes **20 ns after** it, and the tail runs to
+   the **end of the trace**. The baseline is the mean of the samples before the
+   gate opens.
+3. **PSD.** `PSD = 1 − Q_prompt / Q_total`
+   ({py:func}`~wara.neutron_psd.triggered_psd`). Placing the gates on each
+   trace's own trigger is the same as aligning the traces first, without
+   resampling them.
+
+Change the gates with `psd.set_gates(pre_ns=…, prompt_ns=…, tail_ns=…)` and
+call `compute()` again. The triggers are cached, so re-gating only
+re-integrates. `psd.set_trigger(threshold=…)` changes the fast-filter settings
+and re-triggers on the next `compute()`. `psd.aligned(idx)` returns traces
+shifted onto a common trigger (at `psd.trigger_ns`), and `psd.gate_times()`
+returns the gates on that axis, for plotting.
+
+The traces are kept as one compact matrix in their native `uint16`
+({py:func}`~wara.neutron_psd.trace_matrix`) and processed in chunks. The
+757k-event 2026-09-24 RUN 4 takes ~5 s to trigger and integrate, and ~1.6 s to
+re-gate.
+
+```{note}
+Timing a sharp pulse by interpolating a threshold crossing is accurate to
+roughly ±0.4 sample. That adds a small jitter to the PSD, well below the
+neutron/gamma band separation.
+```
+
+```{seealso}
+`examples/pixie/example_api_trace_psd.py` computes the PSD of 2026-09-24 RUN 1
+and plots it against energy, next to a sample of trigger-aligned traces with
+the gates.
+```
+
 ## In the GUI
 
 The **API** tab in the navigation rail is the interactive version of everything
@@ -212,6 +272,97 @@ binned panel used for cutting on alpha energy.
 
 A runnable, GUI-free version of this four-panel view (including the cut both
 ways) is in `examples/other/example_api_alpha_energy.py`.
+
+### Neutron runs: the PSD panel ("Neutron run")
+
+When the loaded channel recorded a trace with every event (a PSD-capable
+detector such as the EJ250 on channel 1 of 2026-09-24 RUN 1), a **Neutron run**
+checkbox appears under **Add alpha energy**. It stays hidden for gamma-only
+runs, whose `Trace` column is empty. On load the traces are moved out of the
+event table into a compact matrix (see *Neutron/gamma PSD on per-event
+traces* above), so they cost less memory than the raw column did.
+
+Tick it and the PSD of every event is computed (under a second for ~80k
+events, ~5 s for ~750k) and a **PSD-vs-energy map** is added under the X–Y map.
+Its energy axis is the one the energy spectrum uses, so it follows a retrieved
+calibration. The PSD axis opens on the run's 1–99 % band, and every event is
+still counted. The **PSD bins** box in DISPLAY (300 by default) sets the
+resolution of both axes. A line under **PSD gates...** names the detector
+(from the run's `metadata.json`) and the gates in use.
+
+Layouts:
+
+| Ticked | Left column | Right column |
+|---|---|---|
+| neither | energy, `dt` | X–Y |
+| Add alpha energy | energy, `dt` | X–Y, alpha energy |
+| Neutron run | energy, `dt` | X–Y, PSD |
+| both | energy, `dt`, alpha energy | X–Y (two rows), PSD |
+
+With both ticked the 1-D spectra stack on the left and the 2-D maps on the
+right.
+
+**Keeping neutrons or gammas.** With **Interactive cuts** on, drag a box on the
+PSD map around the upper (neutron) or lower (gamma) band. The box cuts on
+energy and PSD together, and the energy, `dt`, X–Y and alpha panels redraw
+from the kept events. The PSD map redraws too, with the box dashed so it can be
+redrawn. Energy, `dt`, X–Y and alpha cuts redraw the PSD map in turn, and cuts
+made before ticking the box stay applied.
+
+While any cut is applied and **Show uncut outline** is on, the PSD map draws the
+whole run as a faint grey density underneath the kept events, which stay in
+colour. This is the 2-D counterpart of the grey outline behind the spectra. The
+band you cut away stays visible in grey, so the cut can always be read against
+the whole run.
+**← Back** and **Reset** behave as for every other cut. **Filters...** has a
+**PSD** min/max pair that cuts on PSD alone, at all energies. Once cut,
+**Send to spectrum**, **Selections...** and the **3D view** see only the kept
+events.
+
+**Tuning the gates: PSD gates...** The button opens a window with a random
+sample of the current events' traces, aligned on their fast-filter trigger
+(time 0) and coloured by PSD. Three dashed markers show the gates:
+
+- **gate start**, 30 ns before the trigger by default,
+- **prompt end**, 20 ns after it,
+- **tail end**, the end of the trace ("Tail to end of trace").
+
+Drag a marker or type the value, then press **Apply** to recompute the PSD of
+the whole run. The fast-filter **Threshold** (30 ADC by default) re-times every
+trace on Apply. **New random sample** draws other traces; the sample otherwise
+stays put. **Defaults** restores the values above, and the window's toolbar
+zooms and pans the traces.
+
+If a PSD cut is active when you press Apply, all cuts are cleared, because that
+cut was drawn against the old PSD values. Without a PSD cut, the other cuts stay
+and only the PSD map is redrawn. The gates are also written into the
+**Log run...** entry.
+
+**Saving the PSD: Apply to data.** Tuned gates are remembered for the rest of
+the session, for the run and for its detector (the gate summary under
+**PSD gates...** says whether the gates are the defaults or were tuned this
+session). To keep the result, use **Apply to data**. Once the PSD has been
+computed, the new run it writes gets a **`PSD`** column in its parquet file with
+each event's PSD: filled for the loaded channel, and `NaN` for the other
+channels and for events without a valid PSD. The PSD alone counts as a change,
+so **Apply to data** saves a run even when the energy and time are untouched.
+The gates used are recorded in the new run's `README.txt`. The new run keeps
+every event's trace, so its PSD can always be recomputed.
+
+When a run with a `PSD` column is loaded, **Neutron run** appears and uses those
+values as they are, without recomputing, even if the run has no traces. The
+summary then reads "PSD from the run's saved PSD column". On such a run,
+**PSD gates...** still opens when there are traces, but the panels keep the
+saved values until you press **Apply** there, which recomputes the PSD from the
+traces. **Apply to data** writes the `PSD` column again only after such a
+recompute: until then the saved values are already on disk and are carried
+over with the re-read run.
+
+```{seealso}
+`examples/pixie/example_gui_api_psd.py` drives these controls from a script:
+it loads 2026-09-24 RUN 1, adds both panels, keeps the neutron band and opens
+the gates window.
+```
 
 For the full API of these modules, see {py:mod}`wara.read_parquet_api` and
 {py:mod}`wara.apicalc` in the API reference.

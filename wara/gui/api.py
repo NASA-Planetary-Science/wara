@@ -16,6 +16,12 @@ Workflow:
   or ``alpha``) can show it as a fourth panel: tick "Add alpha energy" and the
   alpha spectrum (2048 bins by default, its own "Alpha bins" box) is drawn
   bottom-right under the X-Y map, fully cross-linked with the other three.
+* Runs whose events carry a trace (a PSD detector, e.g. the EJ250) offer
+  "Neutron run": the PSD of every event is computed from its trace
+  (:mod:`wara.gui.api_psd`, :class:`wara.neutron_psd.TracePSD`) and a
+  PSD-vs-energy map is added under the X-Y map; a box on it keeps neutrons or
+  gammas like any other cut, and "PSD gates..." tunes the gates. With the
+  alpha panel on too, the spectra go left and the maps right.
 * Dragging a span on the energy, time or alpha-energy panel, or a rectangle on
   the X-Y map, filters the event list live; the other panels redraw from the
   filtered data. The same filters can be entered by hand from the Filters dialog.
@@ -80,8 +86,11 @@ from PyQt5.QtWidgets import (
 )
 from PyQt5.QtCore import Qt, QSize, QTimer, QUrl
 
-from wara import read_parquet_api, apicalc, runlog
+from wara import read_parquet_api, apicalc, runlog, helper_api
 from wara import spectrum as sp
+from wara.neutron_psd import (
+    TracePSD, trace_matrix,
+)
 from wara import peaksearch as ps
 
 from . import theme as T
@@ -111,6 +120,10 @@ from .api_shifts import ShiftsDialog  # noqa: F401  -- re-exported
 from .api_combine import CombineRunsDialog  # noqa: F401  -- re-exported
 from .api_diagnostics import DiagnosticsDialog  # noqa: F401  -- re-exported
 from .api_selections import SelectionsDialog  # noqa: F401  -- re-exported
+from .api_psd import (  # noqa: F401  -- PsdGatesDialog re-exported
+    DEFAULT_PBINS, PsdGatesDialog, detector_name, draw_psd_panel, gates_summary,
+    psd_view,
+)
 
 
 
@@ -151,6 +164,9 @@ class ApiPage(QWidget):
         # X-Y map. Distinct from ax_alpha above, which is the flat-field panel
         # bound to the (shared) energy axis.
         self.ax_aspe = None
+        # PSD-vs-energy map of a neutron run ("Neutron run" ticked): under the
+        # X-Y map. Dragging a box on it cuts events to neutrons or gammas.
+        self.ax_psd = None
         # Hexbin lookup data for the cursor readout (replaces the colorbar): the
         # per-hexagon centres/counts of the current X-Y map, the log-scale flag,
         # and the squared pick radius (≈ one hex spacing) used to ignore the
@@ -171,11 +187,12 @@ class ApiPage(QWidget):
                 fontsize=14, color=T.BORDER, fontweight="bold", wrap=True)
         ax.set_xticks([]); ax.set_yticks([])
         self.ax_spe = self.ax_dt = self.ax_xy = self.ax_alpha = None
-        self.ax_aspe = None
+        self.ax_aspe = self.ax_psd = None
         self._style(ax)
         self.canvas.draw_idle()
 
-    def build_axes(self, flat_field=False, alpha=False, alpha_panel=False):
+    def build_axes(self, flat_field=False, alpha=False, alpha_panel=False,
+                   psd_panel=False):
         """(Re)build the panel layout.
 
         Flat-field runs show only the X-Y map. When *alpha* is set (the run
@@ -184,10 +201,15 @@ class ApiPage(QWidget):
         the standard three-panel gamma layout is drawn -- and with *alpha_panel*
         set (a normal run whose file carries an alpha energy column and the "Add
         alpha energy" box ticked) a fourth panel is added bottom-right, under the
-        X-Y map, for the alpha energy spectrum."""
+        X-Y map, for the alpha energy spectrum.
+
+        *psd_panel* ("Neutron run" ticked) adds the PSD-vs-energy map under the
+        X-Y map. With both extra panels the 1-D spectra go left (energy, dt,
+        alpha) and the 2-D maps right (X-Y over two rows, PSD below)."""
         self.fig.clf()
         self._clear_xy_data()
         self.ax_aspe = None
+        self.ax_psd = None
         if flat_field:
             self.ax_spe = self.ax_dt = None
             if alpha:
@@ -202,10 +224,27 @@ class ApiPage(QWidget):
                 self._style(self.ax_xy, grid=False)
             return
         self.ax_alpha = None
+        if alpha_panel and psd_panel:
+            gs = self.fig.add_gridspec(3, 2, width_ratios=[0.5, 0.5])
+            self.ax_spe = self.fig.add_subplot(gs[0, 0])
+            self.ax_dt = self.fig.add_subplot(gs[1, 0])
+            self.ax_aspe = self.fig.add_subplot(gs[2, 0])
+            self.ax_xy = self.fig.add_subplot(gs[0:2, 1])
+            self.ax_psd = self.fig.add_subplot(gs[2, 1])
+            for ax in (self.ax_spe, self.ax_dt, self.ax_aspe):
+                self._style(ax)
+            self._style(self.ax_xy, grid=False)
+            self._style(self.ax_psd, grid=False)
+            return
         gs = self.fig.add_gridspec(2, 2, width_ratios=[0.5, 0.5], height_ratios=[1, 1])
         self.ax_spe = self.fig.add_subplot(gs[0, 0])
         self.ax_dt = self.fig.add_subplot(gs[1, 0])
-        if alpha_panel:
+        if psd_panel:
+            # The PSD map takes the cell under the X-Y map.
+            self.ax_xy = self.fig.add_subplot(gs[0, 1])
+            self.ax_psd = self.fig.add_subplot(gs[1, 1])
+            self._style(self.ax_psd, grid=False)
+        elif alpha_panel:
             # Four panels: the X-Y map keeps the top-right cell and the alpha
             # spectrum takes the cell below it.
             self.ax_xy = self.fig.add_subplot(gs[0, 1])
@@ -393,6 +432,34 @@ class ApiOptions(QScrollArea):
         self.cb_alpha.setVisible(False)
         lay.addWidget(self.cb_alpha)
 
+        # Neutron/gamma PSD: only for runs whose events carry a trace (the
+        # parquet Trace column), so hidden until the controller finds traces.
+        self.cb_psd = QCheckBox("Neutron run")
+        self.cb_psd.setToolTip(
+            "Compute the pulse-shape discrimination (PSD) of every event from "
+            "its trace and show PSD vs energy as an extra panel, below the X-Y "
+            "map.\nDrag a box on it to keep only neutrons or only gammas; the "
+            "other panels follow like any other cut.\n"
+            "Only available when the loaded channel recorded a trace per event.")
+        self.cb_psd.setVisible(False)
+        lay.addWidget(self.cb_psd)
+        self.btn_psd_gates = QPushButton("PSD gates...")
+        self.btn_psd_gates.setObjectName("primary_btn")
+        self.btn_psd_gates.setCursor(Qt.PointingHandCursor)
+        self.btn_psd_gates.setToolTip(
+            "Open the gate window: a sample of trigger-aligned traces with "
+            "draggable gate markers, the fast-filter threshold, and Apply to "
+            "recompute the PSD of the whole run")
+        self.btn_psd_gates.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Fixed)
+        self.btn_psd_gates.setVisible(False)
+        lay.addWidget(self.btn_psd_gates)
+        self.lbl_psd = QLabel("")
+        self.lbl_psd.setObjectName("stat_key"); self.lbl_psd.setWordWrap(True)
+        self.lbl_psd.setToolTip("The PSD gates in use, relative to each pulse's "
+                                "fast-filter trigger")
+        self.lbl_psd.setVisible(False)
+        lay.addWidget(self.lbl_psd)
+
         # ── Run info readout ─────────────────────────────────────────
         lay.addWidget(hsep()); lay.addWidget(header("RUN INFO"))
         self.lbl_info = QLabel(" --")
@@ -428,9 +495,10 @@ class ApiOptions(QScrollArea):
         self.cb_ghost.setChecked(True)
         self.cb_ghost.setToolTip(
             "While an interactive cut is applied, draw the uncut run faintly in "
-            "grey behind the\nenergy, alpha and time spectra, so the selection "
-            "can be read against the whole\nit came from. The X-Y map is left "
-            "alone.\nHas no effect until a cut is made.")
+            "grey behind the\nenergy, alpha and time spectra (and as a grey "
+            "density behind the PSD map), so the\nselection can be read against "
+            "the whole it came from. The X-Y map is left alone.\n"
+            "Has no effect until a cut is made.")
         lay.addWidget(self.cb_ghost)
         self.ed_vmax = QLineEdit(); self.ed_vmax.setPlaceholderText("vmax")
         vrow, _ = labeled_row("vmax", self.ed_vmax)
@@ -452,16 +520,24 @@ class ApiOptions(QScrollArea):
         # only while that panel is available (same rule as the checkbox).
         self.ed_abins = QLineEdit(str(DEFAULT_ABINS))
         self.ed_abins.setToolTip("Number of bins on the alpha energy spectrum")
+        # PSD bins: shown only while the PSD panel ("Neutron run") is on.
+        self.ed_pbins = QLineEdit(str(DEFAULT_PBINS))
+        self.ed_pbins.setToolTip("Number of bins on each axis of the PSD-vs-"
+                                 "energy map")
         for lbl, ed in [("Energy bins", self.ed_ebins),
                         ("dt bins", self.ed_tbins),
                         ("X-Y bins", self.ed_xybins),
-                        ("Alpha bins", self.ed_abins)]:
+                        ("Alpha bins", self.ed_abins),
+                        ("PSD bins", self.ed_pbins)]:
             ed.setFixedWidth(70)
             ed.setToolTip(f"{ed.toolTip()}  -- press Enter to apply")
             row, _ = labeled_row(lbl, ed)
             lay.addWidget(row)
             if ed is self.ed_abins:
                 self.row_abins = row
+                row.setVisible(False)
+            elif ed is self.ed_pbins:
+                self.row_pbins = row
                 row.setVisible(False)
 
         self.btn_filters = QPushButton("Filters..."); self.btn_filters.setObjectName("action_btn")
@@ -563,7 +639,9 @@ class ApiOptions(QScrollArea):
         self.btn_apply_data.setToolTip(
             "Combine all of the source run's parquet files, bake the active "
             "energy calibration and/or time shift into energy_cal / dt_cal, and "
-            "save it as a new run (you choose the run number)")
+            "save it as a new run (you choose the run number).\nOn a neutron run "
+            "each event's PSD (with the gates in use) is saved in a PSD column, "
+            "which 'Neutron run' reads back when that run is loaded.")
         lay.addWidget(self.btn_apply_data)
 
         lay.addStretch(1)
@@ -598,7 +676,7 @@ class ApiController:
         self._src_date = self._src_runnr = self._src_ch = None
         self._src_data_path = None
         # Filter "used before" flags, mirroring the legacy previous/current scheme.
-        self.en_flag = self.dt_flag = self.xy_flag = self.al_flag = 0
+        self.en_flag = self.dt_flag = self.xy_flag = self.al_flag = self.ps_flag = 0
         self.xkey = self.ykey = self.ekey = None
         # Alpha energy axis of a normal (gamma) run: the column name when the
         # file carries one ("energy_ch9"/"alpha"), else None. The optional fourth
@@ -607,6 +685,30 @@ class ApiController:
         self.arange = [0, 1]
         self.abins = DEFAULT_ABINS
         self.alp = self.alp_x = None    # alpha histogram (counts, bin centres)
+        # Neutron/gamma PSD: the run's per-event traces as a TracePSD (built at
+        # load when the channel carries traces, else None), its PSD computed on
+        # the first "Neutron run" tick into a "psd" column. Events are matched
+        # to their trace row through the "_evt" column (df_api row number).
+        self._tpsd = None
+        self._psd_detector = None       # detector name from metadata.json
+        self._psd_view = (0.0, 1.0)     # PSD-axis view of the whole run
+        self.pbins = DEFAULT_PBINS
+        self.ps_flag = 0
+        self._cut_psd = None            # (elo, ehi, plo, phi) on the PSD panel
+        # Gates tuned this session: per run (date, run, ch) -- the latest for
+        # that very run -- and per detector, the fallback for other runs of it.
+        self._psd_gates_by_run = {}
+        self._psd_gates_by_det = {}
+        self._psd_gates_src = "defaults"   # where the loaded gates came from
+        # A run saved by "Apply to data" carries each event's PSD in a "PSD"
+        # column: those values (df_api row order) are used as the PSD until
+        # the gates are re-applied. _psd_from_column marks that state.
+        self._saved_psd = None
+        self._psd_from_column = False
+        self._psd_key = None            # detector name, else "ch N"
+        self._psd_order = None          # fixed random order for trace samples
+        self._psd_rng = np.random.default_rng()
+        self._psd_gates_dlg = None
         self.xyplane = (-0.9, 0.9, -0.9, 0.9)
         self.erange = [0, 1]
         self.ebins = DEFAULT_EBINS
@@ -740,8 +842,10 @@ class ApiController:
         o.cb_xy_log.toggled.connect(lambda *_: self._replot_xy())
         o.cb_ghost.toggled.connect(self._toggle_ghost)
         o.cb_alpha.toggled.connect(self._toggle_alpha_panel)
+        o.cb_psd.toggled.connect(self._toggle_psd_panel)
+        o.btn_psd_gates.clicked.connect(self._open_psd_gates)
         o.ed_vmax.returnPressed.connect(self._apply_vmax)
-        for ed in (o.ed_ebins, o.ed_tbins, o.ed_xybins, o.ed_abins):
+        for ed in (o.ed_ebins, o.ed_tbins, o.ed_xybins, o.ed_abins, o.ed_pbins):
             ed.returnPressed.connect(self._apply_bins)
 
     def _save_undo_snapshot(self):
@@ -749,8 +853,9 @@ class ApiController:
         self._undo_state = (
             self.df_current.copy(),
             self.df_previous.copy(),
-            self.en_flag, self.dt_flag, self.xy_flag, self.al_flag,
+            self.en_flag, self.dt_flag, self.xy_flag, self.al_flag, self.ps_flag,
             self._cut_energy, self._cut_time, self._cut_xy, self._cut_alpha,
+            self._cut_psd,
         )
         self.opts.btn_undo.setEnabled(True)
 
@@ -759,14 +864,16 @@ class ApiController:
         if self._undo_state is None:
             return
         self._clear_significance()
-        (df_cur, df_prev, en_flag, dt_flag, xy_flag, al_flag,
-         cut_e, cut_t, cut_xy, cut_a) = self._undo_state
+        (df_cur, df_prev, en_flag, dt_flag, xy_flag, al_flag, ps_flag,
+         cut_e, cut_t, cut_xy, cut_a, cut_p) = self._undo_state
         self.df_current = df_cur
         self.df_previous = df_prev
         self.en_flag, self.dt_flag, self.xy_flag, self.al_flag = (
             en_flag, dt_flag, xy_flag, al_flag)
+        self.ps_flag = ps_flag
         self._cut_energy, self._cut_time = cut_e, cut_t
         self._cut_xy, self._cut_alpha = cut_xy, cut_a
+        self._cut_psd = cut_p
         self._undo_state = None
         self.opts.btn_undo.setEnabled(False)
         with self._preserve_zoom():
@@ -850,6 +957,7 @@ class ApiController:
             # needs converting. dt_cal (when present) becomes the time axis in
             # _configure_keys.
             df["dt"] *= 1e9  # s → ns
+        df = self._extract_traces(df, date, runnr, ch)
 
         self.df_api = df
         self.df_current = df.copy()
@@ -860,9 +968,9 @@ class ApiController:
         self._src_runnr = runnr
         self._src_ch = ch
         self._src_data_path = data_path
-        self.en_flag = self.dt_flag = self.xy_flag = self.al_flag = 0
+        self.en_flag = self.dt_flag = self.xy_flag = self.al_flag = self.ps_flag = 0
         self._cut_energy = self._cut_time = self._cut_xy = None
-        self._cut_alpha = None
+        self._cut_alpha = self._cut_psd = None
         self._cut_artists = []
         self._undo_state = None
         self.opts.btn_undo.setEnabled(False)
@@ -949,6 +1057,7 @@ class ApiController:
             # a flat run's alpha energy is the split view's own left panel.
             self.akey = None
             self._sync_alpha_controls()
+            self._sync_psd_controls()
             # Split the view only when the run carries the alpha energy column.
             self._flat_alpha = "alpha" in df.columns
             if self._flat_alpha:
@@ -978,6 +1087,7 @@ class ApiController:
         if self.akey is not None:
             self.arange = [0.0, float(df[self.akey].max())]
         self._sync_alpha_controls()
+        self._sync_psd_controls()
 
         # Channel base: raw channels (energy_orig) take priority over an already
         # physical energy axis (energy). _native_units flags which it is.
@@ -1042,7 +1152,8 @@ class ApiController:
         # for the old ones mean nothing (and would pin dead axes in memory).
         self._auto_views = {}
         self.page.build_axes(flat_field=self.flat_field, alpha=self._flat_alpha,
-                             alpha_panel=self._alpha_active)
+                             alpha_panel=self._alpha_active,
+                             psd_panel=self._psd_active)
         self._detach_selectors()
         if self.flat_field:
             if self._flat_alpha:
@@ -1056,6 +1167,7 @@ class ApiController:
             self._plot_energy(self.df_current)
             self._plot_time(self.df_current)
             self._plot_alpha_energy(self.df_current)
+            self._plot_psd(self.df_current)
             self._replot_xy()
             if self.opts.btn_interactive.isChecked():
                 self._attach_selectors()
@@ -1111,7 +1223,8 @@ class ApiController:
     def _cut_active(self):
         """True while any interactive cut is applied to the working frame."""
         return any(c is not None for c in (self._cut_energy, self._cut_time,
-                                           self._cut_xy, self._cut_alpha))
+                                           self._cut_xy, self._cut_alpha,
+                                           self._cut_psd))
 
     def _ghost_df(self):
         """The uncut frame to draw faintly behind the panels, or None.
@@ -1151,7 +1264,8 @@ class ApiController:
     def _panel_axes(self):
         """Every panel axis that currently exists, in no particular order."""
         return [ax for ax in (self.page.ax_spe, self.page.ax_dt, self.page.ax_xy,
-                              self.page.ax_alpha, self.page.ax_aspe)
+                              self.page.ax_alpha, self.page.ax_aspe,
+                              self.page.ax_psd)
                 if ax is not None]
 
     def _remember_view(self, ax):
@@ -1304,6 +1418,330 @@ class ApiController:
         self._draw_cut_markers()
         self._remember_view(ax)
 
+    # -- neutron/gamma PSD panel -----------------------------------------------
+    def _extract_traces(self, df, date, runnr, ch):
+        """Prepare a freshly loaded frame for PSD.
+
+        * ``Trace`` -- when the channel recorded traces they become a compact
+          uint16 :class:`~wara.neutron_psd.TracePSD` (the PSD itself is
+          computed only when "Neutron run" is ticked). The column is dropped
+          either way: the traces live in the matrix, and gamma-only runs carry
+          it empty.
+        * ``PSD`` -- a run written by "Apply to data" carries each event's PSD.
+          It is kept aside and used as the PSD on the first tick, without
+          recomputing (and even when the run has no traces).
+
+        Either one gives every event an ``_evt`` row number, used to find its
+        trace / PSD again after cuts."""
+        self._tpsd = None
+        self._saved_psd = None
+        self._psd_from_column = False
+        self._psd_detector = None
+        self._psd_order = None
+        if self.flat_field:
+            return df
+        if "PSD" in df.columns:
+            vals = df["PSD"].to_numpy(dtype=float)
+            df = df.drop(columns=["PSD"])
+            if np.isfinite(vals).any():   # another channel's PSD leaves NaN here
+                self._saved_psd = vals
+        mat = None
+        if "Trace" in df.columns:
+            try:
+                mat, has = trace_matrix(df["Trace"])
+            except ValueError:      # the column is there but every trace is empty
+                mat = None
+            df = df.drop(columns=["Trace"])
+        if mat is None and self._saved_psd is None:
+            return df
+        self._psd_detector = detector_name(date, runnr, ch)
+        self._psd_key = self._psd_detector or f"ch {ch}"
+        if mat is not None:
+            try:
+                dt_ns = helper_api.read_sample_interval_ns(date, runnr)
+            except Exception:  # noqa: BLE001 -- settings are best-effort
+                traceback.print_exc()
+                dt_ns = 2.0             # 500 MHz PIXIE module
+            gates, self._psd_gates_src = self._initial_psd_gates(date, runnr, ch)
+            self._tpsd = TracePSD(mat, dt_ns, has_trace=has, **gates)
+        df["_evt"] = np.arange(len(df))
+        return df
+
+    def _initial_psd_gates(self, date, runnr, ch):
+        """Gates to start a run's PSD with, and where they came from: this
+        run's session gates, else this detector's, else the defaults."""
+        run = self._psd_gates_by_run.get((str(date), int(runnr), int(ch)))
+        if run is not None:
+            return run, "tuned this session"
+        det = self._psd_gates_by_det.get(self._psd_key)
+        if det is not None:
+            return det, "tuned this session"
+        return {}, "defaults"
+
+    @property
+    def _psd_available(self):
+        """True when the loaded run can show the PSD panel: a normal run whose
+        channel recorded a trace per event, or that carries a saved PSD
+        column."""
+        return not self.flat_field and (self._tpsd is not None
+                                        or self._saved_psd is not None)
+
+    @property
+    def _psd_active(self):
+        """True when the PSD panel should be drawn ("Neutron run" ticked)."""
+        return self._psd_available and self.opts.cb_psd.isChecked()
+
+    def _sync_psd_controls(self):
+        """Show "Neutron run" only for runs with traces or a PSD column
+        (unticking it otherwise) and its summary / PSD bins only while it is
+        ticked -- plus the gate button when there are traces to re-gate. A PSD
+        still missing for a ticked run (e.g. a new run loaded with the box on)
+        is set up here, before the panels are drawn."""
+        o = self.opts
+        avail = self._psd_available
+        o.cb_psd.setVisible(avail)
+        if not avail and o.cb_psd.isChecked():
+            o.cb_psd.blockSignals(True)
+            o.cb_psd.setChecked(False)
+            o.cb_psd.blockSignals(False)
+        on = self._psd_active
+        if on:
+            self._ensure_psd()
+            o.lbl_psd.setText(self._psd_detector_label())
+        for w in (o.lbl_psd, o.row_pbins):
+            w.setVisible(on)
+        o.btn_psd_gates.setVisible(on and self._tpsd is not None)
+        dlg = self._psd_gates_dlg
+        if dlg is not None and dlg.isVisible():
+            if on and self._tpsd is not None:
+                dlg.load_from_psd()
+            else:
+                dlg.close()
+
+    def _psd_detector_label(self):
+        """Gate summary for the options panel and the gates window."""
+        det = self._psd_detector or f"ch {self._src_ch}"
+        if self._psd_from_column:
+            note = f"{det} · PSD from the run's saved PSD column"
+            if self._tpsd is not None:
+                note += "  -- Apply in PSD gates... recomputes it from the traces"
+            return note
+        p = self._tpsd
+        if p is None:
+            return ""
+        return (gates_summary(p.pre_ns, p.prompt_ns, p.tail_ns, p.threshold, det)
+                + f" ({self._psd_gates_src})")
+
+    def _toggle_psd_panel(self, checked):
+        """Add/remove the PSD panel. The first tick for a run computes the PSD
+        of every event (a few seconds on a ~10⁶-event run) unless the run
+        carries a saved PSD column; the layout changes, so the axes are rebuilt
+        and every panel redrawn from the current (filtered) data. Cuts stay
+        applied."""
+        if self.df_current is None or not self._psd_available:
+            self._sync_psd_controls()
+            return
+        self._sync_psd_controls()
+        self._initialize_plots()
+        self._status("PSD panel shown  -- drag a box on it to keep neutrons or "
+                     "gammas" if checked else "PSD panel hidden")
+
+    def _ensure_psd(self):
+        """Set up the PSD once per run (on the first "Neutron run" tick): the
+        saved PSD column when the run has one, else computed from the traces."""
+        if self.df_api is None or "psd" in self.df_api.columns:
+            return
+        if self._saved_psd is not None:
+            self._psd_from_column = True
+            self._set_psd(self._saved_psd)
+            n = int(np.isfinite(self._saved_psd).sum())
+            self._status(f"PSD read from the run's PSD column  ·  {n:,} of "
+                         f"{self._saved_psd.size:,} events valid")
+        elif self._tpsd is not None:
+            self._compute_psd()
+
+    def _run_psd_compute(self):
+        """Run the (possibly slow) TracePSD computation behind a busy cursor."""
+        p = self._tpsd
+        self._status(f"Computing PSD of {p.n_events:,} traces...")
+        self.app.repaint()
+        QApplication.setOverrideCursor(Qt.WaitCursor)
+        try:
+            p.compute()
+        finally:
+            QApplication.restoreOverrideCursor()
+
+    def _compute_psd(self):
+        """(Re)compute the PSD of every event from the traces and write it
+        into the frames (replacing a saved PSD column's values)."""
+        self._run_psd_compute()
+        p = self._tpsd
+        self._psd_from_column = False
+        self._set_psd(np.where(p.valid, p.psd, np.nan))
+        self._status(f"PSD computed  ·  {int(p.valid.sum()):,} of "
+                     f"{p.n_events:,} events valid")
+
+    def _set_psd(self, psd):
+        """Make *psd* (one value per df_api row, NaN = invalid) the run's PSD:
+        fix the panel's PSD view and copy it into every live frame."""
+        psd = np.asarray(psd, dtype=float)
+        self._psd_view = psd_view(psd)
+        self._write_psd_columns(psd)
+
+    def _write_psd_columns(self, psd):
+        """Copy the per-event PSD into every live frame (master, working,
+        previous, uncut and the ← Back snapshot) through its ``_evt`` rows, so
+        cuts made before the PSD existed keep working."""
+        frames = [self.df_api, self.df_current, self.df_previous, self._df_uncut]
+        if self._undo_state is not None:
+            frames += list(self._undo_state[:2])
+        seen = set()
+        for df in frames:
+            if df is None or id(df) in seen or "_evt" not in df.columns:
+                continue
+            seen.add(id(df))
+            df["psd"] = psd[df["_evt"].to_numpy()]
+
+    def _plot_psd(self, df):
+        """Draw the PSD-vs-energy map on its panel (no-op without one). The
+        energy axis is the panel-wide one (``ekey``), so it follows a
+        calibration; the PSD view is fixed per run so cuts don't move it."""
+        ax = self.page.ax_psd
+        if (ax is None or df is None or "psd" not in df.columns
+                or self.ekey not in df.columns):
+            return
+        ghost = self._ghost_df()
+        if ghost is not None and {"psd", self.ekey} <= set(ghost.columns):
+            ghost = (ghost[self.ekey].to_numpy(dtype=float),
+                     ghost["psd"].to_numpy(dtype=float))
+        else:
+            ghost = None
+        draw_psd_panel(ax, df[self.ekey].to_numpy(dtype=float),
+                       df["psd"].to_numpy(dtype=float), self.pbins,
+                       tuple(self.erange), self._psd_view, self._energy_xlabel(),
+                       ghost=ghost)
+        self.page._style(ax, grid=False)
+        self._draw_cut_markers()
+        self._remember_view(ax)
+
+    def _redraw_psd_panel(self):
+        """Clear and redraw the PSD panel from the current frame (if shown)."""
+        if self.page.ax_psd is not None and self.df_current is not None:
+            self.page.ax_psd.clear()
+            self._plot_psd(self.df_current)
+
+    def apply_psd_filter(self, e1, e2, p1, p2):
+        """Cut events to an energy × PSD box -- the PSD panel's rubber band (a
+        neutron or a gamma band). Every panel redraws from the cut data; on the
+        PSD panel the kept events sit in colour over the grey uncut density
+        (the "Show uncut outline" ghost) with the box dashed, so the band can
+        be read against the whole run and the box redrawn."""
+        if self.df_current is None or "psd" not in self.df_current.columns:
+            return
+        self._clear_significance()
+        self._save_undo_snapshot()
+        elo, ehi = sorted((e1, e2))
+        plo, phi = sorted((p1, p2))
+        self._cut_psd = (elo, ehi, plo, phi)
+        if self.ps_flag == 0:
+            base = self.df_current
+            self.df_previous = self.df_current.copy()
+            self.ps_flag = 1
+        else:
+            base = self.df_previous
+        e, s = base[self.ekey], base["psd"]
+        mask = (e > elo) & (e < ehi) & (s > plo) & (s < phi)
+        self.df_current = base[mask].reset_index(drop=True)
+        with self._preserve_zoom():
+            # The PSD panel redraws too: the kept events in colour over the
+            # grey uncut density (when "Show uncut outline" is on), box dashed.
+            for ax, plot in ((self.page.ax_spe, self._plot_energy),
+                             (self.page.ax_dt, self._plot_time),
+                             (self.page.ax_aspe, self._plot_alpha_energy),
+                             (self.page.ax_psd, self._plot_psd)):
+                if ax is not None:
+                    ax.clear()
+                    plot(self.df_current)
+            self._draw_cut_markers()
+            self._replot_xy()
+        self.page.canvas.draw_idle()
+        self._status(f"PSD filter [{plo:.4g}, {phi:.4g}]  ·  "
+                     f"{self.df_current.shape[0]:,} events")
+
+    def apply_psd_gates(self, pre_ns, prompt_ns, tail_ns, threshold):
+        """New gates (and/or trigger threshold) from the gates window:
+        recompute the PSD of the whole run and redraw. A PSD cut was drawn
+        against the old values, so when one is active every cut is cleared
+        (reset-style); otherwise the other cuts stay and only the PSD panel
+        redraws. The gates are remembered for this run and detector (this
+        session), and the new values replace a saved PSD column's."""
+        p = self._tpsd
+        if p is None:
+            return
+        if threshold != p.threshold:
+            p.set_trigger(threshold=threshold)
+        p.set_gates(pre_ns=pre_ns, prompt_ns=prompt_ns, tail_ns=tail_ns,
+                    tail_to_end=tail_ns is None)
+        self._psd_gates_by_det[self._psd_key] = p.gates()
+        self._psd_gates_by_run[(str(self._src_date), int(self._src_runnr),
+                                int(self._src_ch))] = p.gates()
+        self._psd_gates_src = "tuned this session"
+        self._compute_psd()
+        self.opts.lbl_psd.setText(self._psd_detector_label())
+        if self._cut_psd is not None:
+            self._cut_energy = self._cut_time = self._cut_xy = None
+            self._cut_alpha = self._cut_psd = None
+            self._undo_state = None
+            self.opts.btn_undo.setEnabled(False)
+            self._rebuild_from_master()
+            self._status("PSD recomputed with the new gates  -- the PSD cut "
+                         "used the old values, so all cuts were cleared")
+            return
+        with self._preserve_zoom():
+            self._redraw_psd_panel()
+        self.page.canvas.draw_idle()
+        self._status(f"PSD recomputed with the new gates  ·  "
+                     f"{int(p.valid.sum()):,} valid events")
+
+    def psd_trace_sample(self, n, reshuffle=False):
+        """Up to *n* event rows (of the trace matrix) to draw in the gates
+        window: events of the current cut with a trigger, taken in a fixed
+        random order so the sample only changes on *reshuffle*."""
+        p = self._tpsd
+        if p is None or p.trigger is None:
+            return np.empty(0, dtype=np.int64)
+        if (reshuffle or self._psd_order is None
+                or self._psd_order.size != p.n_events):
+            self._psd_order = self._psd_rng.permutation(p.n_events)
+        mask = np.zeros(p.n_events, bool)
+        if self.df_current is not None and "_evt" in self.df_current.columns:
+            mask[self.df_current["_evt"].to_numpy()] = True
+        mask &= p.has_trace & np.isfinite(p.trigger)
+        order = self._psd_order
+        return np.sort(order[mask[order]][:n])
+
+    def _open_psd_gates(self):
+        """Open (or raise) the PSD gates window."""
+        self._flash_button(self.opts.btn_psd_gates)
+        if not self._psd_active:
+            self._status("Tick 'Neutron run' first")
+            return
+        if self._tpsd is None:
+            self._status("This run has a saved PSD column but no traces to "
+                         "re-gate")
+            return
+        if self._tpsd.psd is None:
+            # PSD read from the saved column: time and integrate the traces
+            # with the current gates so the window can draw and colour them.
+            # The panels keep the saved values until Apply.
+            self._run_psd_compute()
+        if self._psd_gates_dlg is None:
+            self._psd_gates_dlg = PsdGatesDialog(self, self.app)
+        else:
+            self._psd_gates_dlg.load_from_psd()
+        self._psd_gates_dlg.show()
+        self._psd_gates_dlg.raise_()
+
     def _alpha_xlabel(self):
         """Alpha-panel x-label: raw channels until a calibration is applied."""
         units = self._axis_units()
@@ -1447,6 +1885,14 @@ class ApiController:
                 self.page.ax_aspe, self._on_alpha_span, "horizontal",
                 useblit=True, interactive=True,
                 props=dict(alpha=0.3, facecolor=T.ACCENT_AMBER)))
+        # PSD map: a box cuts events by energy AND PSD (neutrons or gammas).
+        if self.page.ax_psd is not None:
+            self._selectors.append(RectangleSelector(
+                self.page.ax_psd, self._on_psd_select, useblit=True,
+                button=[1, 3], minspanx=0, minspany=0, spancoords="pixels",
+                interactive=True,
+                props=dict(facecolor=T.TEXT_PRIMARY, edgecolor=T.TEXT_PRIMARY,
+                           alpha=0.15, fill=True)))
         if self.page.ax_dt is not None:
             self._selectors.append(SpanSelector(
                 self.page.ax_dt, self._on_time_span, "horizontal",
@@ -1501,6 +1947,14 @@ class ApiController:
             for x in self._cut_time:
                 self._cut_artists.append(self.page.ax_dt.axvline(
                     x, color=T.ACCENT_RED, linestyle=":", linewidth=1.3, zorder=6))
+        if self._cut_psd is not None and self.page.ax_psd is not None:
+            elo, ehi, plo, phi = self._cut_psd
+            elo, ehi = max(elo, self.erange[0]), min(ehi, self.erange[1])
+            rect = Rectangle(
+                (elo, plo), ehi - elo, phi - plo, fill=False,
+                edgecolor=T.TEXT_PRIMARY, linestyle="--", linewidth=1.5, zorder=6)
+            self.page.ax_psd.add_patch(rect)
+            self._cut_artists.append(rect)
         if self._cut_xy is not None and self.page.ax_xy is not None:
             xlo, xhi, ylo, yhi = self._cut_xy
             rect = Rectangle(
@@ -1524,6 +1978,13 @@ class ApiController:
     def _on_alpha_span(self, amin, amax):
         if amax > amin and self.opts.btn_interactive.isChecked():
             self.apply_alpha_filter(round(amin, 4), round(amax, 4))
+
+    def _on_psd_select(self, eclick, erelease):
+        x1, y1 = eclick.xdata, eclick.ydata
+        x2, y2 = erelease.xdata, erelease.ydata
+        if None in (x1, y1, x2, y2):
+            return
+        self.apply_psd_filter(x1, x2, y1, y2)
 
     def _on_xy_select(self, eclick, erelease):
         x1, y1 = eclick.xdata, eclick.ydata
@@ -1555,6 +2016,7 @@ class ApiController:
             if self.page.ax_aspe is not None:
                 self.page.ax_aspe.clear()
                 self._plot_alpha_energy(self.df_current)
+            self._redraw_psd_panel()
             self._replot_xy()
         self.page.canvas.draw_idle()
         self._status(f"Energy filter [{xmin:g}, {xmax:g}]  ·  {self.df_current.shape[0]:,} events")
@@ -1587,6 +2049,7 @@ class ApiController:
             if self.page.ax_dt is not None:
                 self.page.ax_dt.clear()
                 self._plot_time(self.df_current)
+            self._redraw_psd_panel()
             self._replot_xy()
         self.page.canvas.draw_idle()
         self._status(f"Alpha energy filter [{amin:g}, {amax:g}]  ·  "
@@ -1614,6 +2077,7 @@ class ApiController:
             if self.page.ax_aspe is not None:
                 self.page.ax_aspe.clear()
                 self._plot_alpha_energy(self.df_current)
+            self._redraw_psd_panel()
             self._replot_xy()
         self.page.canvas.draw_idle()
         self._status(f"Time filter [{tmin:g}, {tmax:g}] ns  ·  {self.df_current.shape[0]:,} events")
@@ -1653,6 +2117,7 @@ class ApiController:
             # Bug fix vs legacy: redraw the X-Y map from the *filtered* data so the
             # panel reflects the selection (legacy replotted df_previous, the full
             # map).
+            self._redraw_psd_panel()
             self._replot_xy()
         self.page.canvas.draw_idle()
         self._status(f"X-Y filter  ·  {self.df_current.shape[0]:,} events")
@@ -1685,6 +2150,12 @@ class ApiController:
                 self._status("This run carries no alpha energy column")
             else:
                 self.apply_alpha_filter(a[0], a[1])
+        p = dlg.pair("p")
+        if p is not None:
+            if self.df_current is None or "psd" not in self.df_current.columns:
+                self._status("Tick 'Neutron run' first: this run has no PSD yet")
+            else:
+                self.apply_psd_filter(-np.inf, np.inf, p[0], p[1])
 
     # -- energy selections -----------------------------------------------------
     def _arm_selection(self):
@@ -2593,7 +3064,7 @@ class ApiController:
         self.e_units = units
         self.df_current = self.df_api.copy()
         self.df_previous = self.df_api.copy()
-        self.en_flag = self.dt_flag = self.xy_flag = self.al_flag = 0
+        self.en_flag = self.dt_flag = self.xy_flag = self.al_flag = self.ps_flag = 0
         self.vmax = None
         self.opts.ed_vmax.clear()
         # Existing selections were cut in the old (channel) axis  -- drop them.
@@ -2619,7 +3090,7 @@ class ApiController:
         self.e_units = None
         self.df_current = self.df_api.copy()
         self.df_previous = self.df_api.copy()
-        self.en_flag = self.dt_flag = self.xy_flag = self.al_flag = 0
+        self.en_flag = self.dt_flag = self.xy_flag = self.al_flag = self.ps_flag = 0
         self.vmax = None
         self.opts.ed_vmax.clear()
         self._reset_selections()
@@ -2634,7 +3105,7 @@ class ApiController:
         """Re-derive the working frames from df_api and redraw (reset-style)."""
         self.df_current = self.df_api.copy()
         self.df_previous = self.df_api.copy()
-        self.en_flag = self.dt_flag = self.xy_flag = self.al_flag = 0
+        self.en_flag = self.dt_flag = self.xy_flag = self.al_flag = self.ps_flag = 0
         self.vmax = None
         self.opts.ed_vmax.clear()
         self._reset_selections()
@@ -3211,7 +3682,8 @@ class ApiController:
         for ax, plot in ((self.page.ax_spe, self._plot_energy),
                          (self.page.ax_dt, self._plot_time),
                          (self.page.ax_alpha, self._plot_alpha),
-                         (self.page.ax_aspe, self._plot_alpha_energy)):
+                         (self.page.ax_aspe, self._plot_alpha_energy),
+                         (self.page.ax_psd, self._plot_psd)):
             if ax is not None:
                 ax.clear()
                 plot(self.df_current)
@@ -3243,7 +3715,8 @@ class ApiController:
         for attr, ed, name in [("ebins", o.ed_ebins, "Energy bins"),
                                ("tbins", o.ed_tbins, "dt bins"),
                                ("hexbins", o.ed_xybins, "X-Y bins"),
-                               ("abins", o.ed_abins, "Alpha bins")]:
+                               ("abins", o.ed_abins, "Alpha bins"),
+                               ("pbins", o.ed_pbins, "PSD bins")]:
             try:
                 val = int(ed.text().strip())
             except ValueError:
@@ -3255,6 +3728,7 @@ class ApiController:
             parsed[attr] = val
         self.ebins, self.tbins, self.hexbins, self.abins = (
             parsed["ebins"], parsed["tbins"], parsed["hexbins"], parsed["abins"])
+        self.pbins = parsed["pbins"]
         if self.df_current is None:
             self._status("Bin counts set  -- load an API file to apply them")
             return
@@ -3272,6 +3746,7 @@ class ApiController:
         if self.page.ax_aspe is not None:
             self.page.ax_aspe.clear()
             self._plot_alpha_energy(self.df_current)
+        self._redraw_psd_panel()
         self._replot_xy()
         self.page.reset_nav()
         self.page.canvas.draw_idle()
@@ -3279,6 +3754,8 @@ class ApiController:
                f"X-Y {self.hexbins:,}")
         if self.page.ax_aspe is not None:
             msg += f" · alpha {self.abins:,}"
+        if self.page.ax_psd is not None:
+            msg += f" · PSD {self.pbins:,}"
         self._status(msg)
 
     def _confirm_uncalibrated_energy(self):
@@ -3344,8 +3821,10 @@ class ApiController:
             return
         energy_changed = self.e_units is not None or self._egain_applied
         dt_changed = self._dt_corrected
-        if not energy_changed and not dt_changed:
-            self._status("No energy or time changes to apply")
+        # A PSD computed this session (neutron run) is baked into a PSD column.
+        psd_changed = self._psd_to_save() is not None
+        if not energy_changed and not dt_changed and not psd_changed:
+            self._status("No energy, time or PSD changes to apply")
             return
 
         # Energy is written into the canonical ``energy_cal`` column, but when no
@@ -3440,8 +3919,17 @@ class ApiController:
                 full["dt_cal"] = np.nan
             full.loc[mask, "dt_cal"] = self.df_api[self._dt_key].to_numpy()
             applied.append("dt_cal")
+        psd_note = None
+        if psd_changed:
+            if "PSD" not in full.columns:
+                full["PSD"] = np.nan
+            full.loc[mask, "PSD"] = self._psd_to_save()
+            applied.append("PSD")
+            p = self._tpsd
+            psd_note = gates_summary(p.pre_ns, p.prompt_ns, p.tail_ns,
+                                     p.threshold, self._psd_detector)
         if not applied:
-            self._status("No energy or time changes to apply")
+            self._status("No energy, time or PSD changes to apply")
             return
 
         # A dt_cal column means "the time to use" for every event. Channels (or
@@ -3471,7 +3959,7 @@ class ApiController:
         # API calculations read) and drop/append a README recording provenance,
         # so the re-processed run carries the same metadata as its source.
         extra = self._copy_run_metadata(run_dir, new_date, new_runnr, applied,
-                                        merge=merge)
+                                        merge=merge, psd_note=psd_note)
 
         action = "Updated" if merge else "Saved"
         msg = (f"{action} calibrated run {new_date}-{new_runnr} "
@@ -3480,8 +3968,19 @@ class ApiController:
             msg += f"  ·  {extra}"
         self._status(msg)
 
+    def _psd_to_save(self):
+        """The loaded channel's per-event PSD (df_api row order, NaN where
+        invalid) when it was computed from the traces this session -- what
+        "Apply to data" writes into the PSD column -- else None. A PSD read
+        from a saved PSD column is already on disk and travels with the
+        re-read run."""
+        if (self.df_api is None or "psd" not in self.df_api.columns
+                or self._psd_from_column):
+            return None
+        return self.df_api["psd"].to_numpy(dtype=float)
+
     def _copy_run_metadata(self, dst_run_dir, new_date, new_runnr, applied,
-                           merge=False):
+                           merge=False, psd_note=None):
         """Copy the source run's ``settings/`` folder into the destination run and
         write a ``README.txt`` documenting where the data was re-processed from.
         When ``merge`` is set (a channel is being added to an existing run), the
@@ -3520,7 +4019,8 @@ class ApiController:
                 f"Source run      : {self._src_date}-{self._src_runnr} "
                 f"(channel {self._src_ch})\n"
                 f"Source location : {src_loc}\n"
-                f"Applied columns : {', '.join(applied)}\n")
+                f"Applied columns : {', '.join(applied)}\n"
+                + (f"PSD gates       : {psd_note}\n" if psd_note else ""))
             if merge and readme.exists():
                 with readme.open("a", encoding="utf-8") as fh:
                     fh.write(entry)
@@ -3547,9 +4047,9 @@ class ApiController:
         # position columns are re-derived from it below.
         self.df_current = self.df_api.copy()
         self.df_previous = self.df_api.copy()
-        self.en_flag = self.dt_flag = self.xy_flag = self.al_flag = 0
+        self.en_flag = self.dt_flag = self.xy_flag = self.al_flag = self.ps_flag = 0
         self._cut_energy = self._cut_time = self._cut_xy = None
-        self._cut_alpha = None
+        self._cut_alpha = self._cut_psd = None
         self._undo_state = None
         self.opts.btn_undo.setEnabled(False)
         self.vmax = None
@@ -3620,8 +4120,13 @@ class ApiController:
         if not any(k.startswith("Reconstructed events") for k in stats):
             # No parquet files found on disk: fall back to the loaded channel.
             stats[f"Reconstructed events ch {self._src_ch}"] =                 f"{self.df_api.shape[0]:,}"
+        if self._tpsd is not None and self.df_api is not None                 and "psd" in self.df_api.columns:
+            p = self._tpsd
+            meta["PSD gates"] = gates_summary(p.pre_ns, p.prompt_ns, p.tail_ns,
+                                              p.threshold, self._psd_detector)
         cuts = {"Energy cut": self._cut_energy, "dt cut": self._cut_time,
-                "X-Y cut": self._cut_xy, "Alpha cut": self._cut_alpha}
+                "X-Y cut": self._cut_xy, "Alpha cut": self._cut_alpha,
+                "PSD cut (E lo, E hi, PSD lo, PSD hi)": self._cut_psd}
         for lbl, cut in cuts.items():
             if cut is not None:
                 stats[lbl] = ", ".join(f"{v:.4g}" for v in cut)

@@ -2252,3 +2252,297 @@ def test_log_run_cancel_writes_nothing(api, monkeypatch, tmp_path):
                         lambda self: QDialog.Rejected)
     c._log_run()
     assert not any(tmp_path.iterdir())
+
+
+# ── Neutron run: PSD panel ─────────────────────────────────────────────────────
+def _traced_events(n=400, n_samples=200, seed=3, empty=False):
+    """A normal-run event table whose events carry a PIXIE-like uint16 trace
+    (the parquet ``Trace`` column): even events have a long tail
+    ("neutron"), odd a short one ("gamma"). *empty* gives every event an empty
+    trace, like a gamma-only run's column."""
+    df = _synthetic_events(n=n, seed=seed)
+    df["energy_ch9"] = np.random.default_rng(seed).uniform(0, 4000, n)
+    if empty:
+        df["Trace"] = [np.array([], dtype=np.uint16)] * n
+        return df
+    rng = np.random.default_rng(seed)
+    x = np.arange(n_samples)
+    traces = []
+    for i in range(n):
+        tau = 25.0 if i % 2 == 0 else 6.0
+        start = rng.uniform(78, 84)
+        body = np.where(x < start, 0.0,
+                        rng.uniform(1500, 6000) * np.exp(-(x - start) / tau))
+        traces.append(np.round(8000 + body).astype(np.uint16))
+    df["Trace"] = traces
+    return df
+
+
+def _psd_ctrl(qapp, monkeypatch, df):
+    """App on the API tab with the loader stubbed to return *df* (a run with a
+    Trace column), a 2 ns sample interval and the EJ250 detector name."""
+    from wara import helper_api
+    monkeypatch.setattr(read_parquet_api, "read_parquet_file",
+                        lambda *a, **k: df.copy().assign(dt=df["dt"] / 1e9))
+    monkeypatch.setattr(apicalc, "get_total_time", lambda *a, **k: 14386.0)
+    monkeypatch.setattr(apicalc, "get_total_counts", lambda *a, **k: 2.5e9)
+    monkeypatch.setattr(apicalc, "calculate_neutron_yield", lambda *a, **k: 4.3e6)
+    monkeypatch.setattr(helper_api, "read_sample_interval_ns", lambda *a, **k: 2.0)
+    monkeypatch.setattr(api_mod, "detector_name", lambda *a, **k: "EJ250")
+
+    def no_run_folder(*a, **k):      # never look at real data (saved gates)
+        raise FileNotFoundError("no run folder in tests")
+    monkeypatch.setattr(helper_api, "find_data_path", no_run_folder)
+
+    w = WaraApp()
+    idx = [name for name, _ in NAV_SECTIONS].index("API")
+    w.nav_group.button(idx).setChecked(True)
+    w._on_nav(idx)
+    c = w.api
+    c.opts.ed_date.setText("2026-09-24")
+    c.opts.ed_run.setText("1")
+    c.opts.ed_ch.setText("1")
+    _fast_bins(c)
+    c.pbins = 40
+    return w, c
+
+
+def test_run_without_traces_hides_neutron_run(qapp, monkeypatch):
+    """A gamma-only run (empty Trace column) never offers the PSD panel, and
+    the useless column is dropped from the event table."""
+    w, c = _psd_ctrl(qapp, monkeypatch, _traced_events(empty=True))
+    try:
+        c._load()
+        assert c._tpsd is None
+        assert c.opts.cb_psd.isHidden() and c.opts.btn_psd_gates.isHidden()
+        assert "Trace" not in c.df_api.columns
+        c.opts.cb_psd.setChecked(True)
+        assert c._psd_active is False and c.page.ax_psd is None
+    finally:
+        w.close()
+
+
+def test_neutron_run_adds_psd_panel_under_xy(qapp, monkeypatch):
+    w, c = _psd_ctrl(qapp, monkeypatch, _traced_events())
+    try:
+        c._load()
+        # Traces move into a compact matrix; each event keeps its row number.
+        assert c._tpsd is not None and c._tpsd.traces.dtype == np.uint16
+        assert "Trace" not in c.df_api.columns and "_evt" in c.df_api.columns
+        assert not c.opts.cb_psd.isHidden()
+        assert c.opts.btn_psd_gates.isHidden() and c.opts.row_pbins.isHidden()
+        assert "psd" not in c.df_api.columns          # computed on the tick
+        c.opts.cb_psd.setChecked(True)
+        assert "psd" in c.df_api.columns and "psd" in c.df_current.columns
+        assert not c.opts.btn_psd_gates.isHidden()
+        assert "EJ250" in c.opts.lbl_psd.text()
+        assert len(c.page.fig.axes) == 4
+        xy, ps = c.page.ax_xy.get_position(), c.page.ax_psd.get_position()
+        assert ps.y0 < xy.y0 and ps.x0 == pytest.approx(xy.x0, abs=1e-9)
+        # Long-tail events sit above short-tail ones on the PSD axis.
+        psd = c.df_api["psd"].to_numpy()
+        assert np.nanmin(psd[::2]) > np.nanmax(psd[1::2])
+        c.opts.cb_psd.setChecked(False)
+        assert c.page.ax_psd is None and len(c.page.fig.axes) == 3
+    finally:
+        w.close()
+
+
+def test_alpha_and_psd_panels_split_1d_left_2d_right(qapp, monkeypatch):
+    """With both extra panels the spectra stack on the left (energy, dt,
+    alpha) and the maps on the right (X-Y over two rows, PSD below)."""
+    w, c = _psd_ctrl(qapp, monkeypatch, _traced_events())
+    try:
+        c._load()
+        c.opts.cb_alpha.setChecked(True)
+        c.opts.cb_psd.setChecked(True)
+        p = c.page
+        assert len(p.fig.axes) == 5
+        spe, dt, al = (ax.get_position() for ax in (p.ax_spe, p.ax_dt, p.ax_aspe))
+        xy, ps = p.ax_xy.get_position(), p.ax_psd.get_position()
+        assert spe.x0 == pytest.approx(dt.x0) == pytest.approx(al.x0)
+        assert spe.y0 > dt.y0 > al.y0
+        assert xy.x0 == pytest.approx(ps.x0) and xy.x0 > spe.x0
+        assert xy.height > 1.5 * ps.height and xy.y0 > ps.y0
+        c.opts.btn_interactive.setChecked(True)
+        assert len(c._selectors) == 5
+    finally:
+        w.close()
+
+
+def test_psd_cut_keeps_one_band_and_undoes(qapp, monkeypatch):
+    w, c = _psd_ctrl(qapp, monkeypatch, _traced_events())
+    try:
+        c._load()
+        # A cut made before the PSD exists survives the tick.
+        c.apply_t_filter(-100, 100)
+        n_t = c.df_current.shape[0]
+        c.opts.cb_psd.setChecked(True)
+        assert c.df_current.shape[0] == n_t and "psd" in c.df_current.columns
+        psd = c.df_current["psd"].to_numpy()
+        split = 0.5 * (np.nanmax(psd[c.df_current["_evt"] % 2 == 1])
+                       + np.nanmin(psd[c.df_current["_evt"] % 2 == 0]))
+        c.apply_psd_filter(-1e9, 1e9, split, 2.0)      # the long-tail band
+        assert (c.df_current["_evt"] % 2 == 0).all()
+        assert c.ps_flag == 1 and c._cut_psd[2] == pytest.approx(split)
+        assert c.gam.sum() == c.df_current.shape[0]
+        c._undo()
+        assert c.df_current.shape[0] == n_t and c._cut_psd is None
+        # The Filters dialog's PSD pair does the same on the PSD axis alone.
+        c._open_filters()
+        lo, hi = c._filter_dlg.fields["p"]
+        lo.setText("-1"); hi.setText(f"{split}")
+        c._apply_manual_filters()
+        assert (c.df_current["_evt"] % 2 == 1).all()
+    finally:
+        w.close()
+
+
+def test_psd_gates_window_applies_and_remembers(qapp, monkeypatch):
+    """The gates window shows a trace sample; Apply recomputes the PSD, clears
+    the cuts when a PSD cut was active, and the gates stick for the detector
+    across a reload."""
+    w, c = _psd_ctrl(qapp, monkeypatch, _traced_events(n=200))
+    try:
+        c._load()
+        c.opts.cb_psd.setChecked(True)
+        c._open_psd_gates()
+        d = c._psd_gates_dlg
+        assert d.ed_pre.text() == "30" and d.ed_prompt.text() == "20"
+        assert d.cb_to_end.isChecked() and d.ed_thresh.text() == "30"
+        assert 0 < len(d._sample) <= d.spin_n.value()
+        first = d._sample.copy()
+        d.redraw()
+        np.testing.assert_array_equal(d._sample, first)   # stable sample
+        c.apply_psd_filter(-1e9, 1e9, 0.0, 0.5)
+        psd0 = c.df_api["psd"].to_numpy().copy()
+        d.ed_prompt.setText("30")
+        d._apply()
+        assert c._tpsd.prompt_ns == 30.0
+        assert not np.allclose(c.df_api["psd"], psd0, equal_nan=True)
+        assert c._cut_psd is None and c.df_current.shape[0] == 200
+        assert "+30 ns" in c.opts.lbl_psd.text()
+        c._load()
+        assert c._tpsd.prompt_ns == 30.0            # remembered for EJ250
+    finally:
+        w.close()
+
+
+def test_psd_panel_draws_grey_ghost_behind_cut(qapp, monkeypatch):
+    """With a cut applied, the PSD map shows the uncut density in grey under
+    the kept events; "Show uncut outline" off removes it."""
+    w, c = _psd_ctrl(qapp, monkeypatch, _traced_events())
+    try:
+        c._load()
+        c.opts.cb_psd.setChecked(True)
+        assert len(c.page.ax_psd.collections) == 1       # no cut, no ghost
+        c.apply_psd_filter(-1e9, 1e9, 0.0, 0.5)
+        meshes = c.page.ax_psd.collections
+        assert len(meshes) == 2
+        assert meshes[0].get_cmap() is api_mod.GRAY_CMAP  # ghost underneath
+        assert meshes[0].get_zorder() < meshes[1].get_zorder()
+        labels = [t.get_text() for t in c.page.ax_psd.get_legend().get_texts()]
+        assert labels == ["uncut", "cut"]
+        # Another cut keeps the ghost (the other band stays visible in grey).
+        c.apply_t_filter(-100, 100)
+        assert len(c.page.ax_psd.collections) == 2
+        c.opts.cb_ghost.setChecked(False)
+        assert len(c.page.ax_psd.collections) == 1
+    finally:
+        w.close()
+
+
+def test_apply_to_data_writes_psd_column_and_reads_it_back(qapp, monkeypatch,
+                                                          tmp_path):
+    """"Apply to data" writes each event's PSD into a PSD column (loaded
+    channel only; NaN elsewhere) -- even with no energy/time change -- and a
+    run carrying that column uses it on "Neutron run" without recomputing."""
+    df = pd.concat([_traced_events(n=200).assign(channel=1),
+                    _traced_events(n=50, seed=9, empty=True).assign(channel=4)],
+                   ignore_index=True)
+    w, c = _psd_ctrl(qapp, monkeypatch, df)
+    new_dir = tmp_path / "RUN-999"
+
+    def fake_read(date, runnr, ch=None, **k):
+        full = saved.get("df", df) if int(runnr) == 999 else df
+        full = full.copy()
+        if ch is not None:
+            full = full[full["channel"] == ch].reset_index(drop=True)
+            full = full.assign(dt=full["dt"] / 1e9)
+        return full
+    saved = {}
+    monkeypatch.setattr(read_parquet_api, "read_parquet_file", fake_read)
+    monkeypatch.setattr(read_parquet_api, "run_parquet_path",
+                        lambda *a, **k: (new_dir, new_dir / "parquet-data", "RUN"))
+
+    def fake_save(full, *a, **k):              # the real save makes the folder
+        (new_dir / "parquet-data").mkdir(parents=True, exist_ok=True)
+        saved.update(df=full)
+        return Path("x")
+    monkeypatch.setattr(read_parquet_api, "save_combined_run", fake_save)
+
+    class _StubApplyDialog:
+        def __init__(self, date, runnr, parent=None):
+            self._date = date
+        def exec_(self):
+            return QDialog.Accepted
+        def values(self):
+            return (self._date, 999)
+    monkeypatch.setattr(api_mod, "ApplyToDataDialog", _StubApplyDialog)
+    try:
+        c._load()
+        c._apply_to_data()
+        assert saved == {}                       # PSD never computed: nothing
+        c.opts.cb_psd.setChecked(True)
+        c.apply_psd_gates(25.0, 22.0, 300.0, 40.0)
+        psd = c.df_api["psd"].to_numpy()
+        c._apply_to_data()
+        out = saved["df"]                        # PSD alone is a change
+        assert "PSD" in out.columns and "energy_cal" not in out.columns
+        m1 = (out["channel"] == 1).to_numpy()
+        np.testing.assert_allclose(out.loc[m1, "PSD"].to_numpy(), psd)
+        assert out.loc[~m1, "PSD"].isna().all()
+        readme = (new_dir / "README.txt").read_text(encoding="utf-8")
+        assert "PSD" in readme and "+22 ns" in readme
+
+        # Loading the new run: the PSD column is used as is (no recompute).
+        c.opts.ed_run.setText("999")
+        c._load()                                # box still ticked
+        assert "PSD" not in c.df_api.columns
+        np.testing.assert_allclose(c.df_api["psd"].to_numpy(), psd)
+        assert c._psd_from_column and c._tpsd.psd is None
+        assert "saved PSD column" in c.opts.lbl_psd.text()
+        assert c.page.ax_psd is not None
+        # Nothing new to save until the gates are re-applied.
+        saved.pop("df")
+        c._apply_to_data()
+        assert "df" not in saved
+        # The gates window times the traces for display only...
+        c._open_psd_gates()
+        assert c._tpsd.psd is not None and c._psd_from_column
+        # ...and Apply replaces the saved values.
+        c._psd_gates_dlg.ed_prompt.setText("30")
+        c._psd_gates_dlg._apply()
+        assert not c._psd_from_column
+        assert not np.allclose(c.df_api["psd"], psd, equal_nan=True)
+    finally:
+        w.close()
+
+
+def test_psd_column_without_traces_still_offers_the_panel(qapp, monkeypatch):
+    """A run with a saved PSD column but no traces shows the PSD panel from
+    the column; there is nothing to re-gate, so the gate button stays hidden."""
+    df = _synthetic_events(n=300).assign(
+        PSD=np.random.default_rng(1).uniform(0.3, 0.5, 300))
+    w, c = _psd_ctrl(qapp, monkeypatch, df)
+    try:
+        c._load()
+        assert c._tpsd is None and not c.opts.cb_psd.isHidden()
+        c.opts.cb_psd.setChecked(True)
+        assert c.page.ax_psd is not None
+        assert c.opts.btn_psd_gates.isHidden()
+        np.testing.assert_allclose(c.df_current["psd"], df["PSD"])
+        c.apply_psd_filter(-1e9, 1e9, 0.4, 0.6)
+        assert (c.df_current["psd"] > 0.4).all()
+    finally:
+        w.close()

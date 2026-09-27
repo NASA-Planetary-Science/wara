@@ -29,7 +29,8 @@ class ApiFilterDialog(QDialog):
         lay = QVBoxLayout(self)
         lay.addWidget(header("MANUAL FILTERS"))
         lbl = QLabel("Leave a pair blank to skip that filter. Alpha energy "
-                     "applies only to runs that carry an alpha column.")
+                     "applies only to runs that carry an alpha column, PSD only "
+                     "once 'Neutron run' is ticked (all energies).")
         lbl.setWordWrap(True)
         lay.addWidget(lbl)
 
@@ -39,7 +40,7 @@ class ApiFilterDialog(QDialog):
         self.fields = {}
         for r, (key, label) in enumerate(
                 [("x", "X"), ("y", "Y"), ("t", "dt"), ("e", "Energy"),
-                 ("a", "Alpha energy")], start=1):
+                 ("a", "Alpha energy"), ("p", "PSD")], start=1):
             grid.addWidget(QLabel(label), r, 0)
             lo, hi = QLineEdit(), QLineEdit()
             for e in (lo, hi):
@@ -336,7 +337,8 @@ class ApplyToDataDialog(QDialog):
         note = QLabel(
             "Combine all of the source run's parquet files and bake the active "
             "energy calibration and/or time shift into energy_cal / dt_cal, then "
-            "save as a new run. Pick a new run number so the original run is left "
+            "save as a new run. On a neutron run each event's PSD is saved too, "
+            "in a PSD column. Pick a new run number so the original run is left "
             "untouched.")
         note.setObjectName("stat_key"); note.setWordWrap(True)
         lay.addWidget(note)
