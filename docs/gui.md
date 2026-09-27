@@ -237,6 +237,9 @@ each event (the parquet `energy` column, in ADC channels), so the MCA matches
 the API tab; the PSD is still computed from the traces.
 
 Only the Traces panel draws a random sample (the *Traces* count in DISPLAY).
+The sample stays the same while you drag gates, change selections or adjust
+display options. Pulses that are still selected after a filter change stay on
+screen. Click **New random sample** to draw a different set.
 The MCA, PSD histogram, figure of merit and **Send to Spectrum** use every
 valid pulse. The PSD panel opens zoomed to the 1–99 % PSD band, but outlier
 pulses are still in the histogram — zoom or pan out to see them.

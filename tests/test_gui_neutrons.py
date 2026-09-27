@@ -304,6 +304,40 @@ def test_average_trace_only_draws_one_line(neutrons):
     assert len(c.page.ax_traces.lines) == n_lines_sample
 
 
+def _trace_ydata(c):
+    return [ln.get_ydata().copy() for ln in c.page.ax_traces.lines]
+
+
+def test_trace_sample_is_stable_across_redraws(neutrons):
+    """Redraws that don't touch the traces keep the same sample and skip
+    rebuilding the panel entirely."""
+    c = neutrons
+    c.opts.spin_shown.setValue(20)
+    before = _trace_ydata(c)
+    lines = list(c.page.ax_traces.lines)
+    c.opts.spin_bins_mca.setValue(c.opts.spin_bins_mca.value() + 32)  # full _redraw
+    c._clear_selection()
+    assert list(c.page.ax_traces.lines) == lines     # panel not rebuilt
+    # A marker drag rebuilds the panel but keeps the same pulses where valid.
+    nt = c.nt
+    c._on_params(nt.threshold_v, nt.gate_start_ns, nt.prompt_end_ns + 5.0,
+                 nt.tail_end_ns)
+    after = _trace_ydata(c)
+    assert len(after) == len(before)
+    assert all(np.array_equal(a, b) for a, b in zip(before[:-4], after[:-4]))
+
+
+def test_new_random_sample_button_reshuffles(neutrons):
+    c = neutrons
+    c.opts.spin_shown.setValue(20)
+    assert c.opts.btn_resample.isEnabled()
+    before = _trace_ydata(c)[:-4]      # drop the 4 marker lines
+    c.opts.btn_resample.click()
+    after = _trace_ydata(c)[:-4]
+    assert len(after) == len(before) == 20
+    assert not all(np.array_equal(a, b) for a, b in zip(before, after))
+
+
 def test_average_trace_uses_all_selected_when_armed(neutrons):
     """With PSD selections ON each box contributes one average over *all* its
     pulses (not just the drawn sample)."""

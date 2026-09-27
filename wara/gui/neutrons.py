@@ -14,7 +14,9 @@ linked, cross-filtering panels:
   the traces and MCA panels to that energy×PSD region.
 
 The MCA span and PSD rectangle are independent filters that AND together; the
-Traces panel always shows a sample of the surviving pulses.
+Traces panel always shows a sample of the surviving pulses. The sample is drawn
+from a fixed random ordering of the pulses, so it stays stable across redraws;
+**New random sample** reshuffles it.
 
 Arming **Figure of merit** turns the PSD rubber band into a slice selector: the
 pulses inside the dragged box are projected onto the PSD axis and fitted with a
@@ -95,6 +97,10 @@ class NeutronsPage(QWidget):
         self._rect = None           # PSD RectangleSelector
         self.armed = False          # armed for multi-box "PSD selections" mode
         self.fom_armed = False      # armed for figure-of-merit slice selection
+        # Signature of what the Traces panel currently shows (set by the
+        # controller); lets it skip rebuilding ~hundreds of lines when an
+        # action leaves the traces unchanged. None forces a redraw.
+        self.traces_key = None
 
         # Axis / marker units, overridden per data source (V for PicoScope,
         # ADC for PIXIE). ``thresh_scale`` scales the stored threshold for its
@@ -152,6 +158,7 @@ class NeutronsPage(QWidget):
     def show_empty(self, msg="Load a trace file (.npz, .npy, .txt, .csv) to begin"):
         self._detach_selectors()
         self._marker_lines = {}
+        self.traces_key = None
         self._build_axes()
         for ax in (self.ax_mca, self.ax_psd):
             ax.set_xticks([]); ax.set_yticks([])
@@ -638,6 +645,15 @@ class NeutronsOptions(QScrollArea):
             "Maximum number of traces drawn (a random sample)")
         drow.addWidget(lbl_shown); drow.addStretch(1); drow.addWidget(self.spin_shown)
         lay.addLayout(drow)
+        self.btn_resample = QPushButton("New random sample")
+        self.btn_resample.setObjectName("primary_btn")
+        self.btn_resample.setCursor(Qt.PointingHandCursor)
+        self.btn_resample.setEnabled(False)
+        self.btn_resample.setToolTip(
+            "Draw a different random sample of pulses on the Traces panel. The "
+            "sample otherwise stays fixed while you change gates, selections or "
+            "display options.")
+        lay.addWidget(self.btn_resample)
         mrow = QHBoxLayout()
         self.spin_bins_mca = SpinBox(); self.spin_bins_mca.setRange(32, 8192)
         self.spin_bins_mca.setValue(512); self.spin_bins_mca.setSingleStep(32)
@@ -667,7 +683,7 @@ class NeutronsOptions(QScrollArea):
         self.cb_avg_trace = QCheckBox("Average trace only")
         self.cb_avg_trace.setToolTip(
             "Replace the individual traces with a single averaged pulse: the "
-            "mean of the random sample drawn above, or — when 'PSD selections' "
+            "mean of the random sample shown, or — when 'PSD selections' "
             "is ON — the mean of every pulse inside each coloured PSD box "
             "(one averaged trace per selection, in its own colour).")
         lay.addWidget(self.cb_avg_trace)
@@ -751,7 +767,7 @@ class NeutronsOptions(QScrollArea):
         # forcing the scroll content wider than the viewport (which would clip
         # their right edge). They still stretch to fill the available width.
         for b in (self.btn_load, self.btn_log_run, self.btn_load_pixie, self.btn_pixie_stats,
-                  self.btn_psd_select, self.btn_fom, self.btn_reset,
+                  self.btn_resample, self.btn_psd_select, self.btn_fom, self.btn_reset,
                   self.btn_send_spec):
             b.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Fixed)
 
@@ -980,6 +996,11 @@ class NeutronsController:
         # commits the gate markers), which flips this True.
         self._analysis_ready = False
         self._rng = np.random.default_rng(0)
+        # Fixed random ordering of the pulses: each Traces group shows the
+        # first N of its pulses in this order, so the sample stays put across
+        # redraws. Only "New random sample" (or a new dataset) reshuffles it.
+        self._order = None
+        self._order_nt = None          # the dataset _order was drawn for
         # Cached PIXIE run so switching channel doesn't re-read from disk.
         self._pixie_df = None
         self._pixie_dt = None
@@ -1030,6 +1051,7 @@ class NeutronsController:
         self.opts.btn_fom.toggled.connect(self._on_fom_arm)
         self.opts.spin_bins_fom.valueChanged.connect(lambda *_: self._refit_fom())
         self.opts.spin_shown.valueChanged.connect(lambda *_: self._redraw_traces_only())
+        self.opts.btn_resample.clicked.connect(self._resample_traces)
         self.opts.cb_traces_log.toggled.connect(lambda *_: self._redraw_traces_only())
         self.opts.cb_avg_trace.toggled.connect(lambda *_: self._redraw_traces_only())
         self.opts.spin_bins_mca.valueChanged.connect(lambda *_: self._redraw())
@@ -1652,25 +1674,60 @@ class NeutronsController:
         self._draw_traces(self._selection_groups())
         self.page.finish_draw()
 
+    def _resample_traces(self):
+        """Reshuffle the pulse ordering so the Traces panel shows a new random
+        sample (the only action that changes the sample on purpose)."""
+        if self.nt is None:
+            return
+        self._flash_button(self.opts.btn_resample)
+        self._order = self._rng.permutation(self.nt.n_traces)
+        self._order_nt = self.nt
+        self._redraw_traces_only()
+        self._status("Drew a new random sample of traces")
+
+    def _pulse_order(self):
+        """The fixed random pulse ordering for the current dataset."""
+        if self._order_nt is not self.nt or self._order.size != self.nt.n_traces:
+            self._order = self._rng.permutation(self.nt.n_traces)
+            self._order_nt = self.nt
+        return self._order
+
     def _draw_traces(self, groups):
         nt = self.nt
+        self.opts.btn_resample.setEnabled(True)
         average = self.opts.cb_avg_trace.isChecked()
         n_max = self.opts.spin_shown.value()
         # Share the trace budget across groups so a busy multi-selection stays
         # legible (at least a few traces per group).
         per_group = max(5, n_max // max(1, len(groups)))
+        order = self._pulse_order()
         n_total = 0
-        n_used = 0          # pulses actually drawn / averaged
-        draw_groups = []
+        picked = []         # (indices, color) per group
         for mask, color, _label in groups:
-            idx = np.flatnonzero(mask)
-            n_total += idx.size
+            n_total += int(np.count_nonzero(mask))
             # Averaging while armed uses *every* pulse in the PSD box; otherwise
             # it averages exactly the random sample that would have been drawn.
-            subsample = not (average and self._armed)
-            if subsample and idx.size > per_group:
-                idx = self._rng.choice(idx, size=per_group, replace=False)
-                idx.sort()
+            if average and self._armed:
+                idx = np.flatnonzero(mask)
+            else:
+                # First pulses of the fixed random order that pass the mask:
+                # stable across redraws, and pulses still selected after a
+                # filter change stay on screen.
+                idx = np.sort(order[mask[order]][:per_group])
+            picked.append((idx, color))
+
+        # Skip rebuilding the panel when nothing it shows has changed (MCA /
+        # PSD bin changes, re-selecting the same region, ...).
+        key = (id(nt), tuple((hash(idx.tobytes()), color) for idx, color in picked),
+               n_total, average, self.opts.cb_traces_log.isChecked(),
+               nt.threshold_v, nt.gate_start_ns, nt.prompt_end_ns, nt.tail_end_ns,
+               self.page.amp_unit, self.page.thresh_unit)
+        if key == self.page.traces_key:
+            return
+
+        n_used = 0          # pulses actually drawn / averaged
+        draw_groups = []
+        for idx, color in picked:
             n_used += idx.size
             if average:
                 # Mean in float64 straight from the float32 store (no full copy).
@@ -1686,3 +1743,4 @@ class NeutronsController:
             nt.time_ns, draw_groups, nt.threshold_v, nt.gate_start_ns,
             nt.prompt_end_ns, nt.tail_end_ns, n_shown=n_shown, n_total=n_total,
             log_y=self.opts.cb_traces_log.isChecked(), average=average)
+        self.page.traces_key = key
