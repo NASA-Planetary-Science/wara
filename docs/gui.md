@@ -236,6 +236,16 @@ trace/binary data. For **parquet data** it is the energy PIXIE recorded for
 each event (the parquet `energy` column, in ADC channels), so the MCA matches
 the API tab; the PSD is still computed from the traces.
 
+Tick **Energy from traces** (under the PIXIE source, parquet data only) to
+ignore the recorded PIXIE energy and use each trace's `Q_total` (ADC·ns)
+instead. The switch re-analyzes the cached run without re-reading it. Use it
+when the PIXIE energy is unreliable. PIXIE stores energy in 16 bits, so a
+pulse above 65535 wraps around to a small value. Those pulses appear as a
+group of large-amplitude traces inside a narrow low-energy window. In
+2026-09-24 RUN1 ch 1 this happened to about 6 % of events. The Python
+equivalent is `NeutronTraces.from_pixie(..., recorded_energy=False)`; see
+`examples/pixie/example_pixie_energy_from_traces.py`.
+
 Only the Traces panel draws a random sample (the *Traces* count in DISPLAY).
 The sample stays the same while you drag gates, change selections or adjust
 display options. Pulses that are still selected after a filter change stay on
@@ -253,12 +263,20 @@ The **Source** option picks which files of the run **Load PIXIE run** reads
 |---|---|---|
 | Trace data | `trace-data/*.bin` | short trace snapshots (~1,000 events per channel); the only source the **CFD** on/off choice applies to |
 | Binary data (default) | `binary-data/*.bin` | the full list-mode run, the same events the API tab processes; slow to read |
-| Parquet data | `parquet-data/*-pandas.parquet` | the processed run (same events as the binary data, parquet `Trace` column); much faster to read; energy axis = recorded PIXIE energy |
+| Parquet data | `parquet-data/*-pandas.parquet` | the processed run (same events as the binary data, parquet `Trace` column); much faster to read; energy axis = recorded PIXIE energy, or `Q_total` with **Energy from traces** |
 
 Once a date and run are entered, sources with no files for that run are greyed
 out ({py:func}`wara.neutron_psd.available_pixie_sources`), and an unavailable
 pick moves to the first one that exists. Changing the source of a loaded run
 re-reads it. See `examples/pixie/example_pixie_psd_sources.py`.
+
+Traces the alignment moved by more than 10 % of their length are dropped, and
+their count is shown next to the trace count and in the run log. A pulse
+recorded at the far end of its window gets such a large shift. The samples the
+shift exposes are filled with the trace's last value, and a tail gate turns
+that fake plateau into a huge `Q_total`. In 2026-09-24 RUN1 ch 1 this affected
+19 of 84k events, one of which sat at about 1.4 × 10⁶ ADC·ns. In Python, pass
+`max_shift_frac` to `NeutronTraces.from_pixie` (`None` keeps every trace).
 
 ### PIXIE alignment
 

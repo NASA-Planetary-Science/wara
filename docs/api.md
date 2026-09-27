@@ -150,6 +150,13 @@ and re-triggers on the next `compute()`. `psd.aligned(idx)` returns traces
 shifted onto a common trigger (at `psd.trigger_ns`), and `psd.gate_times()`
 returns the gates on that axis, for plotting.
 
+**Pulses cut off by the trace window.** A pulse that triggers near an end of
+its record loses its tail (or its baseline), so its `Q_total` and PSD are
+wrong. Events whose trigger is more than 10 % of the trace length from the
+run's median trigger are therefore marked invalid; `psd.n_misaligned` counts
+them (23 of 84k in 2026-09-24 RUN 1 ch 1). Pass `max_trigger_offset_frac=None`
+to keep them.
+
 The traces are kept as one compact matrix in their native `uint16`
 ({py:func}`~wara.neutron_psd.trace_matrix`) and processed in chunks. The
 757k-event 2026-09-24 RUN 4 takes ~5 s to trigger and integrate, and ~1.6 s to
@@ -357,6 +364,26 @@ saved values until you press **Apply** there, which recomputes the PSD from the
 traces. **Apply to data** writes the `PSD` column again only after such a
 recompute: until then the saved values are already on disk and are carried
 over with the re-read run.
+
+**Energy from traces.** Runs with traces also get an **Energy from traces**
+box (below **Neutron run**). Ticked, it replaces the recorded PIXIE energy with
+each event's trace integral `Q_total` (ADC·ns, with the current PSD gates) as
+the raw energy axis. The spectrum, the energy cuts, the PSD map, calibration,
+the gain shift and **Send to spectrum** then all read it. Use it when the PIXIE
+energy is unreliable. PIXIE stores energy in 16 bits, so a pulse above 65535
+wraps around to a small value. In 2026-09-24 RUN 1 ch 1 about 6 % of events
+are affected, and they appear as large-amplitude traces at low energy.
+
+Switching the axis either way clears the calibration, the energy gain shift
+and every cut, because they were made on the other axis. So does **Apply** in
+**PSD gates...** while the box is ticked, since the gates change `Q_total`.
+Events without a usable trace (no trigger, or a pulse cut off by the trace
+window, see above) have no trace energy and drop out of the energy spectrum.
+The trace integrals are computed once and shared with **Neutron run**. A saved
+`energy_cal` column is ignored while the box is ticked, because it was fitted
+on the PIXIE energy. To keep a calibration of the trace energy, calibrate and
+then use **Apply to data**, which writes it as `energy_cal`. See
+`examples/pixie/example_api_trace_energy.py`.
 
 ```{seealso}
 `examples/pixie/example_gui_api_psd.py` drives these controls from a script:

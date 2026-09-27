@@ -664,3 +664,55 @@ def test_from_pixie_uses_recorded_energy_for_parquet():
     nt2 = npsd.NeutronTraces.from_pixie(channel=1, df=df, dt_ns=2.0, align=None,
                                         source="binary").compute()
     np.testing.assert_array_equal(nt2.energy, nt2.q_total)
+
+
+def test_energy_from_traces_bypasses_pixie_energy(neutrons):
+    """'Energy from traces' swaps the recorded PIXIE energy (which wraps past
+    16 bits) for the trace gate integral, from the cached run, parquet only."""
+    import pandas as pd
+    o = neutrons.opts
+    assert not o.cb_trace_energy.isEnabled()          # binary is the default
+    o.cmb_source.setCurrentText("Parquet data")
+    neutrons._on_source_changed()
+    assert o.cb_trace_energy.isEnabled()
+
+    tr = np.full(80, 100.0); tr[30:] = 100 + 800 * np.exp(-np.arange(50) / 10)
+    big = tr.copy(); big[30:] = 100 + 8000 * np.exp(-np.arange(50) / 10)
+    # The big pulse's energy wrapped around to a small value.
+    neutrons._pixie_df = pd.DataFrame({"channel": [1] * 3, "trace": [tr, tr, big],
+                                       "energy": [1000.0, 1000.0, 500.0]})
+    neutrons._pixie_dt, neutrons._pixie_source = 2.0, "parquet"
+    neutrons._pixie_desc = "test run"
+    o.cmb_channel.addItem("1"); o.cmb_align.setCurrentText("None")
+    neutrons._rebuild_pixie_channel()
+    np.testing.assert_array_equal(neutrons.nt.energy, [1000.0, 1000.0, 500.0])
+    assert neutrons.page.charge_unit == "ADC"
+
+    o.cb_trace_energy.setChecked(True)                 # rebuilds from the cache
+    nt = neutrons.nt
+    assert nt.recorded_energy is None
+    np.testing.assert_array_equal(nt.energy, nt.q_total)
+    assert nt.energy[2] > 5 * nt.energy[0]             # the big pulse is big again
+    assert neutrons.page.charge_unit == "ADC·ns"
+    assert neutrons._runlog_fields()[0]["Energy"] == "trace gate integral (Q_total)"
+
+
+def test_from_pixie_drops_far_shifted_traces():
+    """A pulse recorded at the end of its window gets a huge alignment shift,
+    and the exposed samples are edge-filled with the still-high last value --
+    a fake plateau that inflates Q_total. Such traces are dropped."""
+    import pandas as pd
+    n = 100
+    pulse = np.full(n, 100.0); pulse[30:] = 100 + 800 * np.exp(-np.arange(70) / 5)
+    late = np.full(n, 100.0); late[95:] = 100 + 800 * np.exp(-np.arange(5) / 5)
+    df = pd.DataFrame({"channel": [1] * 4, "trace": [pulse] * 3 + [late]})
+    from wara import helper_api
+    df = helper_api.align_traces(df, method="edge")
+    kept = npsd.NeutronTraces.from_pixie(channel=1, df=df, dt_ns=2.0, align="edge")
+    assert kept.n_traces == 3 and kept.n_misaligned == 1
+    everything = npsd.NeutronTraces.from_pixie(channel=1, df=df, dt_ns=2.0,
+                                               align="edge", max_shift_frac=None)
+    assert everything.n_traces == 4 and everything.n_misaligned == 0
+    everything.set_params(tail_end_ns=198.0); everything.compute()
+    q = everything.q_total
+    assert q[3] > 3 * q[:3].max()                      # the plateau artifact

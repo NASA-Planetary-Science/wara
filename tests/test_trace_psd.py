@@ -144,3 +144,18 @@ def test_aligned_traces_share_the_trigger_and_baseline():
     assert (al[:, k + 3] > al[:, k - 3]).all()
     assert np.abs(al[:, :50].mean(axis=1)).max() < 1.0   # baseline removed
 
+
+
+def test_far_off_trigger_is_rejected():
+    """A pulse near the end of its record has its tail cut off, so its Q_total
+    and PSD are wrong: events whose trigger is >10 % of the trace length from
+    the run's median trigger are marked invalid."""
+    mat, _ = make_matrix()
+    late = np.round(pulse(start=480.0, tau=25.0)).astype(np.uint16)
+    mat = np.vstack([mat, late])
+    p = npsd.TracePSD(mat, DT_NS).compute()
+    assert p.n_misaligned == 1
+    assert not p.valid[-1] and np.isnan(p.q_total[-1]) and np.isnan(p.psd[-1])
+    assert p.valid[:-1].all()
+    keep = npsd.TracePSD(mat, DT_NS, max_trigger_offset_frac=None).compute()
+    assert keep.valid[-1] and keep.n_misaligned == 0

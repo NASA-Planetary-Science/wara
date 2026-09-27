@@ -19,7 +19,6 @@ from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
 from matplotlib.backends.backend_qt5agg import NavigationToolbar2QT as NavToolbar
 from matplotlib.colors import LogNorm, Normalize
 from matplotlib.figure import Figure
-from matplotlib.patches import Patch
 from PyQt5.QtCore import QSize, Qt
 from PyQt5.QtWidgets import (
     QCheckBox, QDialog, QHBoxLayout, QLabel, QLineEdit, QPushButton,
@@ -106,15 +105,6 @@ def draw_psd_panel(ax, energy, psd, bins, erange, view, xlabel, ghost=None):
     else:
         ax.text(0.5, 0.5, "No pulses with a valid PSD", transform=ax.transAxes,
                 ha="center", va="center", color=T.TEXT_DIM, fontsize=12)
-    if ghost is not None:
-        leg = ax.legend(handles=[Patch(color=T.TEXT_DIM, label="uncut"),
-                                 Patch(color=colormaps[PSD_CMAP](0.8),
-                                       label="cut")],
-                        # Below the bands: high energy, low PSD stays empty.
-                        loc="lower right", fontsize=12, facecolor=API_PLOT_BG,
-                        edgecolor=T.BORDER)
-        for txt in leg.get_texts():
-            txt.set_color(T.TEXT_PRIMARY)
     ax.set_xlim(*erange)
     ax.set_ylim(*view)
     ax.set_xlabel(xlabel)

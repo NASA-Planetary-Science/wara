@@ -2441,8 +2441,7 @@ def test_psd_panel_draws_grey_ghost_behind_cut(qapp, monkeypatch):
         assert len(meshes) == 2
         assert meshes[0].get_cmap() is api_mod.GRAY_CMAP  # ghost underneath
         assert meshes[0].get_zorder() < meshes[1].get_zorder()
-        labels = [t.get_text() for t in c.page.ax_psd.get_legend().get_texts()]
-        assert labels == ["uncut", "cut"]
+        assert c.page.ax_psd.get_legend() is None      # no cut/uncut legend
         # Another cut keeps the ghost (the other band stays visible in grey).
         c.apply_t_filter(-100, 100)
         assert len(c.page.ax_psd.collections) == 2
@@ -2544,5 +2543,57 @@ def test_psd_column_without_traces_still_offers_the_panel(qapp, monkeypatch):
         np.testing.assert_allclose(c.df_current["psd"], df["PSD"])
         c.apply_psd_filter(-1e9, 1e9, 0.4, 0.6)
         assert (c.df_current["psd"] > 0.4).all()
+    finally:
+        w.close()
+
+
+def test_energy_from_traces_switches_the_energy_axis(qapp, monkeypatch):
+    """'Energy from traces' makes the trace integral the raw channel axis,
+    clearing calibration and cuts made on the recorded PIXIE energy; the
+    Neutron-run PSD then reuses the same computation."""
+    w, c = _psd_ctrl(qapp, monkeypatch, _traced_events())
+    try:
+        c._load()
+        o = c.opts
+        assert not o.cb_trace_energy.isHidden()
+        pixie_base = c._chan_base
+        c.apply_calibration([0.0, 2.0], "keV")
+        assert c.ekey == "energy_cal"
+
+        o.cb_trace_energy.setChecked(True)
+        assert c._chan_base == c.ekey == "energy_trace"
+        assert c.e_units is None and "energy_cal" not in c.df_api.columns
+        p = c._tpsd
+        e = c.df_api["energy_trace"].to_numpy()
+        np.testing.assert_array_equal(e[p.valid], p.q_total[p.valid])
+        assert "energy_trace" in c.df_current.columns
+
+        calls, compute = [], p.compute
+        monkeypatch.setattr(p, "compute", lambda: calls.append(1) or p)
+        o.cb_psd.setChecked(True)                      # reuses the Q_total run
+        assert "psd" in c.df_api.columns and not calls
+        monkeypatch.setattr(p, "compute", compute)
+
+        # A shorter tail gate shrinks Q_total, and the energy axis follows.
+        c.apply_psd_gates(p.pre_ns, p.prompt_ns, 40.0, p.threshold)
+        e2 = c.df_api["energy_trace"].to_numpy()
+        assert c._chan_base == "energy_trace"
+        assert np.nanmedian(e2) < np.nanmedian(e)
+
+        o.cb_psd.setChecked(False)
+        o.cb_trace_energy.setChecked(False)
+        assert c._chan_base == pixie_base
+        assert "energy_trace" not in c.df_api.columns
+    finally:
+        w.close()
+
+
+def test_energy_from_traces_hidden_without_traces(qapp, monkeypatch):
+    w, c = _psd_ctrl(qapp, monkeypatch, _traced_events(empty=True))
+    try:
+        c._load()
+        assert c.opts.cb_trace_energy.isHidden()
+        c.opts.cb_trace_energy.setChecked(True)        # no-op without traces
+        assert c._chan_base != "energy_trace"
     finally:
         w.close()

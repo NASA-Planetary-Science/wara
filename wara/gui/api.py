@@ -443,6 +443,17 @@ class ApiOptions(QScrollArea):
             "Only available when the loaded channel recorded a trace per event.")
         self.cb_psd.setVisible(False)
         lay.addWidget(self.cb_psd)
+        self.cb_trace_energy = QCheckBox("Energy from traces")
+        self.cb_trace_energy.setToolTip(
+            "Ignore the energy PIXIE recorded and use each event's trace "
+            "integral (Q_total, ADC·ns, with the PSD gates) as the energy axis.\n"
+            "Useful when the PIXIE energy is unreliable: PIXIE stores energy in "
+            "16 bits, so pulses above 65535 wrap around to a low value.\n"
+            "Switching clears the calibration, gain shift and cuts (they belong "
+            "to the other axis). Events without a usable trace have no energy.\n"
+            "Only available when the loaded channel recorded a trace per event.")
+        self.cb_trace_energy.setVisible(False)
+        lay.addWidget(self.cb_trace_energy)
         self.btn_psd_gates = QPushButton("PSD gates...")
         self.btn_psd_gates.setObjectName("primary_btn")
         self.btn_psd_gates.setCursor(Qt.PointingHandCursor)
@@ -843,6 +854,7 @@ class ApiController:
         o.cb_ghost.toggled.connect(self._toggle_ghost)
         o.cb_alpha.toggled.connect(self._toggle_alpha_panel)
         o.cb_psd.toggled.connect(self._toggle_psd_panel)
+        o.cb_trace_energy.toggled.connect(self._toggle_trace_energy)
         o.btn_psd_gates.clicked.connect(self._open_psd_gates)
         o.ed_vmax.returnPressed.connect(self._apply_vmax)
         for ed in (o.ed_ebins, o.ed_tbins, o.ed_xybins, o.ed_abins, o.ed_pbins):
@@ -958,6 +970,11 @@ class ApiController:
             # _configure_keys.
             df["dt"] *= 1e9  # s → ns
         df = self._extract_traces(df, date, runnr, ch)
+        if (self._tpsd is not None and self.opts.cb_trace_energy.isChecked()
+                and "energy_cal" in df.columns):
+            # A saved calibration was fitted on the recorded PIXIE energy; with
+            # "Energy from traces" on it no longer matches the axis.
+            df = df.drop(columns=["energy_cal"])
 
         self.df_api = df
         self.df_current = df.copy()
@@ -1088,10 +1105,14 @@ class ApiController:
             self.arange = [0.0, float(df[self.akey].max())]
         self._sync_alpha_controls()
         self._sync_psd_controls()
+        self._sync_trace_energy_controls()
 
-        # Channel base: raw channels (energy_orig) take priority over an already
+        # Channel base: the trace integral when "Energy from traces" is on, else
+        # raw channels (energy_orig), which take priority over an already
         # physical energy axis (energy). _native_units flags which it is.
-        if "energy_orig" in df.columns:
+        if self._trace_energy_active and "energy_trace" in df.columns:
+            self._chan_base, self._native_units = "energy_trace", None
+        elif "energy_orig" in df.columns:
             self._chan_base, self._native_units = "energy_orig", None
         elif "energy" in df.columns:
             self._chan_base, self._native_units = "energy", "MeV"
@@ -1518,6 +1539,76 @@ class ApiController:
             else:
                 dlg.close()
 
+    # -- energy from traces ------------------------------------------------------
+    @property
+    def _trace_energy_active(self):
+        """True when the energy axis is the trace integral ("Energy from
+        traces" ticked on a run whose channel recorded traces)."""
+        return (not self.flat_field and self._tpsd is not None
+                and self.opts.cb_trace_energy.isChecked())
+
+    def _sync_trace_energy_controls(self):
+        """Show "Energy from traces" only for runs with traces. When it is
+        ticked, make sure the ``energy_trace`` column exists, computing the
+        trace integrals once (a new run loaded with the box on lands here)."""
+        self.opts.cb_trace_energy.setVisible(
+            not self.flat_field and self._tpsd is not None)
+        if self._trace_energy_active and "energy_trace" not in self.df_api.columns:
+            if self._tpsd.q_total is None:
+                self._run_psd_compute()
+            self._write_trace_energy()
+
+    def _write_trace_energy(self):
+        """Copy each event's trace integral (Q_total, NaN where the trace is
+        unusable) into the ``energy_trace`` column of every live frame."""
+        p = self._tpsd
+        self._write_evt_column("energy_trace",
+                               np.where(p.valid, p.q_total, np.nan))
+
+    def _clear_energy_axis_state(self):
+        """Drop the calibration and energy gain shift: both were built on the
+        previous energy axis."""
+        if self.df_api is not None:
+            drop = [c for c in ("energy_cal", "energy_drift")
+                    if c in self.df_api.columns]
+            self.df_api = self.df_api.drop(columns=drop)
+        self._cal_coeffs = None
+        self.e_units = None
+        self.opts.lbl_cal.setText("Uncalibrated (channels)")
+        self.opts.btn_clear_cal.setEnabled(False)
+        self._egain_applied = False
+        self._egain_label = ""
+        self._refresh_shift_labels()
+
+    def _clear_all_cuts(self):
+        self._cut_energy = self._cut_time = self._cut_xy = None
+        self._cut_alpha = self._cut_psd = None
+        self._undo_state = None
+        self.opts.btn_undo.setEnabled(False)
+
+    def _toggle_trace_energy(self, checked):
+        """Switch the energy axis between the recorded PIXIE energy and the
+        trace integral. Calibration, gain shift and cuts belong to the old
+        axis, so they are cleared and the view is rebuilt (reset-style)."""
+        if self.df_api is None or self.flat_field or self._tpsd is None:
+            return
+        self._clear_energy_axis_state()
+        if not checked and "energy_trace" in self.df_api.columns:
+            # Dropped rather than kept: a later gate change would leave it stale.
+            self.df_api = self.df_api.drop(columns=["energy_trace"])
+        self._clear_all_cuts()
+        self._rebuild_from_master()
+        if not checked:
+            self._status("Energy axis: recorded PIXIE energy")
+            return
+        p = self._tpsd
+        msg = (f"Energy axis: trace integral Q_total (ADC·ns)  ·  "
+               f"{int(p.valid.sum()):,} of {p.n_events:,} events have one")
+        if p.n_misaligned:
+            msg += (f"  ·  {p.n_misaligned:,} rejected (trigger far from the "
+                    "run's median: pulse cut off by the trace window)")
+        self._status(msg)
+
     def _psd_detector_label(self):
         """Gate summary for the options panel and the gates window."""
         det = self._psd_detector or f"ch {self._src_ch}"
@@ -1558,7 +1649,8 @@ class ApiController:
             self._status(f"PSD read from the run's PSD column  ·  {n:,} of "
                          f"{self._saved_psd.size:,} events valid")
         elif self._tpsd is not None:
-            self._compute_psd()
+            # "Energy from traces" may already have run the computation.
+            self._compute_psd(recompute=self._tpsd.psd is None)
 
     def _run_psd_compute(self):
         """Run the (possibly slow) TracePSD computation behind a busy cursor."""
@@ -1571,10 +1663,12 @@ class ApiController:
         finally:
             QApplication.restoreOverrideCursor()
 
-    def _compute_psd(self):
+    def _compute_psd(self, recompute=True):
         """(Re)compute the PSD of every event from the traces and write it
-        into the frames (replacing a saved PSD column's values)."""
-        self._run_psd_compute()
+        into the frames (replacing a saved PSD column's values). *recompute*
+        False reuses the TracePSD results already there."""
+        if recompute:
+            self._run_psd_compute()
         p = self._tpsd
         self._psd_from_column = False
         self._set_psd(np.where(p.valid, p.psd, np.nan))
@@ -1592,6 +1686,11 @@ class ApiController:
         """Copy the per-event PSD into every live frame (master, working,
         previous, uncut and the ← Back snapshot) through its ``_evt`` rows, so
         cuts made before the PSD existed keep working."""
+        self._write_evt_column("psd", psd)
+
+    def _write_evt_column(self, name, values):
+        """Copy a per-event array (one value per df_api row) into column *name*
+        of every live frame through its ``_evt`` rows."""
         frames = [self.df_api, self.df_current, self.df_previous, self._df_uncut]
         if self._undo_state is not None:
             frames += list(self._undo_state[:2])
@@ -1600,7 +1699,7 @@ class ApiController:
             if df is None or id(df) in seen or "_evt" not in df.columns:
                 continue
             seen.add(id(df))
-            df["psd"] = psd[df["_evt"].to_numpy()]
+            df[name] = values[df["_evt"].to_numpy()]
 
     def _plot_psd(self, df):
         """Draw the PSD-vs-energy map on its panel (no-op without one). The
@@ -1688,11 +1787,18 @@ class ApiController:
         self._psd_gates_src = "tuned this session"
         self._compute_psd()
         self.opts.lbl_psd.setText(self._psd_detector_label())
+        if self._trace_energy_active:
+            # Q_total -- the energy axis -- moved with the gates: cuts and any
+            # calibration made on the old values no longer apply.
+            self._write_trace_energy()
+            self._clear_energy_axis_state()
+            self._clear_all_cuts()
+            self._rebuild_from_master()
+            self._status("PSD and trace energy recomputed with the new gates  "
+                         "-- cuts, calibration and gain shift were cleared")
+            return
         if self._cut_psd is not None:
-            self._cut_energy = self._cut_time = self._cut_xy = None
-            self._cut_alpha = self._cut_psd = None
-            self._undo_state = None
-            self.opts.btn_undo.setEnabled(False)
+            self._clear_all_cuts()
             self._rebuild_from_master()
             self._status("PSD recomputed with the new gates  -- the PSD cut "
                          "used the old values, so all cuts were cleared")

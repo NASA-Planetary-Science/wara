@@ -349,12 +349,19 @@ class TracePSD:
     Row *i* of *traces* is event *i*; results (``psd``, ``q_total``,
     ``trigger``, ``valid``) are per-event arrays in that order. *has_trace*
     flags the rows that hold a real trace (see :func:`trace_matrix`).
+
+    *max_trigger_offset_frac* marks invalid the events whose trigger lies
+    further than that fraction of the trace length from the run's median
+    trigger (``None`` keeps them). Such a pulse sits near an end of its record,
+    so its tail (or baseline) is cut off and its Q_total and PSD are wrong. The
+    number rejected is kept in ``n_misaligned``.
     """
 
     def __init__(self, traces, dt_ns, has_trace=None,
                  threshold=DEFAULT_FF_THRESHOLD, rise=5, gap=2,
                  pre_ns=DEFAULT_PRE_NS, prompt_ns=DEFAULT_PROMPT_NS,
-                 tail_ns=DEFAULT_TAIL_NS, chunk=10000):
+                 tail_ns=DEFAULT_TAIL_NS, chunk=10000,
+                 max_trigger_offset_frac=0.1):
         self.traces = np.asarray(traces)
         if self.traces.ndim != 2:
             raise ValueError("traces must be a 2-D (event × sample) matrix")
@@ -367,8 +374,10 @@ class TracePSD:
         self.pre_ns, self.prompt_ns = float(pre_ns), float(prompt_ns)
         self.tail_ns = None if tail_ns is None else float(tail_ns)
         self.chunk = int(chunk)
+        self.max_trigger_offset_frac = max_trigger_offset_frac
         self.trigger = None     # per-event trigger (samples), cached
         self.psd = self.q_total = self.valid = None
+        self.n_misaligned = 0   # events rejected for a far-off trigger
 
     @classmethod
     def from_column(cls, column, dt_ns, **kwargs):
@@ -420,6 +429,14 @@ class TracePSD:
             psd[sl], q[sl], valid[sl] = triggered_psd(
                 self.traces[sl], self.dt_ns, self.trigger[sl],
                 self.pre_ns, self.prompt_ns, self.tail_ns)
+        self.n_misaligned = 0
+        frac = self.max_trigger_offset_frac
+        if frac is not None and np.isfinite(self.trigger).any():
+            off = np.abs(self.trigger - np.nanmedian(self.trigger))
+            far = valid & (off > frac * self.n_samples)
+            self.n_misaligned = int(far.sum())
+            valid &= ~far
+            psd[far] = q[far] = np.nan
         self.psd, self.q_total, self.valid = psd, q, valid
         return self
 
@@ -760,6 +777,7 @@ class NeutronTraces:
         self.mean = (self.sign * np.asarray(mean, dtype=float)
                      if mean is not None else self.traces.mean(axis=0))
         self.n_traces = self.traces.shape[0]
+        self.n_misaligned = 0   # traces from_pixie dropped for a far alignment shift
         # Per-pulse energy recorded by the digitizer (e.g. the PIXIE energy in a
         # parquet run). When set it is used as the energy axis instead of the
         # gate integral Q_total; the PSD still comes from the traces.
@@ -804,7 +822,7 @@ class NeutronTraces:
     @classmethod
     def from_pixie(cls, date=None, runnr=None, channel=None, cfd="on",
                    align="fast", df=None, dt_ns=None, source="binary",
-                   recorded_energy=None):
+                   recorded_energy=None, max_shift_frac=0.1):
         """Build a PSD dataset from PIXIE-16 list-mode traces.
 
         *source* picks what is read: ``"binary"`` (default) is the full
@@ -823,6 +841,13 @@ class NeutronTraces:
         *recorded_energy* uses the run's ``energy`` column (the digitizer's own
         energy, in ADC channels) as the energy axis instead of the trace gate
         integral. ``None`` (default) turns it on for ``source="parquet"`` only.
+
+        *max_shift_frac* drops traces the alignment moved by more than that
+        fraction of the trace length (``None`` keeps them). A pulse recorded at
+        the far end of its window is shifted a long way, and the samples the
+        shift exposes are filled with the trace's edge value -- a fake plateau
+        that a tail gate integrates into a huge, bogus Q_total. The number
+        dropped is kept in ``n_misaligned``.
 
         Pass a pre-read *df* (and *dt_ns*) to rebuild for a different *channel*
         without re-reading the run from disk.
@@ -849,6 +874,17 @@ class NeutronTraces:
 
         modal = int(lengths.mode().iloc[0])
         df = df[lengths == modal]
+        n_misaligned = 0
+        if (align is not None and max_shift_frac is not None
+                and "align_shift" in df.columns):
+            far = df["align_shift"].abs().to_numpy() > max_shift_frac * modal
+            n_misaligned = int(far.sum())
+            df = df[~far]
+            if df.shape[0] == 0:
+                raise ValueError(
+                    f"Every trace of run {runnr}, channel {channel} was shifted "
+                    f"more than {max_shift_frac:.0%} of its length by the "
+                    f"{align!r} alignment")
         traces = np.stack([np.asarray(t, dtype=np.float32) for t in df["trace"]])
         time_ns = np.arange(modal, dtype=float) * float(dt_ns)
         if recorded_energy is None:
@@ -863,7 +899,9 @@ class NeutronTraces:
         # sit above the auto-pre-trigger's 20%-of-peak rise test and break it.
         npre = max(int(round(0.1 * modal)), 5)
         mean_ref = (traces - traces[:, :npre].mean(axis=1, keepdims=True)).mean(axis=0)
-        return cls(time_ns, traces, mean=mean_ref, recorded_energy=energy)
+        nt = cls(time_ns, traces, mean=mean_ref, recorded_energy=energy)
+        nt.n_misaligned = n_misaligned
+        return nt
 
     def set_params(self, *, threshold_v=None, gate_start_ns=None,
                    prompt_end_ns=None, tail_end_ns=None):

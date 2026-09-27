@@ -602,6 +602,16 @@ class NeutronsOptions(QScrollArea):
             "binary and parquet data have a single acquisition.")
         self.cmb_cfd.setEnabled(False)          # binary data is the default source
         r, _ = labeled_row("CFD", self.cmb_cfd); lay.addWidget(r)
+        self.cb_trace_energy = QCheckBox("Energy from traces")
+        self.cb_trace_energy.setToolTip(
+            "Ignore the energy PIXIE recorded and use each trace's own gate "
+            "integral (Q_total, ADC·ns) as the energy axis instead.\n"
+            "Useful when the PIXIE energy is unreliable: PIXIE stores energy in "
+            "16 bits, so pulses above 65535 wrap around to a low value and show "
+            "up as large-amplitude traces at low energy.\n"
+            "Parquet data only — trace and binary data always use Q_total.")
+        self.cb_trace_energy.setEnabled(False)  # binary data is the default source
+        lay.addWidget(self.cb_trace_energy)
 
         self.btn_load_pixie = QPushButton("Load PIXIE run")
         self.btn_load_pixie.setObjectName("open_btn")
@@ -625,7 +635,8 @@ class NeutronsOptions(QScrollArea):
             "• Q_prompt = ∫ gate start → prompt end\n"
             "• Q_total = ∫ gate start → tail end\n"
             "• PSD = 1 − Q_prompt / Q_total\n"
-            "• Energy = Q_total, or the recorded PIXIE energy for parquet data")
+            "• Energy = Q_total, or the recorded PIXIE energy for parquet data "
+            "(unless 'Energy from traces' is ticked)")
         hint.setObjectName("stat_key"); hint.setWordWrap(True)
         lay.addWidget(hint)
         self.row_thresh, self.lbl_thresh = stat_row("Threshold", T.ACCENT_RED)
@@ -1041,6 +1052,8 @@ class NeutronsController:
         self.opts.cmb_align.activated.connect(lambda *_: self._rebuild_pixie_channel())
         self.opts.cmb_cfd.activated.connect(lambda *_: self._reload_pixie_cfd())
         self.opts.cmb_source.activated.connect(lambda *_: self._on_source_changed())
+        # Energy choice re-derives from the cached run (no disk re-read).
+        self.opts.cb_trace_energy.toggled.connect(lambda *_: self._rebuild_pixie_channel())
         self.opts.ed_date.editingFinished.connect(self._refresh_sources)
         self.opts.ed_run.editingFinished.connect(self._refresh_sources)
         self.opts.btn_pixie_stats.clicked.connect(self._show_pixie_stats)
@@ -1156,10 +1169,6 @@ class NeutronsController:
         self._pixie_desc = (f"{date} run {runnr} · {align or 'no'} align · "
                             + (f"trace data · CFD {cfd}" if source == "trace"
                                else f"{source} data"))
-        # PIXIE traces are raw ADC, not volts. Parquet runs take their energy
-        # from the recorded PIXIE energy (ADC channels), not the gate integral.
-        self._set_page_units("ADC", "ADC" if source == "parquet" else "ADC·ns",
-                             1.0, "ADC")
         self.opts.btn_pixie_stats.setEnabled(True)
 
         # Populate the channel combo (keep the current pick if still present).
@@ -1179,8 +1188,15 @@ class NeutronsController:
         """CFD only applies to the trace data; re-read a loaded run."""
         trace = self.opts.SOURCES.get(self.opts.cmb_source.currentText()) == "trace"
         self.opts.cmb_cfd.setEnabled(trace)
+        self._sync_trace_energy()
         if self._pixie_df is not None:
             self._load_pixie()
+
+    def _sync_trace_energy(self):
+        """'Energy from traces' only matters for parquet data (the other
+        sources have no recorded energy to bypass)."""
+        parquet = self.opts.SOURCES.get(self.opts.cmb_source.currentText()) == "parquet"
+        self.opts.cb_trace_energy.setEnabled(parquet)
 
     def _refresh_sources(self):
         """Grey out the sources with no files for the entered date / run, and
@@ -1203,6 +1219,7 @@ class NeutronsController:
             first = next(lb for lb, src in self.opts.SOURCES.items() if src in avail)
             cb.setCurrentText(first)
             self.opts.cmb_cfd.setEnabled(self.opts.SOURCES[first] == "trace")
+            self._sync_trace_energy()
         if avail is not None and not avail:
             self._status("No PIXIE data found for that date / run")
 
@@ -1223,10 +1240,15 @@ class NeutronsController:
         txt = self.opts.cmb_channel.currentText()
         channel = int(txt) if txt else None
         align = self._ALIGN_MAP.get(self.opts.cmb_align.currentText(), "fast")
+        # Only parquet runs carry a recorded PIXIE energy worth using; the
+        # checkbox swaps it for the trace gate integral.
+        recorded = (self._pixie_source == "parquet"
+                    and not self.opts.cb_trace_energy.isChecked())
         try:
             nt = NeutronTraces.from_pixie(
                 channel=channel, align=align, df=self._pixie_df,
-                dt_ns=self._pixie_dt, source=self._pixie_source)
+                dt_ns=self._pixie_dt, source=self._pixie_source,
+                recorded_energy=recorded)
             nt.compute()
         except Exception as exc:  # noqa: BLE001
             self.nt = None
@@ -1234,6 +1256,9 @@ class NeutronsController:
             self._status(f"Failed: {exc}")
             return
         self.nt = nt
+        # PIXIE traces are raw ADC, not volts. The recorded PIXIE energy is in
+        # ADC channels; the trace gate integral in ADC·ns.
+        self._set_page_units("ADC", "ADC" if recorded else "ADC·ns", 1.0, "ADC")
         self._energy_range = (None, None)
         self._psd_region = None
         self._psd_selections = []
@@ -1243,10 +1268,13 @@ class NeutronsController:
         if self.opts.btn_fom.isChecked():
             self.opts.btn_fom.setChecked(False)
         self._clear_fom()
+        dropped = (f" · {nt.n_misaligned:,} dropped (misaligned)"
+                   if nt.n_misaligned else "")
         self.opts.lbl_file.setText(
-            f"PIXIE {self._pixie_desc} · ch {channel}\n{nt.n_traces:,} traces")
+            f"PIXIE {self._pixie_desc} · ch {channel}\n{nt.n_traces:,} traces"
+            + dropped)
         self._redraw()
-        self._status(f"Loaded {nt.n_traces:,} PIXIE traces (ch {channel}) — "
+        self._status(f"Loaded {nt.n_traces:,} PIXIE traces (ch {channel}){dropped} — "
                      "adjust the gate markers to compute the PSD and MCA")
 
     def _show_pixie_stats(self):
@@ -1308,6 +1336,8 @@ class NeutronsController:
                  "Gate start / prompt end / tail end (ns)":
                      f"{nt.gate_start_ns:.4g} / {nt.prompt_end_ns:.4g} / "
                      f"{nt.tail_end_ns:.4g}"}
+        if nt.n_misaligned:
+            stats["Dropped (alignment shift > 10% of trace)"] = f"{nt.n_misaligned:,}"
         stats.update(folder_stats)
         if nt.valid is not None:
             n_valid = int(nt.valid.sum())
