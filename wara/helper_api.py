@@ -420,8 +420,8 @@ def align_traces(df, method="edge", fraction=0.5, ref=None,
         warnings.warn("align_traces: no traces to align.", stacklevel=2)
         return df
 
-    trace_col = df["trace"].to_numpy(dtype=object)
-    shift_col = df["align_shift"].to_numpy()
+    trace_col = df["trace"].to_numpy(dtype=object, copy=True)
+    shift_col = df["align_shift"].to_numpy(copy=True)  # CoW (pandas 3) views are read-only
     for n in groups:
         idx = np.flatnonzero(lengths == n)
         T = np.stack([np.asarray(t, dtype=float) for t in trace_col[idx]])
