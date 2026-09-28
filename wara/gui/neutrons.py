@@ -186,8 +186,8 @@ class NeutronsPage(QWidget):
         ax.xaxis.label.set_fontsize(10); ax.yaxis.label.set_fontsize(10)
         if ax.get_title():
             ax.title.set_color(T.TEXT_PRIMARY); ax.title.set_fontsize(11)
-        for sp in ax.spines.values():
-            sp.set_color(T.BORDER)
+        for spine in ax.spines.values():
+            spine.set_color(T.BORDER)
         if grid:
             ax.grid(True, color=T.GRID, linewidth=0.6, alpha=0.5)
         leg = ax.get_legend()

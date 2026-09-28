@@ -19,7 +19,7 @@ import pytest
 from wara import neutron_psd as npsd
 
 pytest.importorskip("PyQt5")
-from PyQt5.QtWidgets import QApplication, QMainWindow
+from PyQt5.QtWidgets import QApplication
 
 from wara.gui.app import WaraApp
 
@@ -189,7 +189,6 @@ def test_load_defers_mca_psd_until_first_selection(qapp):
 
 
 def test_redraw_reports_counts(neutrons):
-    nt = neutrons.nt
     assert "of" in neutrons.opts.lbl_sel.text()
     assert neutrons.opts.lbl_gate.text().endswith("ns")
 
