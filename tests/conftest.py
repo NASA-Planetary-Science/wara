@@ -57,6 +57,56 @@ def pytest_collection_finish(session):
         _warm_process_caches()
 
 
+#: Tests between the manual garbage collections of :func:`_gc_between_tests`.
+GC_EVERY = 10
+_tests_since_gc = 0
+
+
+@pytest.fixture(autouse=True)
+def _gc_between_tests():
+    """Run Python's cyclic GC only between tests, never inside one.
+
+    A GUI test's ``WaraApp`` and its controllers reference each other
+    (``WaraApp.api`` <-> ``controller.app``), so a finished test's window is
+    freed by the cyclic GC, whenever some allocation happens to trigger it.
+    Some of those allocations come from PyQt wrapping a Qt event in the middle
+    of another window's ``show()``; the GC then destroyed hundreds of stale C++
+    widgets inside Qt's own call. That is undefined behaviour, and it
+    intermittently aborted CI (exit 134 on macOS, silently on Windows) in
+    ``test_apply_to_data_writes_psd_column_and_reads_it_back``.
+
+    So automatic collection is off while a test runs, and old windows are
+    freed here, at a safe point, every ``GC_EVERY`` tests (a collection after
+    every test would add ~30 s to the suite). Explicit ``gc.collect()`` calls
+    inside tests still work. (Deleting the windows directly -- ``sip.delete``
+    or ``deleteLater`` -- is not an option: it leaves their Python side
+    rooted, so the heap and the GC's pauses grow for the rest of the session.)
+    """
+    import gc
+    import sys
+    global _tests_since_gc
+    was_enabled = gc.isenabled()
+    gc.disable()
+    try:
+        yield
+    finally:
+        # Tests never run an event loop, so Qt's posted events (layout and
+        # repaint requests, matplotlib's draw_idle, ...) are never processed
+        # and the queue only grows -- and every widget the GC destroys scans
+        # it, which made the collections below take ~1 s late in the suite.
+        # Drop them.
+        if "PyQt5.QtCore" in sys.modules:
+            from PyQt5.QtCore import QCoreApplication
+            if QCoreApplication.instance() is not None:
+                QCoreApplication.removePostedEvents(None)
+        _tests_since_gc += 1
+        if _tests_since_gc >= GC_EVERY:
+            _tests_since_gc = 0
+            gc.collect()
+        if was_enabled:
+            gc.enable()
+
+
 @pytest.fixture(autouse=True)
 def _close_matplotlib_figures():
     """Close any figures a test leaves behind.
