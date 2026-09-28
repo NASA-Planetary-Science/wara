@@ -216,6 +216,36 @@ def test_psd_box_and_span_and_together(neutrons):
     assert after_both <= after_span
 
 
+def test_cuts_keep_the_user_zoom(neutrons):
+    """A PSD/MCA cut redraws every panel but keeps any view the user zoomed
+    to; Home still returns to the full drawn view."""
+    nt = neutrons.nt
+    page = neutrons.page
+    page.ax_traces.set_xlim(10.0, 60.0); page.ax_traces.set_ylim(0.0, 0.05)
+    page.ax_psd.set_ylim(0.1, 0.3)
+    e = nt.energy[nt.valid]; p = nt.psd[nt.valid]
+    neutrons._on_psd_region((float(np.percentile(e, 30)), float(np.percentile(e, 70)),
+                             float(np.percentile(p, 50)), float(np.percentile(p, 99))))
+    assert np.allclose(page.ax_traces.get_xlim(), (10.0, 60.0))
+    assert np.allclose(page.ax_traces.get_ylim(), (0.0, 0.05))
+    assert np.allclose(page.ax_psd.get_ylim(), (0.1, 0.3))
+    # The un-zoomed MCA panel keeps following the data.
+    assert page.capture_zoom(("mca",)) == {}
+    page.toolbar.home()
+    assert np.allclose(page.ax_traces.get_xlim(), (nt.time_ns[0], nt.time_ns[-1]))
+
+
+def test_gate_drag_keeps_only_the_traces_zoom(neutrons):
+    nt = neutrons.nt
+    page = neutrons.page
+    page.ax_traces.set_xlim(10.0, 60.0)
+    page.ax_psd.set_ylim(0.1, 0.3)
+    neutrons._on_params(nt.threshold_v, nt.gate_start_ns, nt.prompt_end_ns + 5.0,
+                        nt.tail_end_ns)
+    assert np.allclose(page.ax_traces.get_xlim(), (10.0, 60.0))
+    assert not np.allclose(page.ax_psd.get_ylim(), (0.1, 0.3))
+
+
 def test_marker_drag_recomputes(neutrons):
     nt = neutrons.nt
     before = nt.psd.copy()

@@ -101,6 +101,11 @@ class NeutronsPage(QWidget):
         # controller); lets it skip rebuilding ~hundreds of lines when an
         # action leaves the traces unchanged. None forces a redraw.
         self.traces_key = None
+        # Per panel, the view each draw_* call produced ("traces"/"mca"/"psd"
+        # -> (ax, xlim, ylim, xscale, yscale)). A panel whose limits differ from
+        # this was zoomed/panned by the user, and that view is kept across
+        # redraws (see capture_zoom / finish_draw).
+        self._home_views = {}
 
         # Axis / marker units, overridden per data source (V for PicoScope,
         # ADC for PIXIE). ``thresh_scale`` scales the stored threshold for its
@@ -154,11 +159,14 @@ class NeutronsPage(QWidget):
             ax.set_xticks([]); ax.set_yticks([])
             ax.set_title(sub)
             self._style(ax, grid=False)
+        self._home_views.pop("mca", None)
+        self._home_views.pop("psd", None)
 
     def show_empty(self, msg="Load a trace file (.npz, .npy, .txt, .csv) to begin"):
         self._detach_selectors()
         self._marker_lines = {}
         self.traces_key = None
+        self._home_views = {}
         self._build_axes()
         for ax in (self.ax_mca, self.ax_psd):
             ax.set_xticks([]); ax.set_yticks([])
@@ -264,6 +272,7 @@ class NeutronsPage(QWidget):
         ax.set_yscale("log" if log_y else "linear")
         ax.legend(loc="upper right", fontsize=8, ncol=2)
         self._style(ax)
+        self._record_home("traces", ax)
 
     # -- drawing: MCA panel ----------------------------------------------------
     def draw_mca(self, energy_all, overlays, bins, energy_range, log_y=True):
@@ -293,6 +302,7 @@ class NeutronsPage(QWidget):
         if ax.get_legend_handles_labels()[0]:
             ax.legend(loc="upper right", fontsize=8, ncol=2)
         self._style(ax)
+        self._record_home("mca", ax)
         self._attach_span()
 
     # -- drawing: PSD panel ----------------------------------------------------
@@ -357,17 +367,73 @@ class NeutronsPage(QWidget):
             title = "PSD vs. energy — drag a box to select"
         ax.set_title(title)
         self._style(ax, grid=False)
+        self._record_home("psd", ax)
         self._attach_rect()
 
-    def finish_draw(self):
-        # Reset the navigation toolbar's zoom/pan history so the freshly drawn
-        # view becomes the new 'Home'. Without this, after a selection redraws a
-        # panel with a new axis range, pressing Home restores the stale pre-
-        # selection limits and squashes/cuts off the filtered traces.
+    # -- zoom preservation -----------------------------------------------------
+    def _axes_by_name(self):
+        return {"traces": self.ax_traces, "mca": self.ax_mca, "psd": self.ax_psd}
+
+    def _record_home(self, name, ax):
+        """Remember the view a draw_* call just produced for panel *name*."""
+        self._home_views[name] = (ax, ax.get_xlim(), ax.get_ylim(),
+                                  ax.get_xscale(), ax.get_yscale())
+
+    def capture_zoom(self, panels=("traces", "mca", "psd")):
+        """Return ``{name: (xlim, ylim, xscale, yscale)}`` for each of *panels*
+        the user has zoomed or panned away from its drawn view.
+
+        Pass the result to :meth:`finish_draw` after redrawing so a selection
+        (cut) does not throw the user's zoom away."""
+        zoom = {}
+        axes = self._axes_by_name()
+        for name in panels:
+            home = self._home_views.get(name)
+            ax = axes.get(name)
+            if home is None or ax is None or home[0] is not ax:
+                continue
+            xlim, ylim = ax.get_xlim(), ax.get_ylim()
+            if not (np.allclose(xlim, home[1]) and np.allclose(ylim, home[2])):
+                zoom[name] = (xlim, ylim, ax.get_xscale(), ax.get_yscale())
+        return zoom
+
+    def forget_zoom(self):
+        """Drop the recorded views, so the next redraw keeps no zoom (e.g. a
+        freshly loaded dataset)."""
+        self._home_views = {}
+
+    def finish_draw(self, zoom=None):
+        """Reset the toolbar history and re-apply any *zoom* captured with
+        :meth:`capture_zoom` before the redraw.
+
+        Resetting the navigation history makes the freshly drawn view the new
+        'Home'. Without this, after a selection redraws a panel with a new axis
+        range, pressing Home restores the stale pre-selection limits and
+        squashes/cuts off the filtered traces. A kept zoom is pushed on top of
+        that Home, so Home/Back still return to the full drawn view."""
+        axes = self._axes_by_name()
+        keep = {}
+        for name, (xlim, ylim, xscale, yscale) in (zoom or {}).items():
+            home = self._home_views.get(name)
+            ax = axes.get(name)
+            # A scale change (log toggle) makes the old limits meaningless.
+            if (home is None or home[0] is not ax or home[3] != xscale
+                    or home[4] != yscale):
+                continue
+            # Panels skipped by the redraw still show the zoom; put them at
+            # their home view so it is what the toolbar records as 'Home'.
+            ax.set_xlim(home[1]); ax.set_ylim(home[2])
+            keep[ax] = (xlim, ylim)
         try:
             self.toolbar.update()
+            if keep:
+                self.toolbar.push_current()
+                for ax, (xlim, ylim) in keep.items():
+                    ax.set_xlim(xlim); ax.set_ylim(ylim)
+                self.toolbar.push_current()
         except Exception:  # noqa: BLE001
-            pass
+            for ax, (xlim, ylim) in keep.items():
+                ax.set_xlim(xlim); ax.set_ylim(ylim)
         self.canvas.draw_idle()
 
     # -- selectors -------------------------------------------------------------
@@ -1116,6 +1182,7 @@ class NeutronsController:
         if self.opts.btn_fom.isChecked():
             self.opts.btn_fom.setChecked(False)         # fires _on_fom_arm
         self._clear_fom()
+        self.page.forget_zoom()   # new data: open at the full view
         import os
         self.opts.lbl_file.setText(
             f"{os.path.basename(path)}\n{nt.n_traces:,} traces · "
@@ -1268,6 +1335,7 @@ class NeutronsController:
         if self.opts.btn_fom.isChecked():
             self.opts.btn_fom.setChecked(False)
         self._clear_fom()
+        self.page.forget_zoom()   # new data: open at the full view
         dropped = (f" · {nt.n_misaligned:,} dropped (misaligned)"
                    if nt.n_misaligned else "")
         self.opts.lbl_file.setText(
@@ -1428,7 +1496,9 @@ class NeutronsController:
         if self.page.fom_armed and self._fom_region is not None:
             self._fit_fom()
             self._show_fom_dialog(raise_=False)
-        self._redraw()
+        # New gates move the energy/PSD axes, so only the Traces-panel zoom
+        # (where the markers are being dragged) is kept.
+        self._redraw(keep_zoom=("traces",))
         self._status("PSD recomputed")
 
     # -- selection -------------------------------------------------------------
@@ -1615,11 +1685,14 @@ class NeutronsController:
         return mask
 
     # -- drawing ---------------------------------------------------------------
-    def _redraw(self):
+    def _redraw(self, keep_zoom=("traces", "mca", "psd")):
+        """Redraw all three panels. Panels named in *keep_zoom* keep any view
+        the user zoomed/panned to, so making a cut never resets the zoom."""
         if self.nt is None:
             self.page.show_empty()
             return
         nt = self.nt
+        zoom = self.page.capture_zoom(keep_zoom)
         self.opts.lbl_thresh.setText(
             f"{nt.threshold_v * self.page.thresh_scale:.0f} {self.page.thresh_unit}")
         self.opts.lbl_gate.setText(f"{nt.gate_start_ns:.1f} ns")
@@ -1635,7 +1708,7 @@ class NeutronsController:
             self.page.draw_pending(
                 "Adjust the gate markers on the\n"
                 "Traces panel to populate this plot")
-            self.page.finish_draw()
+            self.page.finish_draw(zoom)
             return
         self.opts.btn_send_spec.setEnabled(True)
 
@@ -1671,7 +1744,7 @@ class NeutronsController:
                            psd_range, self._psd_rects(),
                            log_counts=self.opts.cb_psd_log.isChecked())
         self._draw_traces(groups)
-        self.page.finish_draw()
+        self.page.finish_draw(zoom)
 
     def _selection_groups(self):
         """Return ``[(mask, color, label)]`` for the active selections.
@@ -1701,8 +1774,9 @@ class NeutronsController:
     def _redraw_traces_only(self):
         if self.nt is None:
             return
+        zoom = self.page.capture_zoom()
         self._draw_traces(self._selection_groups())
-        self.page.finish_draw()
+        self.page.finish_draw(zoom)
 
     def _resample_traces(self):
         """Reshuffle the pulse ordering so the Traces panel shows a new random
