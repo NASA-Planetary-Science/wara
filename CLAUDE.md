@@ -78,6 +78,14 @@ at import time in `matplotlib_theme.py` and `apicalc.py`).
 - Version is derived from git tags via `setuptools_scm` and written to
   `wara/version.py` — never edit that file by hand.
 - CI matrix: ubuntu/windows/macos x Python 3.10 & 3.12. Keep changes portable.
+  Passing on Windows is not enough: before pushing, run the suite on Linux too
+  (WSL Ubuntu works: `uv venv -p 3.12`, `uv pip install -e . pytest`, then
+  `QT_QPA_PLATFORM=offscreen MPLBACKEND=Agg pytest tests -q`). A classic trap
+  is `Path.glob`/`os.listdir` order, which is alphabetical on Windows but
+  arbitrary on Linux/macOS, so sort file lists (`natsorted`). After pushing,
+  check the `tests` workflow run
+  (`https://api.github.com/repos/NASA-Planetary-Science/wara/actions/runs?per_page=1`;
+  `gh` is not installed here).
 - Use tooltips in the GUI generously
 - **GUI font size is never smaller than 12pt** (= 16px at 96 dpi) — widgets,
   labels, tab bars and rich-text/HTML alike. Size new text in `pt`. Older
