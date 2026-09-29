@@ -9,6 +9,7 @@ from pathlib import Path
 import dateparser
 import numpy as np
 import pandas as pd
+from natsort import natsorted
 
 
 def get_data_path(data_path=None):
@@ -32,7 +33,7 @@ def get_files_in_path(date, runnr, folder="binary-data", data_path_txt=None):
         DATA_DIR = DATA_PATH / date_dir
         FILE = DATA_DIR / fname
         if FILE.is_dir():
-            return list(FILE.glob(f"{folder}/*"))
+            return natsorted(FILE.glob(f"{folder}/*"))
     print(f"ERROR: cannot find run {fname} in any path listed in data-path.txt")
     return []
 
@@ -48,7 +49,7 @@ def load_parquet_data_files(date, runnr, data_path_txt=None):
         DATA_DIR = DATA_PATH / date_dir
         FILE = DATA_DIR / fname
         if FILE.is_dir():
-            return list(FILE.glob(f"parquet-data/{fname}-*-pandas.parquet"))
+            return natsorted(FILE.glob(f"parquet-data/{fname}-*-pandas.parquet"))
     print(f"ERROR: cannot find run {fname} in any path listed in data-path.txt")
     return []
 
@@ -286,7 +287,7 @@ def read_parquet_file_time_aligned(date, runnr, ch=None, flat_field=False, data_
 
 def read_parquet_file_from_path(filepath, ch):
     path = Path(filepath)
-    files = list(path.glob("parquet-data/*-pandas.parquet"))
+    files = natsorted(path.glob("parquet-data/*-pandas.parquet"))
     if not files:
         print(f"ERROR: No parquet files found in {path}")
         return None
