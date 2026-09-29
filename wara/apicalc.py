@@ -426,7 +426,9 @@ class GainShift:
         if col not in df.columns:
             raise ValueError(f"DataFrame must contain a {col!r} column.")
 
-        self.df         = df.copy()
+        # Shallow: only a new column is ever assigned to self.df, so the
+        # (possibly multi-GB) event table needn't be duplicated.
+        self.df         = df.copy(deep=False)
         self.n_segments = n_segments
         self.bins       = bins
         self.erange     = erange
@@ -434,7 +436,8 @@ class GainShift:
         self.out_col    = out_col
 
         self._seg_idx: list[np.ndarray] = np.array_split(np.arange(len(self.df)), n_segments)
-        self._segments: list[pd.DataFrame] = [self.df.iloc[i] for i in self._seg_idx]
+        values = self.df[self.col].to_numpy()
+        self._segments: list[np.ndarray] = [values[i] for i in self._seg_idx]
         self._spectra:  list[sp.Spectrum]  = self._build_spectra()
 
         # One calibration dict (or None) per segment.
@@ -448,9 +451,7 @@ class GainShift:
     def _build_spectra(self) -> list[sp.Spectrum]:
         spectra = []
         for seg in self._segments:
-            cts, edges = np.histogram(
-                seg[self.col], bins=self.bins, range=self.erange
-            )
+            cts, edges = np.histogram(seg, bins=self.bins, range=self.erange)
             x = (edges[1:] + edges[:-1]) / 2
             spectra.append(sp.Spectrum(counts=cts, energies=x))
         return spectra

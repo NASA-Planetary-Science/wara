@@ -1644,6 +1644,13 @@ def _combined_events(n_per=2000, seed=1):
     return pd.concat(frames, ignore_index=True)
 
 
+def _project(df, columns):
+    """Mimic the real loader's *columns* projection (absent names skipped)."""
+    if columns is None:
+        return df.copy()
+    return df[[c for c in df.columns if c in columns]].copy()
+
+
 @pytest.fixture
 def apply_env(api, monkeypatch):
     """(controller, combined_frame, saved) wired so Apply to data writes nowhere:
@@ -1652,11 +1659,12 @@ def apply_env(api, monkeypatch):
     _w, c = api
     combined = _combined_events()
 
-    def fake_read(date, runnr, ch=None, flat_field=False, data_path_txt=None):
+    def fake_read(date, runnr, ch=None, flat_field=False, data_path_txt=None,
+                  columns=None, **_):
         if ch is None:
             return combined.copy()
         sub = combined[read_parquet_api.channel_mask(combined, ch)]
-        return sub.reset_index(drop=True).copy()
+        return _project(sub.reset_index(drop=True), columns)
     monkeypatch.setattr(read_parquet_api, "read_parquet_file", fake_read)
 
     saved = {}
@@ -1720,6 +1728,48 @@ def test_apply_to_data_only_dt_when_no_energy_change(apply_env):
     assert "dt_cal" in df.columns
     # No energy calibration was applied, so no energy_cal column is created.
     assert "energy_cal" not in df.columns
+
+
+def test_load_reads_only_used_columns_but_apply_keeps_all(apply_env, monkeypatch):
+    """Load reads a narrow column set (no File time / timestamps; the A-D
+    quadrants are folded into X2/Y2), yet "Apply to data" re-reads the full
+    run, so every column of every channel is written back."""
+    c, combined, saved = apply_env
+    rng = np.random.default_rng(3)
+    combined["File time"] = rng.uniform(0, 1, len(combined))
+    combined["timestamp"] = np.arange(len(combined))
+    c._load()
+    assert "File time" not in c.df_api.columns
+    assert "timestamp" not in c.df_api.columns
+    assert not {"A", "B", "C", "D"} & set(c.df_api.columns)
+    assert {"X2", "Y2"} <= set(c.df_api.columns)
+    # Positions match the reference reconstruction.
+    ref = apicalc.calc_own_pos(
+        combined[combined["channel"] == 5].reset_index(drop=True))
+    np.testing.assert_allclose(c.df_api["X2"], ref["X2"])
+    c.apply_dt_shift(2.0)
+    c._apply_to_data()
+    df = saved["df"]
+    assert set(combined.columns) <= set(df.columns)
+    np.testing.assert_array_equal(df["File time"], combined["File time"])
+    np.testing.assert_array_equal(df["A"], combined["A"])
+
+
+def test_cuts_share_buffers_and_leave_master_untouched(api):
+    """Working frames are shallow views of the master; a cut builds a new
+    frame and never writes into df_api."""
+    _w, c = api
+    c._load()
+    e0 = c.df_api[c.ekey].to_numpy().copy()
+    assert np.shares_memory(c.df_current[c.ekey].to_numpy(),
+                            c.df_api[c.ekey].to_numpy())
+    c.apply_energy_filter(0, 3000)
+    c.apply_t_filter(-10, 10)
+    assert list(c.df_current.index) == list(range(len(c.df_current)))
+    c._undo()
+    c._reset()
+    np.testing.assert_array_equal(c.df_api[c.ekey].to_numpy(), e0)
+    assert c.df_current.shape[0] == 4000
 
 
 def test_apply_to_data_noop_without_changes(apply_env):
@@ -1798,12 +1848,13 @@ def test_apply_to_data_merges_channels_into_one_run(api, monkeypatch, tmp_path):
     combined = _combined_events()
     disk = {}                                  # runnr -> saved combined frame
 
-    def fake_read(date, runnr, ch=None, flat_field=False, data_path_txt=None):
+    def fake_read(date, runnr, ch=None, flat_field=False, data_path_txt=None,
+                  columns=None, **_):
         base = disk.get(runnr, combined)       # destination reads back; source = raw
         if ch is None:
             return base.copy()
         sub = base[read_parquet_api.channel_mask(base, ch)]
-        return sub.reset_index(drop=True).copy()
+        return _project(sub.reset_index(drop=True), columns)
     monkeypatch.setattr(read_parquet_api, "read_parquet_file", fake_read)
 
     def fake_save(df, date, runnr, data_path=None, overwrite=False):

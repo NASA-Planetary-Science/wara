@@ -71,6 +71,7 @@ from contextlib import contextmanager
 from datetime import datetime
 
 import numpy as np
+import pandas as pd
 
 from matplotlib.figure import Figure
 from matplotlib.colors import LinearSegmentedColormap, to_rgba
@@ -128,6 +129,50 @@ from .api_psd import (  # noqa: F401  -- PsdGatesDialog re-exported
 
 
 # ── Plot column ───────────────────────────────────────────────────────────────
+#: Parquet columns the API tab reads on Load -- everything it plots, cuts on,
+#: calibrates or reconstructs from. The rest of a run (``File time``,
+#: timestamps, CFD flags, ``X_alpha``...) is skipped: on a large run that is
+#: most of the file. "Apply to data" re-reads the *full* run before writing,
+#: so skipped columns are never dropped from a saved run.
+_load_columns = (
+    "channel", "LaBr[y/n]",
+    "dt", "dt_cal", "dt_aligned",
+    "energy", "energy_orig", "energy_cal", "energy_ch9", "alpha",
+    "A", "B", "C", "D", "X2", "Y2", "X", "Y", "Z",
+    "Trace", "PSD",
+)
+
+
+def _derive_positions(df):
+    """Add the X2/Y2 positions reconstructed from the A/B/C/D quadrants (as
+    :func:`wara.apicalc.calc_own_pos` does, NaN -> 0) and drop the columns
+    that only fed them: the quadrants, and the precomputed X/Y/Z, which are
+    ignored whenever X2/Y2 exist. A frame without quadrants is returned as-is
+    (simulated data keeps its X/Y/Z cloud)."""
+    if "X2" in df.columns or not {"A", "B", "C", "D"} <= set(df.columns):
+        return df
+    a, b, c, d = (df[k].to_numpy(dtype=float) for k in "ABCD")
+    tot = a + b + c + d
+    with np.errstate(invalid="ignore", divide="ignore"):
+        x2 = (b + c - d - a) / tot
+        y2 = (b + a - d - c) / tot
+    df = df.drop(columns=[k for k in ("A", "B", "C", "D", "X", "Y", "Z")
+                          if k in df.columns])
+    df["X2"] = np.nan_to_num(x2, nan=0.0)
+    df["Y2"] = np.nan_to_num(y2, nan=0.0)
+    return df
+
+
+def _cut(df, mask):
+    """Rows of *df* where *mask* is True, renumbered 0..n-1. One take and no
+    second copy (``reset_index`` would copy the whole cut frame again)."""
+    # take() rather than df[mask]: the latter flags the result as a slice of
+    # df, and later column writes (PSD, trace energy) then warn.
+    out = df.take(np.flatnonzero(np.asarray(mask, dtype=bool)))
+    out.index = pd.RangeIndex(len(out))
+    return out
+
+
 class ApiPage(QWidget):
     """Plot area for the API tab: the three-panel API figure plus a cursor
     readout. The controller draws onto the axes built here."""
@@ -863,8 +908,10 @@ class ApiController:
     def _save_undo_snapshot(self):
         """Capture the full filter state before a cut so ← Back can restore it."""
         self._undo_state = (
-            self.df_current.copy(),
-            self.df_previous.copy(),
+            # Frames are never modified in place, so the snapshot can hold
+            # the frames themselves rather than full copies.
+            self.df_current,
+            self.df_previous,
             self.en_flag, self.dt_flag, self.xy_flag, self.al_flag, self.ps_flag,
             self._cut_energy, self._cut_time, self._cut_xy, self._cut_alpha,
             self._cut_psd,
@@ -954,9 +1001,14 @@ class ApiController:
                 return
 
         self._status(f"Loading run {date}-{runnr} ch {ch}...")
+        # Only the columns the tab uses are read (see _load_columns), with the
+        # traces kept Arrow-backed: on a large run this is several times faster
+        # and lighter than reading every column. "Apply to data" re-reads the
+        # full run, so nothing dropped here is lost from a saved run.
         df = read_parquet_api.read_parquet_file(
             date=date, runnr=runnr, ch=ch,
-            flat_field=self.flat_field, data_path_txt=data_path)
+            flat_field=self.flat_field, data_path_txt=data_path,
+            columns=_load_columns, lists_as_arrow=True)
         if df is None:
             QMessageBox.critical(
                 self.app, "Error while opening parquet data",
@@ -964,21 +1016,25 @@ class ApiController:
             self._status("No parquet file for that run")
             return
         if not self.flat_field:
-            df = df.copy()
             # Time priority: dt_cal is already in ns; raw dt is in seconds and
             # needs converting. dt_cal (when present) becomes the time axis in
             # _configure_keys.
             df["dt"] *= 1e9  # s → ns
         df = self._extract_traces(df, date, runnr, ch)
+        df = _derive_positions(df)
         if (self._tpsd is not None and self.opts.cb_trace_energy.isChecked()
                 and "energy_cal" in df.columns):
             # A saved calibration was fitted on the recorded PIXIE energy; with
             # "Energy from traces" on it no longer matches the axis.
             df = df.drop(columns=["energy_cal"])
 
+        # The working frames start as shallow views of the master: no frame is
+        # ever modified in place (cuts build new frames, derived columns are
+        # assigned whole), so sharing the column buffers is safe and saves a
+        # full copy of the run per frame.
         self.df_api = df
-        self.df_current = df.copy()
-        self.df_previous = df.copy()
+        self.df_current = df.copy(deep=False)
+        self.df_previous = self.df_current
         # Remember the source run so "Apply to data" can re-read every channel
         # and write the calibrated result to a new run.
         self._src_date = date
@@ -1460,7 +1516,7 @@ class ApiController:
         self._psd_detector = None
         self._psd_order = None
         if self.flat_field:
-            return df
+            return df.drop(columns=["Trace"], errors="ignore")
         if "PSD" in df.columns:
             vals = df["PSD"].to_numpy(dtype=float)
             df = df.drop(columns=["PSD"])
@@ -1744,13 +1800,13 @@ class ApiController:
         self._cut_psd = (elo, ehi, plo, phi)
         if self.ps_flag == 0:
             base = self.df_current
-            self.df_previous = self.df_current.copy()
+            self.df_previous = self.df_current
             self.ps_flag = 1
         else:
             base = self.df_previous
         e, s = base[self.ekey], base["psd"]
         mask = (e > elo) & (e < ehi) & (s > plo) & (s < phi)
-        self.df_current = base[mask].reset_index(drop=True)
+        self.df_current = _cut(base, mask)
         with self._preserve_zoom():
             # The PSD panel redraws too: the kept events in colour over the
             # grey uncut density (when "Show uncut outline" is on), box dashed.
@@ -1915,6 +1971,14 @@ class ApiController:
         self._draw_cut_markers()
         self._remember_view(ax)
 
+    def _hexbin(self, ax, df, **kwargs):
+        """X-Y hexbin of *df* on *ax* over the map extent. Straight
+        ``ax.hexbin`` on the two position arrays: ``DataFrame.plot.hexbin``
+        copies the whole frame first, which dominated every redraw of a large
+        run."""
+        return ax.hexbin(df[self.xkey].to_numpy(), df[self.ykey].to_numpy(),
+                         gridsize=self.hexbins, extent=self.xyplane, **kwargs)
+
     def _replot_xy(self):
         """Redraw the X-Y hexbin from df_current with the current scale/vmax."""
         ax = self.page.ax_xy
@@ -1942,9 +2006,7 @@ class ApiController:
             self._xy_reattach_overlay()
             self.page.canvas.draw_idle()
             return
-        df.plot.hexbin(
-            x=self.xkey, y=self.ykey, gridsize=self.hexbins, cmap=COLORMAP,
-            ax=ax, colorbar=False, extent=self.xyplane, **kwargs)
+        self._hexbin(ax, df, cmap=COLORMAP, **kwargs)
         # pandas leaves the PolyCollection as the last collection on the axes.
         # Cache it (centres + counts) so the cursor readout can report a
         # hexagon's intensity in place of the removed colorbar; the pick radius
@@ -2108,13 +2170,12 @@ class ApiController:
         self._cut_energy = (xmin, xmax)
         if self.en_flag == 0:
             mask = (self.df_current[self.ekey] > xmin) & (self.df_current[self.ekey] < xmax)
-            self.df_previous = self.df_current.copy()
-            self.df_current = self.df_current[mask]
+            self.df_previous = self.df_current
+            self.df_current = _cut(self.df_current, mask)
             self.en_flag = 1
         else:
             mask = (self.df_previous[self.ekey] > xmin) & (self.df_previous[self.ekey] < xmax)
-            self.df_current = self.df_previous[mask]
-        self.df_current = self.df_current.reset_index(drop=True)
+            self.df_current = _cut(self.df_previous, mask)
         with self._preserve_zoom():
             if self.page.ax_dt is not None:
                 self.page.ax_dt.clear()
@@ -2140,14 +2201,13 @@ class ApiController:
         if self.al_flag == 0:
             mask = ((self.df_current[self.akey] > amin)
                     & (self.df_current[self.akey] < amax))
-            self.df_previous = self.df_current.copy()
-            self.df_current = self.df_current[mask]
+            self.df_previous = self.df_current
+            self.df_current = _cut(self.df_current, mask)
             self.al_flag = 1
         else:
             mask = ((self.df_previous[self.akey] > amin)
                     & (self.df_previous[self.akey] < amax))
-            self.df_current = self.df_previous[mask]
-        self.df_current = self.df_current.reset_index(drop=True)
+            self.df_current = _cut(self.df_previous, mask)
         with self._preserve_zoom():
             if self.page.ax_spe is not None:
                 self.page.ax_spe.clear()
@@ -2169,13 +2229,12 @@ class ApiController:
         self._cut_time = (tmin, tmax)
         if self.dt_flag == 0:
             mask = (self.df_current[self._dt_key] > tmin) & (self.df_current[self._dt_key] < tmax)
-            self.df_previous = self.df_current.copy()
-            self.df_current = self.df_current[mask]
+            self.df_previous = self.df_current
+            self.df_current = _cut(self.df_current, mask)
             self.dt_flag = 1
         else:
             mask = (self.df_previous[self._dt_key] > tmin) & (self.df_previous[self._dt_key] < tmax)
-            self.df_current = self.df_previous[mask]
-        self.df_current = self.df_current.reset_index(drop=True)
+            self.df_current = _cut(self.df_previous, mask)
         with self._preserve_zoom():
             if self.page.ax_spe is not None:
                 self.page.ax_spe.clear()
@@ -2198,13 +2257,13 @@ class ApiController:
         self._cut_xy = (xlo, xhi, ylo, yhi)
         if self.xy_flag == 0:
             base = self.df_current
-            self.df_previous = self.df_current.copy()
+            self.df_previous = self.df_current
             self.xy_flag = 1
         else:
             base = self.df_previous
         mask = ((base[self.xkey] > xlo) & (base[self.xkey] < xhi)
                 & (base[self.ykey] > ylo) & (base[self.ykey] < yhi))
-        self.df_current = base[mask].reset_index(drop=True)
+        self.df_current = _cut(base, mask)
         with self._preserve_zoom():
             if self.page.ax_spe is not None:
                 self.page.ax_spe.clear()
@@ -2301,7 +2360,7 @@ class ApiController:
         if self.df_current is None:
             return
         mask = (self.df_current[self.ekey] > emin) & (self.df_current[self.ekey] < emax)
-        sub = self.df_current[mask].copy()
+        sub = self.df_current[mask]
         if sub.shape[0] == 0:
             self._status(f"No events in [{emin:g}, {emax:g}]  -- selection not added")
             return
@@ -2483,7 +2542,7 @@ class ApiController:
         except ValueError:
             self._status("Tile width and length must be numbers")
             return
-        self._xy_df = self.df_current.copy()
+        self._xy_df = self.df_current.copy(deep=False)
         self._xy_plane = tuple(self.xyplane)
         units = self._axis_units()
         self._xy_keys = dict(
@@ -3094,9 +3153,7 @@ class ApiController:
         ax.clear()
         base = self.df_current
         if base.shape[0]:
-            base.plot.hexbin(
-                x=self.xkey, y=self.ykey, gridsize=self.hexbins, cmap=GRAY_CMAP,
-                ax=ax, colorbar=False, extent=self.xyplane)
+            self._hexbin(ax, base, cmap=GRAY_CMAP)
             mappable = ax.collections[-1] if ax.collections else None
             spacing = (self.xyplane[1] - self.xyplane[0]) / self.hexbins
             self.page.set_xy_lookup(mappable, False, spacing ** 2)
@@ -3110,9 +3167,7 @@ class ApiController:
             r, g, b, _ = to_rgba(sel["color"])
             cmap = LinearSegmentedColormap.from_list(
                 f"sel_{sel['label']}", [(r, g, b, 0.0), (r, g, b, 1.0)])
-            d.plot.hexbin(
-                x=self.xkey, y=self.ykey, gridsize=self.hexbins, cmap=cmap,
-                ax=ax, colorbar=False, extent=self.xyplane, mincnt=1)
+            self._hexbin(ax, d, cmap=cmap, mincnt=1)
         handles = [Patch(facecolor=s["color"], edgecolor="none", label=s["label"])
                    for s in self.selections]
         if handles:
@@ -3160,7 +3215,7 @@ class ApiController:
             e = np.zeros_like(ch)
             for i, c in enumerate(coeffs):
                 e = e + c * ch ** i
-            df = df.copy()
+            df = df.copy(deep=False)
             df["energy_cal"] = e
             return df
 
@@ -3168,8 +3223,8 @@ class ApiController:
         self.df_api = add_cal(self.df_api)
         self._cal_coeffs = coeffs
         self.e_units = units
-        self.df_current = self.df_api.copy()
-        self.df_previous = self.df_api.copy()
+        self.df_current = self.df_api.copy(deep=False)
+        self.df_previous = self.df_current
         self.en_flag = self.dt_flag = self.xy_flag = self.al_flag = self.ps_flag = 0
         self.vmax = None
         self.opts.ed_vmax.clear()
@@ -3194,8 +3249,8 @@ class ApiController:
             self.df_api = self.df_api.drop(columns=["energy_cal"])
         self._cal_coeffs = None
         self.e_units = None
-        self.df_current = self.df_api.copy()
-        self.df_previous = self.df_api.copy()
+        self.df_current = self.df_api.copy(deep=False)
+        self.df_previous = self.df_current
         self.en_flag = self.dt_flag = self.xy_flag = self.al_flag = self.ps_flag = 0
         self.vmax = None
         self.opts.ed_vmax.clear()
@@ -3209,8 +3264,8 @@ class ApiController:
     # -- drift correction (Shifts... window) -------------------------------------
     def _rebuild_from_master(self):
         """Re-derive the working frames from df_api and redraw (reset-style)."""
-        self.df_current = self.df_api.copy()
-        self.df_previous = self.df_api.copy()
+        self.df_current = self.df_api.copy(deep=False)
+        self.df_previous = self.df_current
         self.en_flag = self.dt_flag = self.xy_flag = self.al_flag = self.ps_flag = 0
         self.vmax = None
         self.opts.ed_vmax.clear()
@@ -3326,7 +3381,7 @@ class ApiController:
         if self.df_api is None:
             return
         shift = float(shift)
-        df = self.df_api.copy()
+        df = self.df_api.copy(deep=False)
         df["dt_cal"] = self._dt_const_base(df) + shift
         self.df_api = df
         self._dt_shift = shift
@@ -3344,7 +3399,7 @@ class ApiController:
         if self.df_api is None:
             return
         shift = float(shift)
-        df = self.df_api.copy()
+        df = self.df_api.copy(deep=False)
         df["dt_aligned"] = np.asarray(aligned, dtype=float)
         df["dt_cal"] = df["dt_aligned"] + shift
         self.df_api = df
@@ -4151,8 +4206,8 @@ class ApiController:
         # Retrieve the original (loaded) dataframe  -- no re-read of the file, same
         # as the legacy GUI's reset_button_api. df_api is the untouched load; the
         # position columns are re-derived from it below.
-        self.df_current = self.df_api.copy()
-        self.df_previous = self.df_api.copy()
+        self.df_current = self.df_api.copy(deep=False)
+        self.df_previous = self.df_current
         self.en_flag = self.dt_flag = self.xy_flag = self.al_flag = self.ps_flag = 0
         self._cut_energy = self._cut_time = self._cut_xy = None
         self._cut_alpha = self._cut_psd = None

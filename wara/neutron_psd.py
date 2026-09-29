@@ -315,7 +315,13 @@ def trace_matrix(column):
     *i*), with the rows of events that carry no trace -- or one of a
     non-modal length -- left zero and flagged ``False`` in *has_trace*.
     Raises ``ValueError`` when no event has a trace.
+
+    An Arrow-backed list column (``pd.ArrowDtype``, or a pyarrow array) is
+    stacked without touching the events one by one in Python.
     """
+    arrow = _arrow_list(column)
+    if arrow is not None:
+        return _trace_matrix_arrow(arrow)
     col = list(column)
     lengths = np.fromiter(
         (len(t) if t is not None and hasattr(t, "__len__") else 0 for t in col),
@@ -332,6 +338,50 @@ def trace_matrix(column):
     idx = np.flatnonzero(has)
     if idx.size:
         mat[idx] = np.stack([np.asarray(col[i], dtype=dtype) for i in idx])
+    return mat, has
+
+
+def _arrow_list(column):
+    """*column* as a pyarrow list ``ChunkedArray``, or None when it is not
+    Arrow-backed (plain object columns take the per-event path)."""
+    try:
+        import pyarrow as pa
+    except ImportError:  # pragma: no cover -- pyarrow is a wara dependency
+        return None
+    arr = column
+    if hasattr(column, "array") and hasattr(column.array, "_pa_array"):
+        arr = column.array._pa_array          # pandas ArrowExtensionArray
+    if isinstance(arr, pa.Array):
+        arr = pa.chunked_array([arr])
+    if (isinstance(arr, pa.ChunkedArray)
+            and (pa.types.is_list(arr.type) or pa.types.is_large_list(arr.type))):
+        return arr
+    return None
+
+
+def _trace_matrix_arrow(arr):
+    """:func:`trace_matrix` for a pyarrow list ``ChunkedArray``: the modal-
+    length rows are gathered from the flat values buffer in one step."""
+    import pyarrow as pa
+    import pyarrow.compute as pc
+
+    lengths = pc.fill_null(pc.list_value_length(arr), 0).to_numpy()
+    lengths = np.asarray(lengths, dtype=np.int64)
+    if not (lengths > 0).any():
+        raise ValueError("No event carries a trace")
+    modal = int(np.bincount(lengths[lengths > 0]).argmax())
+    has = lengths == modal
+    dtype = np.dtype(arr.type.value_type.to_pandas_dtype())
+    mat = np.zeros((len(lengths), modal), dtype=dtype)
+    idx = np.flatnonzero(has)
+    if idx.size == 0:
+        return mat, has
+    if idx.size < len(lengths):
+        arr = arr.filter(pa.array(has))
+    flat = pc.list_flatten(arr)
+    vals = np.asarray(flat.to_numpy() if isinstance(flat, pa.Array)
+                      else flat.combine_chunks().to_numpy(), dtype=dtype)
+    mat[idx] = vals.reshape(idx.size, modal)
     return mat, has
 
 

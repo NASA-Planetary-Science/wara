@@ -38,6 +38,28 @@ is one coincidence event with the columns the rest of the tools expect:
 | `X2`, `Y2` | Alpha interaction position on the YAP face (dimensionless corner ratios) |
 | `channel` / `LaBr[y/n]` | Detector identifier |
 
+### Reading only what you need
+
+Large runs (tens of millions of events) load much faster and use far less
+memory when you ask for just the columns you use. `columns=` is passed to the
+parquet reader, and so is the channel filter, so the other columns are never
+decoded. `lists_as_arrow=True` keeps the per-event `Trace` column in one
+Arrow buffer rather than creating one numpy object per row:
+
+```python
+df = rpa.read_parquet_file("2026-09-25", 1, ch=1,
+                           columns=["channel", "energy", "dt", "X2", "Y2", "Trace"],
+                           lists_as_arrow=True)
+```
+
+Columns that a file does not have are skipped. {py:func}`wara.neutron_psd.trace_matrix`
+accepts the Arrow `Trace` column directly. Do not write a frame read with
+`lists_as_arrow=True` back to parquet: the Arrow list dtype metadata stops
+`pd.read_parquet` from reading the file. Re-read the run without it first. The
+GUI's API tab loads runs this way, and **Apply to data** re-reads the full run
+(all columns), so saving never drops a column. See
+`examples/file_reader/example_read_parquet_columns.py`.
+
 ```{tip}
 If a run was acquired in time-misaligned chunks,
 `rpa.read_parquet_file_time_aligned(date, runnr, ch=...)` aligns each chunk's

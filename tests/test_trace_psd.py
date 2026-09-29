@@ -159,3 +159,24 @@ def test_far_off_trigger_is_rejected():
     assert p.valid[:-1].all()
     keep = npsd.TracePSD(mat, DT_NS, max_trigger_offset_frac=None).compute()
     assert keep.valid[-1] and keep.n_misaligned == 0
+
+
+def test_trace_matrix_arrow_column_matches_object_column():
+    """An Arrow-backed list column (as the API tab loads ``Trace``) stacks to
+    the same matrix and flags as the per-event object path."""
+    pa = pytest.importorskip("pyarrow")
+    import pandas as pd
+    good = np.arange(10, dtype=np.uint16)
+    col = [good, None, good + 1, np.array([], np.uint16),
+           np.arange(7, dtype=np.uint16)]
+    arr = pa.array([None if t is None else t.tolist() for t in col],
+                   type=pa.list_(pa.uint16()))
+    ser = pd.Series(pd.arrays.ArrowExtensionArray(arr))
+    for column in (ser, arr):
+        mat, has = npsd.trace_matrix(column)
+        ref_mat, ref_has = npsd.trace_matrix(col)
+        assert mat.dtype == np.uint16
+        np.testing.assert_array_equal(mat, ref_mat)
+        np.testing.assert_array_equal(has, ref_has)
+    with pytest.raises(ValueError):
+        npsd.trace_matrix(pa.array([None, []], type=pa.list_(pa.uint16())))

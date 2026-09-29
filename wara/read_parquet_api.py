@@ -2,12 +2,13 @@
 Read API parquet files
 """
 
-import dateparser
-import numpy as np
-import pandas as pd
 #import pkg_resources
 from importlib.resources import files
 from pathlib import Path
+
+import dateparser
+import numpy as np
+import pandas as pd
 
 
 def get_data_path(data_path=None):
@@ -152,13 +153,70 @@ def save_combined_run(df, date, runnr, data_path=None, overwrite=False):
     return out
 
 
-def read_parquet_file(date, runnr, ch=None, flat_field=False, data_path_txt=None):
+def _list_as_arrow(dtype):
+    """``types_mapper`` keeping list columns (the per-event ``Trace``) as
+    Arrow-backed pandas columns instead of one numpy object per row."""
+    import pyarrow as pa
+    if pa.types.is_list(dtype) or pa.types.is_large_list(dtype):
+        return pd.ArrowDtype(dtype)
+    return None
+
+
+def _read_arrow(files, ch, flat_field, columns, lists_as_arrow):
+    """Read *files* with pyarrow: only *columns* (those present in each file)
+    and, when the files carry a ``channel`` column, only channel *ch*'s rows
+    (filter pushed down into the reader). Files are read in parallel threads
+    and concatenated in order. Returns ``(df, filtered)`` -- *filtered* False
+    means the channel mask still has to be applied (legacy LaBr files)."""
+    from concurrent.futures import ThreadPoolExecutor
+
+    import pyarrow as pa
+    import pyarrow.parquet as pq
+
+    want_ch = not flat_field and ch is not None
+
+    def read_one(f):
+        names = pq.ParquetFile(f).schema_arrow.names
+        cols = None if columns is None else [c for c in columns if c in names]
+        filters = None
+        if want_ch and "channel" in names:
+            filters = [("channel", "==", ch)]
+        elif want_ch and cols is not None:
+            # Legacy files: keep the columns channel_mask needs.
+            cols += [c for c in ("LaBr[y/n]",) if c in names and c not in cols]
+        return pq.read_table(f, columns=cols, filters=filters), filters is not None
+
+    with ThreadPoolExecutor(max_workers=min(8, len(files))) as pool:
+        parts = list(pool.map(read_one, files))
+    tables = [t for t, _ in parts]
+    filtered = not want_ch or all(f for _, f in parts)
+    try:
+        table = pa.concat_tables(tables, promote_options="default")
+    except TypeError:       # pyarrow < 14
+        table = pa.concat_tables(tables, promote=True)
+    del tables, parts
+    df = table.to_pandas(types_mapper=_list_as_arrow if lists_as_arrow else None)
+    return df, filtered
+
+
+def read_parquet_file(date, runnr, ch=None, flat_field=False, data_path_txt=None,
+                      columns=None, lists_as_arrow=False):
+    """Read run (date, runnr), optionally only channel *ch*.
+
+    *columns* restricts the read to those columns (names absent from a file
+    are skipped), which is much faster and lighter on a large run. With
+    *lists_as_arrow* list columns such as ``Trace`` stay Arrow-backed
+    (``pd.ArrowDtype``) rather than one numpy array per event -- only for
+    frames that are not written back to parquet."""
     files = load_parquet_data_files(date, runnr, data_path_txt)
     if not files:
         print(f"ERROR: No parquet file available for run {date}-{runnr}")
         return None
     try:
-        df = pd.concat([pd.read_parquet(f, engine="pyarrow") for f in files])
+        df, filtered = _read_arrow(files, ch, flat_field, columns, lists_as_arrow)
+        if filtered:
+            df.reset_index(drop=True, inplace=True)
+            return df
     except Exception as exc:
         # pyarrow rejecting a file usually means it is corrupt or truncated.
         # fastparquet can often salvage a *partial* read from such a file, which
@@ -168,6 +226,9 @@ def read_parquet_file(date, runnr, ch=None, flat_field=False, data_path_txt=None
               f"({exc}); falling back to fastparquet. The file(s) may be "
               f"corrupt or truncated and the loaded data may be INCOMPLETE.")
         df = pd.concat([pd.read_parquet(f, engine="fastparquet") for f in files])
+        if columns is not None:
+            keep = set(columns) | {"channel", "LaBr[y/n]"}
+            df = df[[c for c in df.columns if c in keep]]
 
     if flat_field or ch is None:
         df.reset_index(drop=True, inplace=True)
