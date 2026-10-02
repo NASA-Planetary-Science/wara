@@ -12,6 +12,7 @@ reset). Remaining controls are present but inert and will be wired one by one.
 """
 import os
 import sys
+import traceback
 from importlib.resources import files
 
 import numpy as np
@@ -20,13 +21,14 @@ from PyQt5.QtWidgets import (
     QApplication, QMainWindow, QWidget, QLabel, QPushButton, QVBoxLayout,
     QHBoxLayout, QStackedWidget, QButtonGroup, QSizePolicy, QSpacerItem,
     QFileDialog, QMessageBox, QCheckBox, QDialog, QFormLayout, QLineEdit,
-    QDialogButtonBox, QFrame,
+    QDialogButtonBox, QFrame, QScrollArea,
 )
 from PyQt5.QtCore import Qt, QSize, pyqtSignal
 from PyQt5.QtGui import QColor, QPalette, QPixmap, QIcon
 from matplotlib.backends.backend_qt5agg import NavigationToolbar2QT as NavToolbar
 
 from wara import peaksearch as ps
+from wara import plugins as plug
 from . import theme as T
 from .theme import NAV_SECTIONS, TABS_WITH_OPTIONS, STYLESHEET, dot_icon, recolor_toolbar_icons, PlanetaryNavButton
 from .widgets import (
@@ -155,11 +157,30 @@ class SpectrumPage(QWidget):
         lay.addWidget(self.canvas, stretch=1)
 
 
+def _message_page(text):
+    """A plot-column page holding only a centered, wrapped message."""
+    page = QWidget(); page.setObjectName("content")
+    lay = QVBoxLayout(page)
+    lab = QLabel(text); lab.setObjectName("placeholder")
+    lab.setAlignment(Qt.AlignCenter); lab.setWordWrap(True)
+    lab.setTextInteractionFlags(Qt.TextSelectableByMouse)
+    lay.addWidget(lab)
+    return page
+
+
+def _replace_in_stack(stack, idx, widget):
+    """Put *widget* at *idx* of a QStackedWidget, discarding what was there."""
+    old = stack.widget(idx)
+    stack.removeWidget(old)
+    stack.insertWidget(idx, widget)
+    old.deleteLater()
+
+
 class WaraApp(QMainWindow):
     OPT_W = 270   # shared by every tab's options panel (original design width)
     _FILE_LABEL_MAXW = 280   # px; longer spectrum names are elided (full name on hover)
 
-    def __init__(self, file_name=None, cli_opts=None):
+    def __init__(self, file_name=None, cli_opts=None, plugins=None):
         super().__init__()
         self.setWindowTitle("WARA  ·  Spectrum Analysis")
         self.setMinimumSize(1480, 760)
@@ -193,6 +214,16 @@ class WaraApp(QMainWindow):
         self._opt_collapsed = False
         self._iso_key = None         # peak-energy signature the iso-ID cache was built for
         self._iso_info_cache = None
+
+        # Optional tabs from installed plug-ins (see wara.plugins). They follow
+        # the built-in sections, so built-in tab indices never move. An
+        # explicit *plugins* list (a test's) skips discovery.
+        builtin = [name for name, _c in NAV_SECTIONS]
+        self._plugin_entries = (plug.discover(reserved=builtin)
+                                if plugins is None else list(plugins))
+        self._sections = builtin + [e.name for e in self._plugin_entries]
+        self._plugin_host = plug.Host(self)
+        self._plugin_built = {}   # section index -> its options widget (or None)
 
         central = QWidget(); self.setCentralWidget(central)
         root = QHBoxLayout(central)
@@ -234,7 +265,18 @@ class WaraApp(QMainWindow):
     def _build_nav(self):
         panel = QWidget(); panel.setObjectName("nav_panel")
         panel.setAttribute(Qt.WA_StyledBackground, True); panel.setFixedWidth(200)
-        lay = QVBoxLayout(panel)
+        # The rail scrolls rather than squeezing its buttons: with a plug-in
+        # tab or two it is taller than the window's minimum height allows.
+        # The scroll bar appears only when the window is that short.
+        scroll = QScrollArea(); scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.NoFrame)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        scroll.setStyleSheet("QScrollArea, #nav_inner { background: transparent; }")
+        inner = QWidget(); inner.setObjectName("nav_inner")
+        scroll.setWidget(inner)
+        outer = QVBoxLayout(panel); outer.setContentsMargins(0, 0, 0, 0)
+        outer.addWidget(scroll)
+        lay = QVBoxLayout(inner)
         lay.setContentsMargins(14, 16, 14, 16); lay.setSpacing(8)
 
         brand = QHBoxLayout(); brand.setSpacing(10)
@@ -257,6 +299,7 @@ class WaraApp(QMainWindow):
             btn.setToolTip(f"{name} tab")
             btn.setIcon(dot_icon(color)); btn.setIconSize(QSize(14, 14))
             self.nav_group.addButton(btn, idx); lay.addWidget(btn)
+        self._add_plugin_nav(lay)
         self.nav_group.idClicked.connect(self._on_nav)
 
         lay.addSpacing(4); lay.addWidget(hsep())
@@ -274,6 +317,31 @@ class WaraApp(QMainWindow):
         ver = QLabel("v2.0"); ver.setObjectName("version")
         ver.setAlignment(Qt.AlignHCenter); lay.addWidget(ver)
         return panel
+
+    def _add_plugin_nav(self, lay):
+        """One nav button per installed plug-in, under its own header. A
+        plug-in that failed to load is shown disabled, with the reason as its
+        tooltip, so a broken install is visible rather than silently missing."""
+        if not self._plugin_entries:
+            return
+        # Header only, no separator: the nav must still fit the window's
+        # minimum height (760) with a plug-in installed.
+        lay.addWidget(header("PLUG-INS"))
+        first = len(NAV_SECTIONS)
+        for idx, entry in enumerate(self._plugin_entries, start=first):
+            btn = QPushButton("   " + entry.name); btn.setObjectName("nav_btn")
+            btn.setCheckable(True); btn.setCursor(Qt.PointingHandCursor)
+            source = f"\nPlug-in: {entry.source}" if entry.source else "\nPlug-in"
+            if entry.ok:
+                tip = entry.plugin.tooltip or f"{entry.name} tab"
+                btn.setToolTip(tip + source)
+                btn.setIcon(dot_icon(entry.plugin.color))
+            else:
+                btn.setToolTip(f"{entry.name} could not be loaded:\n{entry.error}{source}")
+                btn.setIcon(dot_icon(T.TEXT_DIM))
+                btn.setEnabled(False)
+            btn.setIconSize(QSize(14, 14))
+            self.nav_group.addButton(btn, idx); lay.addWidget(btn)
 
     # ── Column 2: options (collapsible) ──────────────────────────────────────
     def _build_options(self):
@@ -306,6 +374,9 @@ class WaraApp(QMainWindow):
                 self.opt_stack.addWidget(self.planetary_opts)
             else:
                 self.opt_stack.addWidget(PlaceholderOptions(name))
+        # Plug-in options are built on first visit (_build_plugin); hold the slots.
+        for _entry in self._plugin_entries:
+            self.opt_stack.addWidget(QWidget())
         outer.addWidget(self.opt_stack, stretch=1)
 
         # Vertically-centered collapse handle (thin tall strip) on the right edge.
@@ -360,13 +431,52 @@ class WaraApp(QMainWindow):
                 self.stack.addWidget(self.planetary_page)
             else:
                 self.stack.addWidget(PlaceholderPage(name))
+        for entry in self._plugin_entries:
+            self.stack.addWidget(_message_page(
+                f"{entry.name}\n\n" + ("Loading…" if entry.ok
+                                         else f"could not be loaded:\n{entry.error}")))
         return self.stack
 
+    def _build_plugin(self, idx):
+        """Build plug-in tab *idx* on its first visit.
+
+        Plug-ins are built lazily, so one the user never opens costs nothing
+        beyond its import. If the build raises, an error page takes the tab's
+        place and wara carries on; the traceback goes to the console."""
+        if idx in self._plugin_built:
+            return
+        entry = self._plugin_entries[idx - len(NAV_SECTIONS)]
+        if not entry.ok:
+            self._plugin_built[idx] = None
+            return
+        self.statusBar().showMessage(f"  Loading {entry.name}…")
+        self.statusBar().repaint()
+        QApplication.setOverrideCursor(Qt.WaitCursor)
+        try:
+            options, page = entry.plugin.build(self._plugin_host)
+            if not isinstance(page, QWidget) or not (
+                    options is None or isinstance(options, QWidget)):
+                raise TypeError("build() must return (options QWidget or None, page QWidget)")
+        except Exception as exc:  # noqa: BLE001 -- a plug-in must not take wara down
+            traceback.print_exc()
+            options, page = None, _message_page(
+                f"{entry.name} failed to load\n\n{type(exc).__name__}: {exc}")
+        finally:
+            QApplication.restoreOverrideCursor()
+        _replace_in_stack(self.stack, idx, page)
+        if options is not None:
+            _replace_in_stack(self.opt_stack, idx, options)
+        self._plugin_built[idx] = options
+
     def _on_nav(self, idx):
-        name = NAV_SECTIONS[idx][0]
+        name = self._sections[idx]
+        is_plugin = idx >= len(NAV_SECTIONS)
+        if is_plugin:
+            self._build_plugin(idx)
         self.stack.setCurrentIndex(idx)
         self.opt_stack.setCurrentIndex(idx)
-        has_opts = name in TABS_WITH_OPTIONS
+        has_opts = (self._plugin_built.get(idx) is not None if is_plugin
+                    else name in TABS_WITH_OPTIONS)
         self.opt_panel.setVisible(has_opts)
         if has_opts:
             self._apply_opt_state()
@@ -377,6 +487,13 @@ class WaraApp(QMainWindow):
         # The Planetary globe (QtWebEngine) is only created/rendered on first visit.
         if name == "Planetary" and getattr(self, "planetary", None) is not None:
             self.planetary.on_activated()
+        if is_plugin:
+            hook = getattr(self.stack.widget(idx), "on_activated", None)
+            if callable(hook):
+                try:
+                    hook()
+                except Exception:  # noqa: BLE001 -- a plug-in must not take wara down
+                    traceback.print_exc()
         self.statusBar().showMessage(f"  {name}")
 
     # ── Spectrum tab wiring ──────────────────────────────────────────────────
@@ -1374,6 +1491,7 @@ Usage:
       --cebr                    detector type: cerium bromide (CeBr3)
       --labr                    detector type: lanthanum bromide (LaBr3)
       --hpge                    detector type: high-purity germanium (HPGe)
+      --no-plugins              start without installed plug-in tabs
       -h --help                 show this help and exit
 
 Accepted file formats: CSV (counts | energy_EUNITS, or single "counts" column),
@@ -1413,6 +1531,8 @@ def _parse_argv():
             opts["fwhm_at_0"] = a.split("=", 1)[1]
         elif a == "-o":
             pass  # open a blank window — already the default with no file
+        elif a == "--no-plugins":
+            os.environ[plug.DISABLE_ENV] = "1"
         elif not a.startswith("-"):
             positional.append(a)
         i += 1

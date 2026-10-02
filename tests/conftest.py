@@ -26,6 +26,10 @@ import os
 # Must be set before anything creates a QApplication or picks a MPL backend.
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 os.environ.setdefault("MPLBACKEND", "Agg")
+# Installed plug-ins (e.g. mcstudio) would add nav tabs to every WaraApp the
+# suite builds; the suite must see the same window with or without them.
+# tests/test_gui_plugins.py passes its own plug-ins explicitly.
+os.environ.setdefault("WARA_DISABLE_PLUGINS", "1")
 
 import matplotlib
 matplotlib.use("Agg")

@@ -190,6 +190,7 @@ QPushButton#nav_btn {{
     border-radius: 6px; padding: 9px 11px; text-align: left; font-size: 16px; font-weight: 600;
 }}
 QPushButton#nav_btn:hover {{ background-color: #313152; border-color: #5a5a8c; }}
+QPushButton#nav_btn:disabled {{ color: {TEXT_DIM}; border-style: dashed; }}
 QPushButton#nav_btn:checked {{
     background-color: #16384f; border: 2px solid {ACCENT_CYAN}; color: #ffffff; font-weight: 700;
 }}
