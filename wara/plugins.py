@@ -171,6 +171,16 @@ class Host:
         are overlaid."""
         self._window.load_external_spectra(specs, switch_tab=switch_tab)
 
+    def send_api_events(self, events, name, info=(), switch_tab=False):
+        """Show *events* in the API tab as a run: one row per detected gamma
+        with ``energy`` (MeV), ``dt`` (ns) and an ``X``/``Y``/``Z`` interaction
+        cloud (cm). *info* is ``[(label, value), ...]`` for the RUN INFO box.
+
+        Added after plug-in API 1 was first released; a plug-in that wants to
+        run on an older wara checks ``hasattr(host, "send_api_events")``."""
+        self._window.load_external_api_events(events, name, info=info,
+                                              switch_tab=switch_tab)
+
     def status(self, message):
         """Show *message* in the status bar."""
         self._window.statusBar().showMessage(f"  {message}")

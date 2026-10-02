@@ -702,6 +702,15 @@ class WaraApp(QMainWindow):
             self.nav_group.button(0).setChecked(True)
             self._on_nav(0)
 
+    def load_external_api_events(self, events, name, info=(), switch_tab=True):
+        """Show an event list from another tab or a plug-in in the API tab
+        (:meth:`ApiController.load_events`). Optionally switch to that tab."""
+        self.api.load_events(events, name, info=info)
+        if switch_tab:
+            idx = self._sections.index("API")
+            self.nav_group.button(idx).setChecked(True)
+            self._on_nav(idx)
+
     def _apply_cli_opts(self, opts):
         """Apply CLI options (--labr, --hpge, --min_snr, etc.) after loading."""
         if not opts or self.spect is None:

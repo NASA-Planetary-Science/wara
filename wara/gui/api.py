@@ -1028,6 +1028,46 @@ class ApiController:
             # "Energy from traces" on it no longer matches the axis.
             df = df.drop(columns=["energy_cal"])
 
+        self._adopt_run(df, date, runnr, ch, data_path)
+        self._load_settings(date, runnr, ch, data_path)
+        n = self.df_current.shape[0]
+        self._status(f"Loaded run {date}-{runnr} ch {ch}  ·  {n:,} events")
+
+    def load_events(self, df, name, info=()):
+        """Show an event list handed over from elsewhere -- a plug-in's
+        simulated run (``wara.plugins.Host.send_api_events``) -- as if it had
+        been loaded from a run.
+
+        *df* follows the simulated-data convention: ``energy`` (MeV), ``dt``
+        (ns), and an ``X``/``Y``/``Z`` cloud already placed (cm), which the 3D
+        view draws as it is. There is no source run on disk, so "Apply to
+        data" and the run-settings readout have nothing to work from; *info*
+        is ``[(label, value), ...]`` shown in the RUN INFO box instead.
+        """
+        self.flat_field = False
+        self.ebins = DEFAULT_EBINS
+        self.opts.ed_ebins.setText(str(self.ebins))
+        # No traces in a handed-over list; this clears the previous run's PSD.
+        df = self._extract_traces(df.reset_index(drop=True), None, None, None)
+        df = _derive_positions(df)
+        if "energy_cal" not in df.columns and "energy" in df.columns:
+            # Simulated energies are already physical. Only energy_cal counts
+            # as an energy axis here (_axis_units), so offer them as one, in
+            # keV like a file's; "Clear calibration" falls back to MeV values.
+            df["energy_cal"] = df["energy"].to_numpy(dtype=float) * 1000.0
+        self._adopt_run(df, None, None, None, None)
+        colors = (T.ACCENT_AMBER, T.ACCENT_CYAN, T.ACCENT_GREEN)
+        self._settings_rows = [("Source", name, T.TEXT_PRIMARY)] + [
+            (label, value, colors[i % len(colors)])
+            for i, (label, value) in enumerate(info)]
+        self._settings_error = ""
+        self._update_info()
+        self._status(f"Loaded {name}  ·  {df.shape[0]:,} events")
+
+    def _adopt_run(self, df, date, runnr, ch, data_path):
+        """Make *df* the run on screen, reset every cut and correction, and
+        draw it. *date*/*runnr*/*ch*/*data_path* name the run on disk it was
+        read from, or are all None for one handed over (:meth:`load_events`)."""
         # The working frames start as shallow views of the master: no frame is
         # ever modified in place (cuts build new frames, derived columns are
         # assigned whole), so sharing the column buffers is safe and saves a
@@ -1073,9 +1113,6 @@ class ApiController:
 
         self._configure_keys()
         self._initialize_plots()
-        self._load_settings(date, runnr, ch, data_path)
-        n = self.df_current.shape[0]
-        self._status(f"Loaded run {date}-{runnr} ch {ch}  ·  {n:,} events")
 
     def _configure_keys(self):
         """Auto-detect the X/Y/energy/time column keys by priority and set the

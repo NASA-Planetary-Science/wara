@@ -127,3 +127,39 @@ def test_plugin_tabs_build_lazily_and_failures_stay_contained(qapp):
         assert w.opt_panel.isHidden()
     finally:
         w.close()
+
+
+def test_a_plugin_can_hand_the_api_tab_a_simulated_run(qapp):
+    """``Host.send_api_events``: one row per gamma with energy (MeV), dt (ns)
+    and an X/Y/Z cloud (cm), shown in the API tab as if it had been loaded."""
+    import pandas as pd
+
+    from wara.gui.app import WaraApp
+
+    rng = np.random.default_rng(0)
+    n = 400
+    events = pd.DataFrame({
+        "energy": rng.choice([0.847, 1.238, 2.0], n),
+        "dt": rng.normal(3.0, 0.2, n),
+        "X": rng.normal(0, 2, n), "Y": rng.normal(0, 2, n),
+        "Z": rng.normal(-33, 1, n),
+        "alpha_x": rng.normal(0, 0.5, n), "alpha_y": rng.normal(0, 0.5, n),
+    })
+    w = WaraApp(plugins=[])
+    try:
+        host = plug.Host(w)
+        host.send_api_events(events, "sim-6 cell 200",
+                             info=[("Detector cell", "200")], switch_tab=True)
+        api = w.api
+        assert w.stack.currentWidget() is w.api_page
+        assert len(api.df_api) == n and api._src_date is None
+        # The cloud is used as placed, not reconstructed with wara's geometry.
+        assert (api.xkey, api.ykey) == ("X", "Y") and api._direct_cloud()
+        assert api._dt_key == "dt"
+        # Simulated energies are physical: shown as a keV axis, not channels.
+        assert api.ekey == "energy_cal" and api._energy_xlabel() == "Energy (keV)"
+        assert api.df_api["energy_cal"].max() == pytest.approx(2000.0)
+        info = api.opts.lbl_info.text()
+        assert "sim-6 cell 200" in info and "Detector cell" in info
+    finally:
+        w.close()
