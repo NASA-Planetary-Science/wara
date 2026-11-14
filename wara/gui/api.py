@@ -3318,8 +3318,8 @@ class ApiController:
     def _dt_erange(self):
         """Histogram range for the time axis: the 0.2%–99.5% span of dt, so the
         dt peak fills the histogram instead of being squashed by a few stray edge
-        events. Matches the API view's dt range and the multi-run Combine window
-        (see ``combine_runs``)."""
+        events. Matches the API view's dt range and the multi-run Combine window's
+        time axis (see ``combine_runs.run_spectra``)."""
         dt = self.df_api["dt"].to_numpy(dtype=float)
         lo, hi = np.percentile(dt, [0.2, 99.5])
         if hi > lo:

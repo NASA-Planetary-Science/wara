@@ -107,8 +107,9 @@ def run_spectra(runs_data, ch, axis, bins=None, ecol=None):
     every run (call :func:`harmonize_energy_columns` first). When omitted it falls
     back to :func:`energy_base_col` of the first run. All runs are histogrammed
     over a shared range so the overlay is directly comparable: energy uses
-    ``[0, p99.5]`` and time ``[p0.2, p99.5]`` of the pooled values, so stray edge
-    events don't squash the real structure. Returns a list of
+    ``[0, max]`` of the pooled values (the same range as the main API view, so the
+    full ADC span shows), and time uses ``[p0.2, p99.5]`` so stray edge events
+    don't squash the dt peak. Returns a list of
     :class:`wara.spectrum.Spectrum`, one per run (same order as *runs_data*).
     """
     if axis == "energy":
@@ -128,7 +129,7 @@ def run_spectra(runs_data, ch, axis, bins=None, ecol=None):
 
     pooled = np.concatenate(per_run) if per_run else np.array([], dtype=float)
     if axis == "energy":
-        hi = float(np.percentile(pooled, 99.5)) if len(pooled) else 1.0
+        hi = float(pooled.max()) if len(pooled) else 1.0
         erange = (0.0, hi if hi > 0 else 1.0)
     elif len(pooled):
         lo, hi = np.percentile(pooled, [0.2, 99.5])
