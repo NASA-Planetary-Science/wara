@@ -60,20 +60,24 @@ def filter_lines(df, element_text, energy_text, range_text):
     out = df
     if element_text.strip():
         tokens = [t.strip().lower() for t in element_text.split(",") if t.strip()]
-        # Isotope column is mass-first (e.g. "137Cs"); normalize to lowercase alnum.
+        # Isotope column is mass-first (e.g. "137Cs"); split it into its mass
+        # number and element symbol so tokens match whole fields, never a
+        # suffix/substring ("O" must not hit "60Co", "56" must not hit "156Gd").
         iso_norm = out["Isotope"].astype(str).str.lower().str.replace(r"[^a-z0-9]", "", regex=True)
+        iso_sym = iso_norm.str.replace(r"[^a-z]", "", regex=True)
+        iso_mass = iso_norm.str.replace(r"[^0-9]", "", regex=True)
         mask = pd.Series(False, index=out.index)
         for tok in tokens:
             letters = re.sub(r"[^a-z]", "", tok)
             digits = re.sub(r"[^0-9]", "", tok)
             if digits and letters:
                 # accept either order: "137cs" (mass-first) or "cs137" (element-first)
-                mask |= iso_norm.isin({digits + letters, letters + digits})
+                mask |= (iso_sym == letters) & (iso_mass == digits)
             elif letters:
-                # element only → all isotopes of that element (symbol at the end)
-                mask |= iso_norm.str.contains(rf"{letters}$", regex=True, na=False)
+                # element only → all isotopes of exactly that element
+                mask |= iso_sym == letters
             elif digits:
-                mask |= iso_norm.str.contains(digits, na=False)
+                mask |= iso_mass == digits
         out = out[mask]
     if _evaluable(energy_text):
         energy = float(energy_text)
