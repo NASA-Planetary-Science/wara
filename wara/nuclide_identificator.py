@@ -522,7 +522,8 @@ def _mark_present(obs, ref, tol, max_strength):
     obs = obs.assign(present=dist <= tol_at, matched=nearest,
                      proximity=_proximity(dist, tol_at))
     present = obs[obs["present"]].copy()
-    denom = present["isotope"].map(max_strength).replace(0.0, np.nan)
+    # astype: on an empty frame pandas >= 3.1 keeps map()'s result as str dtype.
+    denom = present["isotope"].map(max_strength).astype(float).replace(0.0, np.nan)
     present["evidence"] = (present["weight"] * present["strength"] / denom).fillna(
         present["weight"]) * present["proximity"]
     support = present.groupby("isotope")["evidence"].sum()
